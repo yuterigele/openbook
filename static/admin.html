@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>美发预约助手 · 商户后台</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --text: #1f2937;
+    --text-muted: #6b7280;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --info: #3b82f6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header .meta { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; gap: 12px; }
+  .live-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--success);
+    border-radius: 50%;
+    margin-right: 4px;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  main {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .toolbar label { font-size: 13px; color: var(--text-muted); }
+  .toolbar input, .toolbar select {
+    padding: 7px 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    background: white;
+  }
+  .toolbar button {
+    padding: 7px 14px;
+    background: var(--primary);
+    color: white;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .toolbar button:hover { background: var(--primary-hover); }
+  .toolbar button.secondary {
+    background: white;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    transition: transform 0.15s;
+  }
+  .card:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+  .card .label { color: var(--text-muted); font-size: 12px; margin-bottom: 6px; }
+  .card .value { font-size: 26px; font-weight: 600; }
+  .card .value.success { color: var(--success); }
+  .card .value.warning { color: var(--warning); }
+  .card .value.danger  { color: var(--danger); }
+  .card .value.info    { color: var(--info); }
+  .card .sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  section h2 {
+    margin-top: 0;
+    font-size: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  section h2 .refresh-ts { font-size: 12px; color: var(--text-muted); font-weight: normal; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--text-muted); font-weight: 500; background: #fafbfc; font-size: 12px; }
+  tr.upcoming td { background: #fffbeb; }
+  tr.soon td { background: #fef2f2; font-weight: 500; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: #e5e7eb;
+    color: var(--text);
+  }
+  .badge.active { background: #dbeafe; color: #1d4ed8; }
+  .badge.completed { background: #d1fae5; color: #047857; }
+  .badge.noshow { background: #fee2e2; color: #b91c1c; }
+  .badge.cancelled { background: #f3f4f6; color: #6b7280; }
+  .btn-link {
+    background: none;
+    border: 0;
+    color: var(--primary);
+    cursor: pointer;
+    padding: 0 4px;
+    font-size: 13px;
+  }
+  .btn-link:hover { text-decoration: underline; }
+  .btn-link.danger { color: var(--danger); }
+  .empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+  .login-overlay {
+    position: fixed; inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 99;
+    backdrop-filter: blur(2px);
+  }
+  .login-box {
+    background: var(--card);
+    padding: 32px;
+    border-radius: 12px;
+    width: 360px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+  }
+  .login-box h2 { margin-top: 0; font-size: 18px; }
+  .login-box .hint { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
+  .login-box input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 6px 0 10px;
+    font-size: 14px;
+  }
+  .login-box button {
+    width: 100%;
+    padding: 11px;
+    background: var(--primary);
+    color: white;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-top: 8px;
+  }
+  .login-box button:hover { background: var(--primary-hover); }
+  .login-box .err { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ====== 登录层 ====== -->
+<div class="login-overlay" id="loginOverlay" style="display:none;">
+  <div class="login-box">
+    <h2>💈 商户后台登录</h2>
+    <div class="hint">首次部署默认账号：admin / admin123（登录后请立即修改密码）</div>
+    <input id="usernameInput" placeholder="用户名" autocomplete="username" />
+    <input id="passwordInput" type="password" placeholder="密码" autocomplete="current-password" />
+    <div class="err" id="loginErr"></div>
+    <button onclick="doLogin()">登 录</button>
+  </div>
+</div>
+
+<header>
+  <h1>💈 美发预约助手 · 商户后台</h1>
+  <div class="meta">
+    <span class="live-dot"></span><span id="shopMeta">未登录</span>
+    <button class="btn-link" onclick="showChangePassword()">改密</button>
+    <button class="btn-link" onclick="logout()">退出</button>
+  </div>
+</header>
+
+<main>
+  <div class="toolbar">
+    <label>日期：<input id="dateFilter" type="date" /></label>
+    <label>状态：
+      <select id="statusFilter">
+        <option value="">全部</option>
+        <option value="active">待到店</option>
+        <option value="completed">已完成</option>
+        <option value="noshow">爽约</option>
+        <option value="cancelled">已取消</option>
+      </select>
+    </label>
+    <button onclick="loadAppointments()">查询预约</button>
+    <button class="secondary" onclick="loadDashboard()">刷新看板</button>
+    <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">
+      看板 30s 自动刷新 · 即将到店 30s 自动刷新
+    </span>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <!-- #7: 即将到店实时区块 -->
+  <section>
+    <h2>
+      <span>🔥 即将到店（接下来 2 小时）</span>
+      <span class="refresh-ts" id="upcomingTs"></span>
+    </h2>
+    <div id="upcomingList"><div class="empty">加载中...</div></div>
+  </section>
+
+  <section>
+    <h2>
+      <span>📅 预约列表</span>
+      <span class="refresh-ts" id="apptTs"></span>
+    </h2>
+    <div id="apptList"><div class="empty">加载中...</div></div>
+  </section>
+
+  <section>
+    <h2>⏰ 热门时段 TOP 5（近 30 天）</h2>
+    <div id="topHours"></div>
+  </section>
+
+  <section>
+    <h2>👨‍💼 热门理发师（近 30 天）</h2>
+    <div id="topBarbers"></div>
+  </section>
+
+  <section>
+    <h2>
+      <span>📊 续费漏斗埋点（最近 100 条）</span>
+      <select id="eventTypeFilter" style="font-size:12px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);">
+        <option value="">全部类型</option>
+        <option value="first_appointment">first_appointment</option>
+        <option value="d3_active">d3_active</option>
+        <option value="d15_active">d15_active</option>
+        <option value="d25_renew_reminder">d25_renew_reminder</option>
+        <option value="renewed">renewed</option>
+        <option value="appointment_created">appointment_created</option>
+        <option value="appointment_noshow">appointment_noshow</option>
+        <option value="appointment_cancelled">appointment_cancelled</option>
+        <option value="appointment_completed">appointment_completed</option>
+      </select>
+    </h2>
+    <div id="events"><div class="empty">加载中...</div></div>
+  </section>
+</main>
+
+<!-- ====== 改密弹窗 ====== -->
+<div class="login-overlay" id="pwdOverlay" style="display:none;">
+  <div class="login-box">
+    <h2>修改密码</h2>
+    <input id="oldPwd" type="password" placeholder="旧密码" />
+    <input id="newPwd" type="password" placeholder="新密码（≥6 位）" />
+    <input id="newPwd2" type="password" placeholder="再次输入新密码" />
+    <div class="err" id="pwdErr"></div>
+    <button onclick="doChangePassword()">确认修改</button>
+    <button class="secondary" style="background:#f3f4f6;margin-top:8px;" onclick="document.getElementById('pwdOverlay').style.display='none'">取消</button>
+  </div>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem('jwt_token') || '';
+let SHOP_ID = localStorage.getItem('shop_id') || '';
+let SHOP_NAME = localStorage.getItem('shop_name') || '';
+let DASHBOARD_TIMER = null;
+let UPCOMING_TIMER = null;
+
+// 启动时校验 token 是否还有效
+async function bootstrap() {
+  if (!TOKEN) {
+    showLogin();
+    return;
+  }
+  try {
+    const me = await fetchJSON('/api/admin/me');
+    if (!me) { showLogin(); return; }
+    SHOP_ID = me.shop_id;
+    SHOP_NAME = me.shop && me.shop.name || SHOP_ID;
+    localStorage.setItem('shop_id', SHOP_ID);
+    localStorage.setItem('shop_name', SHOP_NAME);
+    updateMeta();
+    hideLogin();
+    loadAll();
+    startAutoRefresh();
+  } catch (e) {
+    showLogin();
+  }
+}
+
+function showLogin() {
+  document.getElementById('loginOverlay').style.display = 'flex';
+  document.getElementById('usernameInput').focus();
+}
+function hideLogin() {
+  document.getElementById('loginOverlay').style.display = 'none';
+}
+function updateMeta() {
+  document.getElementById('shopMeta').textContent = `店铺：${SHOP_NAME}（${SHOP_ID}）`;
+}
+
+async function doLogin() {
+  const u = document.getElementById('usernameInput').value.trim();
+  const p = document.getElementById('passwordInput').value;
+  if (!u || !p) {
+    document.getElementById('loginErr').textContent = '请填写用户名和密码';
+    return;
+  }
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      document.getElementById('loginErr').textContent = err.error || ('登录失败：HTTP ' + r.status);
+      return;
+    }
+    const data = await r.json();
+    TOKEN = data.token;
+    SHOP_ID = data.shop_id;
+    SHOP_NAME = '';
+    localStorage.setItem('jwt_token', TOKEN);
+    localStorage.setItem('shop_id', SHOP_ID);
+    document.getElementById('passwordInput').value = '';
+
+    // 先关登录窗，再用 token 拉一次 /me 校准 store + 加载看板
+    // 失败就退回到登录窗（兜底）
+    hideLogin();
+    try {
+      await bootstrapAfterLogin();
+    } catch (e) {
+      console.error('bootstrap after login failed:', e);
+      logout();
+    }
+  } catch (e) {
+    document.getElementById('loginErr').textContent = '网络错误：' + e.message;
+  }
+}
+
+// 登录后专用的 bootstrap：一定会 hideLogin，由 doLogin 统一决定失败回退
+async function bootstrapAfterLogin() {
+  const me = await fetchJSON('/api/admin/me');
+  if (!me) throw new Error('me failed');
+  SHOP_ID = me.shop_id;
+  SHOP_NAME = (me.shop && me.shop.name) || SHOP_ID;
+  localStorage.setItem('shop_id', SHOP_ID);
+  localStorage.setItem('shop_name', SHOP_NAME);
+  updateMeta();
+  loadAll();
+  startAutoRefresh();
+}
+
+function logout() {
+  localStorage.removeItem('jwt_token');
+  localStorage.removeItem('shop_id');
+  localStorage.removeItem('shop_name');
+  TOKEN = '';
+  SHOP_ID = '';
+  SHOP_NAME = '';
+  stopAutoRefresh();
+  showLogin();
+}
+
+async function fetchJSON(url, opts = {}) {
+  if (!opts.headers) opts.headers = {};
+  opts.headers['Authorization'] = 'Bearer ' + TOKEN;
+  if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
+  if (opts.body) opts.headers['Content-Type'] = 'application/json';
+  const r = await fetch(url, opts);
+  if (r.status === 401) {
+    logout();
+    return null;
+  }
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error('HTTP ' + r.status + ': ' + t.slice(0, 100));
+  }
+  return await r.json();
+}
+
+function todayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+
+function loadAll() {
+  loadDashboard();
+  loadUpcoming();
+  loadAppointments();
+  loadEvents();
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  // 看板 30s
+  DASHBOARD_TIMER = setInterval(() => { loadDashboard(); }, 30 * 1000);
+  // 即将到店 30s
+  UPCOMING_TIMER = setInterval(() => { loadUpcoming(); }, 30 * 1000);
+}
+function stopAutoRefresh() {
+  if (DASHBOARD_TIMER) clearInterval(DASHBOARD_TIMER);
+  if (UPCOMING_TIMER) clearInterval(UPCOMING_TIMER);
+}
+
+// ====== Dashboard ======
+async function loadDashboard() {
+  const data = await fetchJSON('/api/shop/' + encodeURIComponent(SHOP_ID) + '/dashboard');
+  if (!data) return;
+  renderCards(data);
+  renderTopHours(data.top_hours);
+  renderTopBarbers(data.top_barbers);
+}
+
+function renderCards(d) {
+  const pct = (x) => (x * 100).toFixed(1) + '%';
+  document.getElementById('cards').innerHTML = `
+    <div class="card">
+      <div class="label">今日预约</div>
+      <div class="value info">${d.today.total}</div>
+      <div class="sub">接下来 2h 还有 <strong>${d.today.upcoming || 0}</strong> 单</div>
+    </div>
+    <div class="card">
+      <div class="label">今日完成率</div>
+      <div class="value success">${pct(d.today.complete_rate)}</div>
+      <div class="sub">已完成 ${d.today.completed} / 爽约 ${d.today.noshow}</div>
+    </div>
+    <div class="card">
+      <div class="label">今日爽约率</div>
+      <div class="value danger">${pct(d.today.no_show_rate)}</div>
+      <div class="sub">cron 每 5min 自动标记</div>
+    </div>
+    <div class="card">
+      <div class="label">本周预约</div>
+      <div class="value">${d.week.total}</div>
+      <div class="sub">完成 ${d.week.completed} / 取消 ${d.week.cancelled}</div>
+    </div>
+    <div class="card">
+      <div class="label">本月预约</div>
+      <div class="value">${d.month.total}</div>
+      <div class="sub">完成 ${d.month.completed} / 爽约 ${d.month.noshow}</div>
+    </div>
+    <div class="card">
+      <div class="label">总埋点事件</div>
+      <div class="value">${d.lifecycle_count}</div>
+      <div class="sub">续费漏斗 D+N 等</div>
+    </div>
+  `;
+}
+
+function renderTopHours(rows) {
+  const el = document.getElementById('topHours');
+  if (!rows || rows.length === 0) {
+    el.innerHTML = '<div class="empty">暂无数据</div>';
+    return;
+  }
+  const max = Math.max(...rows.map(r => r.count));
+  el.innerHTML = rows.map(r => `
+    <div style="display:flex;align-items:center;gap:12px;margin:5px 0;">
+      <div style="width:60px;color:var(--text-muted);">${r.hour}</div>
+      <div style="flex:1;background:#f3f4f6;border-radius:4px;overflow:hidden;height:16px;">
+        <div style="width:${(r.count/max*100).toFixed(1)}%;background:var(--primary);height:100%;"></div>
+      </div>
+      <div style="width:50px;text-align:right;">${r.count}</div>
+    </div>
+  `).join('');
+}
+
+function renderTopBarbers(rows) {
+  const el = document.getElementById('topBarbers');
+  if (!rows || rows.length === 0) {
+    el.innerHTML = '<div class="empty">暂无数据</div>';
+    return;
+  }
+  el.innerHTML = '<table><thead><tr><th>理发师</th><th>预约数</th></tr></thead><tbody>' +
+    rows.map(r => `<tr><td>${r.barber_name}</td><td>${r.count}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+
+// ====== 即将到店 ======
+async function loadUpcoming() {
+  // 复用 appointments 接口查"今天 + active"，然后前端按 time 筛接下来 2h
+  const today = todayStr();
+  const data = await fetchJSON('/api/shop/' + encodeURIComponent(SHOP_ID) +
+    '/appointments?date=' + today + '&status=active');
+  if (!data) return;
+  const now = new Date();
+  const cutoff = new Date(now.getTime() + 2 * 3600 * 1000);
+  const rows = data
+    .map(a => ({ ...a, _dt: new Date(`${a.date}T${a.time}:00`) }))
+    .filter(a => a._dt >= now && a._dt <= cutoff)
+    .sort((a, b) => a._dt - b._dt);
+
+  const ts = new Date().toLocaleTimeString();
+  document.getElementById('upcomingTs').textContent = '最近刷新：' + ts;
+
+  const el = document.getElementById('upcomingList');
+  if (rows.length === 0) {
+    el.innerHTML = '<div class="empty">接下来 2 小时暂无预约</div>';
+    return;
+  }
+  el.innerHTML = '<table><thead><tr><th>到店时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>距现在</th><th>操作</th></tr></thead><tbody>' +
+    rows.map(a => {
+      const mins = Math.round((a._dt - now) / 60000);
+      const cls = mins <= 15 ? 'soon' : 'upcoming';
+      const dist = mins < 60 ? mins + ' 分钟' : Math.floor(mins / 60) + 'h' + (mins % 60) + 'm';
+      return `
+        <tr class="${cls}">
+          <td><strong>${a.time}</strong></td>
+          <td>${a.barber_name}</td>
+          <td>${a.customer || ''}</td>
+          <td>${a.service}</td>
+          <td>${dist}</td>
+          <td>
+            <button class="btn-link" onclick="markCompleted('${a.id}')">完成</button>
+          </td>
+        </tr>
+      `;
+    }).join('') + '</tbody></table>';
+}
+
+// ====== 预约列表 ======
+async function loadAppointments() {
+  const date = document.getElementById('dateFilter').value || todayStr();
+  const status = document.getElementById('statusFilter').value;
+  let url = '/api/shop/' + encodeURIComponent(SHOP_ID) + '/appointments?date=' + date;
+  if (status) url += '&status=' + encodeURIComponent(status);
+  const data = await fetchJSON(url);
+  document.getElementById('apptTs').textContent = '最近刷新：' + new Date().toLocaleTimeString();
+  const el = document.getElementById('apptList');
+  if (!data) return;
+  if (!data.length) {
+    el.innerHTML = '<div class="empty">该条件下暂无预约</div>';
+    return;
+  }
+  el.innerHTML = '<table><thead><tr><th>日期</th><th>时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
+    data.map(a => `
+      <tr>
+        <td>${a.date}</td>
+        <td>${a.time}</td>
+        <td>${a.barber_name}</td>
+        <td>${a.customer || ''}</td>
+        <td>${a.service}</td>
+        <td><span class="badge ${a.status}">${a.status}</span></td>
+        <td>
+          ${a.status === 'active' ? `
+            <button class="btn-link" onclick="markCompleted('${a.id}')">完成</button>
+            <button class="btn-link danger" onclick="markCancelled('${a.id}')">取消</button>
+          ` : '—'}
+        </td>
+      </tr>
+    `).join('') + '</tbody></table>';
+}
+
+async function markCompleted(id) {
+  if (!confirm('标记为已完成？')) return;
+  await fetchJSON('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: id } });
+  loadAll();
+}
+
+async function markCancelled(id) {
+  if (!confirm('确认取消？')) return;
+  await fetchJSON('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: id, reason: 'admin manual' } });
+  loadAll();
+}
+
+// ====== 事件 ======
+async function loadEvents() {
+  const t = document.getElementById('eventTypeFilter').value;
+  let url = '/api/admin/events?limit=100';
+  if (t) url += '&event_type=' + encodeURIComponent(t);
+  const data = await fetchJSON(url);
+  const el = document.getElementById('events');
+  if (!data) return;
+  if (!data.length) {
+    el.innerHTML = '<div class="empty">暂无事件</div>';
+    return;
+  }
+  el.innerHTML = '<table><thead><tr><th>时间</th><th>事件</th><th>关联 ID</th><th>备注</th></tr></thead><tbody>' +
+    data.map(e => `
+      <tr>
+        <td>${new Date(e.created_at).toLocaleString()}</td>
+        <td><span class="badge">${e.event_type}</span></td>
+        <td><code>${e.ref_id || ''}</code></td>
+        <td><code style="font-size:11px;">${(e.meta || '').slice(0, 80)}</code></td>
+      </tr>
+    `).join('') + '</tbody></table>';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('dateFilter').value = todayStr();
+  document.getElementById('eventTypeFilter').addEventListener('change', loadEvents);
+  document.getElementById('usernameInput').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('passwordInput').focus(); });
+  document.getElementById('passwordInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  bootstrap();
+});
+
+// ====== 改密 ======
+function showChangePassword() {
+  document.getElementById('pwdOverlay').style.display = 'flex';
+  document.getElementById('oldPwd').value = '';
+  document.getElementById('newPwd').value = '';
+  document.getElementById('newPwd2').value = '';
+  document.getElementById('pwdErr').textContent = '';
+}
+async function doChangePassword() {
+  const old = document.getElementById('oldPwd').value;
+  const n1 = document.getElementById('newPwd').value;
+  const n2 = document.getElementById('newPwd2').value;
+  if (!old || !n1 || !n2) { document.getElementById('pwdErr').textContent = '请填写完整'; return; }
+  if (n1 !== n2) { document.getElementById('pwdErr').textContent = '两次新密码不一致'; return; }
+  if (n1.length < 6) { document.getElementById('pwdErr').textContent = '新密码至少 6 位'; return; }
+  const r = await fetch('/api/admin/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    body: JSON.stringify({ old_password: old, new_password: n1 })
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    document.getElementById('pwdErr').textContent = e.error || '修改失败';
+    return;
+  }
+  alert('密码已修改，请用新密码重新登录');
+  logout();
+}
+</script>
+
+</body>
+</html>

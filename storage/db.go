@@ -1,0 +1,216 @@
+package storage
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// DB 全局 *gorm.DB 句柄。InitDB 后所有 repo 方法都依赖它。
+var DB *gorm.DB
+
+// InitDB 根据环境变量连接 MySQL，做 AutoMigrate，并返回 *gorm.DB。
+//
+// 必填环境变量：
+//   - MYSQL_DSN      例如：user:pass@tcp(127.0.0.1:3306)/chatwitheino?charset=utf8mb4&parseTime=True&loc=Local
+//   - 或者：MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASS / MYSQL_DB
+func InitDB(ctx context.Context) (*gorm.DB, error) {
+	dsn := os.Getenv("MYSQL_DSN")
+	if dsn == "" {
+		host := getenv("MYSQL_HOST", "127.0.0.1")
+		port := getenv("MYSQL_PORT", "3306")
+		user := getenv("MYSQL_USER", "chatwitheino")
+		pass := getenv("MYSQL_PASS", "chatwitheino")
+		dbname := getenv("MYSQL_DB", "chatwitheino")
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+			user, pass, host, port, dbname)
+	}
+
+	gormLogger := logger.New(
+		log.New(os.Stdout, "[gorm] ", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             500 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormLogger})
+	if err != nil {
+		return nil, fmt.Errorf("连接 MySQL 失败: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetMaxOpenConns(50)
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+
+	if err := db.WithContext(ctx).AutoMigrate(
+		&Shop{},
+		&Barber{},
+		&Customer{},
+		&Appointment{},
+		&Subscription{},
+		&WecomMessageLog{},
+		&ReminderLog{},
+		&EventLog{},
+		&ShopAdmin{},
+	); err != nil {
+		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
+	}
+
+	// 跑完后列出所有已建的表，便于排查"表不存在"问题
+	if tables, listErr := db.WithContext(ctx).Migrator().GetTables(); listErr == nil {
+		log.Printf("[storage] 已建表 (%d): %v", len(tables), tables)
+	}
+
+	// 种子数据：从 .env 构建默认店铺 + 默认 admin（多店场景下也可走这个种子）
+	if err := seedShopFromEnv(ctx, db); err != nil {
+		log.Printf("[storage] seedShopFromEnv 警告: %v", err)
+	}
+	if err := seedBarbers(ctx, db); err != nil {
+		log.Printf("[storage] seedBarbers 警告: %v", err)
+	}
+
+	// 老数据兜底：barber.shop_id 为空的，统一填到第一家店
+	if err := ensureBarberShopIDs(ctx); err != nil {
+		log.Printf("[storage] ensureBarberShopIDs 警告: %v", err)
+	}
+
+	DB = db
+	log.Printf("[storage] MySQL 初始化完成")
+	return db, nil
+}
+
+// seedShopFromEnv 从环境变量读企业微信 + 店铺配置，写入 shop 表（idempotent）
+//
+// 配置来源：
+//   - DEFAULT_SHOP_ID     店铺 ID（默认 "default"）
+//   - DEFAULT_SHOP_NAME   店铺名（默认 "默认理发店"）
+//   - WECOM_CORP_ID / WECOM_AGENT_ID / WECOM_SECRET / WECOM_TOKEN / WECOM_ENCODING_AES_KEY / WECOM_KF_LINK
+//   - DEFAULT_ADMIN_USERNAME / DEFAULT_ADMIN_PASSWORD（默认 admin / admin123）
+//
+// 修复（2026-06-20）：之前如果店铺已存在就直接 return，导致 admin 永远建不出来。
+// 现在店铺存在也尝试建 admin（用 username 查重）。
+func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
+	shopID := getenv("DEFAULT_SHOP_ID", "default")
+	now := time.Now()
+	agentID, _ := strconv.Atoi(getenv("WECOM_AGENT_ID", "0"))
+
+	// 1) 建店铺（已存在则跳过；但 wecom_* 字段空时回填 env）
+	var existing Shop
+	if err := db.WithContext(ctx).Where("id = ?", shopID).First(&existing).Error; err != nil {
+		shop := Shop{
+			ID:                shopID,
+			Name:              getenv("DEFAULT_SHOP_NAME", "默认理发店"),
+			Address:           getenv("DEFAULT_SHOP_ADDRESS", "请到 .env 配置"),
+			Timezone:          "Asia/Shanghai",
+			OpenHour:          9,
+			CloseHour:         18,
+			LunchStart:        12,
+			LunchEnd:          13,
+			LunchEndMin:       30,
+			Plan:              "basic",
+			ExpiresAt:         now.AddDate(1, 0, 0),
+			WecomCorpID:       os.Getenv("WECOM_CORP_ID"),
+			WecomAgentID:      agentID,
+			WecomSecret:       os.Getenv("WECOM_SECRET"),
+			WecomToken:        os.Getenv("WECOM_TOKEN"),
+			WecomEncodingAESKey: os.Getenv("WECOM_ENCODING_AES_KEY"),
+			WecomKFLink:       os.Getenv("WECOM_KF_LINK"),
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		if createErr := db.WithContext(ctx).Create(&shop).Error; createErr != nil {
+			return createErr
+		}
+		log.Printf("[storage] 种子店铺: %s (id=%s)", shop.Name, shop.ID)
+	} else {
+		log.Printf("[storage] 店铺 %s 已存在，检查 wecom_* 字段是否需要回填", shopID)
+		// 老数据兜底：如果 wecom_* 字段空但 env 有值，回填
+		needUpdate := false
+		updates := map[string]interface{}{"updated_at": now}
+		if existing.WecomCorpID == "" && os.Getenv("WECOM_CORP_ID") != "" {
+			updates["wecom_corp_id"] = os.Getenv("WECOM_CORP_ID")
+			updates["wecom_agent_id"] = agentID
+			updates["wecom_secret"] = os.Getenv("WECOM_SECRET")
+			updates["wecom_token"] = os.Getenv("WECOM_TOKEN")
+			updates["wecom_encoding_aes_key"] = os.Getenv("WECOM_ENCODING_AES_KEY")
+			if os.Getenv("WECOM_KF_LINK") != "" {
+				updates["wecom_kf_link"] = os.Getenv("WECOM_KF_LINK")
+			}
+			needUpdate = true
+		}
+		if needUpdate {
+			if err := db.WithContext(ctx).Model(&existing).Updates(updates).Error; err != nil {
+				log.Printf("[storage] 回填 wecom_* 失败: %v", err)
+			} else {
+				log.Printf("[storage] 已回填店铺 %s 的 wecom_* 字段", shopID)
+			}
+		}
+	}
+
+	// 2) 建 admin（按 username 查重，已存在则跳过）—— 修复点：无论店铺新建还是已存在都要执行
+	username := getenv("DEFAULT_ADMIN_USERNAME", "admin")
+	password := getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
+	var existingAdmin ShopAdmin
+	if err := db.WithContext(ctx).Where("username = ?", username).First(&existingAdmin).Error; err == nil {
+		log.Printf("[storage] admin %s 已存在，跳过创建", username)
+		return nil
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	admin := ShopAdmin{
+		ShopID:       shopID,
+		Username:     username,
+		PasswordHash: string(hash),
+		Role:         "owner",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := db.WithContext(ctx).Create(&admin).Error; err != nil {
+		return err
+	}
+	log.Printf("[storage] 种子 admin: %s / %s（请尽快改密码）", username, password)
+	return nil
+}
+
+func seedBarbers(ctx context.Context, db *gorm.DB) error {
+	shopID := getenv("DEFAULT_SHOP_ID", "default")
+	defaults := []Barber{
+		{ID: "1", Name: "Tony", ShopID: shopID, Skills: "剪发,染发", Active: true},
+		{ID: "2", Name: "Kevin", ShopID: shopID, Skills: "剪发,烫发", Active: true},
+	}
+	for _, b := range defaults {
+		var existing Barber
+		if err := db.WithContext(ctx).Where("name = ?", b.Name).First(&existing).Error; err == nil {
+			continue
+		}
+		if err := db.WithContext(ctx).Create(&b).Error; err != nil {
+			return err
+		}
+		log.Printf("[storage] 种子理发师: %s (id=%s)", b.Name, b.ID)
+	}
+	return nil
+}
+
+func getenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}

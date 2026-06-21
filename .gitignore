@@ -1,0 +1,38 @@
+# Binaries
+chatwitheino
+chatwitheino.exe
+chatwitheino-linux
+chatwitheino-darwin
+chatwitheino-windows*.exe
+*.exe
+*.exe~
+
+# Local config / secrets — never commit
+.env
+.env.local
+.env.*.local
+config.yaml
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS / runtime
+.DS_Store
+Thumbs.db
+*.log
+data/*.db
+data/*.db-journal
+data/**/*.jsonl  # 运行时 session 日志（不要入库）
+
+# Build / coverage
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Local scratch
+/tmp/

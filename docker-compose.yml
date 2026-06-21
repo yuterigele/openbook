@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: chatwitheino
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASS: root
+      MYSQL_DB: chatwitheino
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      # LLM 配置（从宿主 .env 注入或在这里填）
+      MESSAGE_KIND: message
+      MODEL_TYPE: ""
+      OPENAI_BASE_URL: https://api.deepseek.com/v1
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-your-key}
+      OPENAI_MODEL: deepseek-chat
+      # 企业微信
+      WECOM_CORP_ID: ${WECOM_CORP_ID:-}
+      WECOM_AGENT_ID: ${WECOM_AGENT_ID:-}
+      WECOM_SECRET: ${WECOM_SECRET:-}
+      WECOM_TOKEN: ${WECOM_TOKEN:-}
+      WECOM_ENCODING_AES_KEY: ${WECOM_ENCODING_AES_KEY:-}
+      WECOM_KF_LINK: ${WECOM_KF_LINK:-}
+      PORT: "38080"
+      TZ: Asia/Shanghai
+    ports:
+      - "38080:38080"
+    volumes:
+      - app_data:/app/data
+
+volumes:
+  mysql_data:
+  app_data:
