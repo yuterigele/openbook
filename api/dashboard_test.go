@@ -246,3 +246,88 @@ func TestBuildDashboard_IncludesEventFunnel(t *testing.T) {
 		}
 	}
 }
+
+// ===================== HandoffPendingToday (v3.9 MVP 第 5 项) =====================
+
+func TestFindHandoffCount_Found(t *testing.T) {
+	stats := []EventStat{
+		{EventType: storage.EventAppointmentCreated, Count: 5},
+		{EventType: storage.EventHandoffToHuman, Count: 3},
+		{EventType: storage.EventBlacklisted, Count: 1},
+	}
+	got := findHandoffCount(stats)
+	if got != 3 {
+		t.Errorf("findHandoffCount = %d, want 3 (handoff 在中间)", got)
+	}
+}
+
+func TestFindHandoffCount_NotFound(t *testing.T) {
+	stats := []EventStat{
+		{EventType: storage.EventAppointmentCreated, Count: 5},
+		{EventType: storage.EventBlacklisted, Count: 1},
+	}
+	got := findHandoffCount(stats)
+	if got != 0 {
+		t.Errorf("无 handoff 应返回 0，got %d", got)
+	}
+}
+
+func TestFindHandoffCount_EmptyStats(t *testing.T) {
+	if got := findHandoffCount(nil); got != 0 {
+		t.Errorf("nil stats 应返回 0，got %d", got)
+	}
+	if got := findHandoffCount([]EventStat{}); got != 0 {
+		t.Errorf("空 stats 应返回 0，got %d", got)
+	}
+}
+
+func TestBuildDashboard_HandoffPendingToday(t *testing.T) {
+	setupAPITestDB(t)
+	fixtureTime := time.Now().Add(-30 * time.Minute)
+
+	// 写 3 个 today 的 handoff + 1 个 other event + 1 个 old handoff（40 天前，不在 today 窗口）
+	for i := 0; i < 3; i++ {
+		storage.DB.Create(&storage.EventLog{
+			ShopID:    "shop-1",
+			EventType: storage.EventHandoffToHuman,
+			RefID:     "cust-" + uuid.NewString(),
+			CreatedAt: fixtureTime,
+		})
+	}
+	storage.DB.Create(&storage.EventLog{
+		ShopID:    "shop-1",
+		EventType: storage.EventAppointmentCreated,
+		RefID:     uuid.NewString(),
+		CreatedAt: fixtureTime,
+	})
+	storage.DB.Create(&storage.EventLog{
+		ShopID:    "shop-1",
+		EventType: storage.EventHandoffToHuman,
+		RefID:     "old-handoff",
+		CreatedAt: time.Now().AddDate(0, 0, -40),
+	})
+
+	resp := buildDashboard(t.Context(), "shop-1")
+	if resp.HandoffPendingToday != 3 {
+		t.Errorf("HandoffPendingToday = %d, want 3（old handoff 不应被计入 today）", resp.HandoffPendingToday)
+	}
+
+	// 兜底：EventFunnelToday 也能查到 handoff_to_human 类型
+	found := false
+	for _, e := range resp.EventFunnelToday {
+		if e.EventType == storage.EventHandoffToHuman && e.Count == 3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("EventFunnelToday 应含 handoff_to_human count=3，got %v", resp.EventFunnelToday)
+	}
+}
+
+func TestBuildDashboard_HandoffPendingToday_EmptyDB(t *testing.T) {
+	setupAPITestDB(t)
+	resp := buildDashboard(t.Context(), "shop-1")
+	if resp.HandoffPendingToday != 0 {
+		t.Errorf("空 DB 的 HandoffPendingToday 应为 0，got %d", resp.HandoffPendingToday)
+	}
+}

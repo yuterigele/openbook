@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.8）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.9）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.8（P2 dashboard 事件漏斗 + 修 pre-existing SQL warning）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.9（MVP 第 5 项 — 转人工兜底 + dashboard 待处理卡片）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -12,6 +12,7 @@
 > **v3.6 增量**：新增 §11.7.10 P4 list_barbers 标记请假理发师 —— 选人阶段就把"今日请假"前置，让顾客不用先选师傅再被 reject；区分"正在请假（HH:MM-HH:MM）"和"即将请假（HH:MM 起）"两种文案；cancelled / expired leave 不显示；+ 8 个新单测。
 > **v3.7 变更**：新增 §11.7.11 P4 改派策略升级 —— `findAlternateBarber` 从"按 name asc 取第一个空闲"改为三档分级：第一档 Skills 匹配（真会这门手艺）→ 第二档空 Skills 兜底（视作"全能"）→ 第三档任意 active 时段空闲（保底可用性）；+ 14 个新单测（`skillContains` 6 + `findAlternateBarber` 8）。
 > **v3.8 变更**：新增 §11.8 P2 dashboard 事件漏斗 + 修 pre-existing SQL warning —— `eventFunnel` helper 把 18 个 event_type 按 today/week/month 三窗口聚合到 dashboard response；`idle_slot_push:DATE:CUST` 自动归一；修复 `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在的 `shop_id` 列导致的 SQLite/MySQL warning；+ 14 个新单测（storage 5 + api 9）。
+> **v3.9 变更**：新增 §11.9 MVP 第 5 项「转人工兜底」+ dashboard `HandoffPendingToday` 卡片 —— `HandoffToHumanTool` 在 Agent 解决不了顾客问题时写埋点 + 提示商户联系（伪 handoff，预留第三方客服对接）；Agent 指令新增 3 类允许场景 + 1 条严禁规则，避免没事就调；`DashboardResponse` 新增 `HandoffPendingToday` 字段（复用 `EventFunnelToday` 零额外 SQL）；+ 10 个新单测（tools 5 + api 5）。
 
 ---
 
@@ -892,6 +893,103 @@ func eventFunnel(ctx context.Context, shopID string, since, until time.Time, lim
 
 ---
 
+### 11.9 MVP 第 5 项 — Agent 转人工兜底（v3.9 新增，2026-06-21）
+
+#### 11.9.1 业务背景
+
+PRD §0 提到 MVP 五大能力：「**复杂问题转人工**」是其中一项。Agent 工具能力有边界 —— 投诉、退款、改价、礼品卡、跨店售后等场景没有对应工具；硬扛只会让顾客更恼火、留下"这 AI 不行"的印象。
+
+**设计原则**：
+- **诚实兜底**：工具能力外的需求，直接转人工，不假装能处理
+- **可观测**：每一次转人工都写埋点，商户后台能看到"今天有几个还没处理"
+- **防滥用**：Agent 指令里明确"不要没事就调"，只在 3 类场景才允许
+
+#### 11.9.2 当前实现（伪 handoff）
+
+| 模块 | 文件 | 职责 |
+|---|---|---|
+| 工具实现 | `tools/handoff_to_human.go` | 解析参数 + 写埋点 + 返回成功摘要 |
+| 事件类型 | `storage/event_log.go:EventHandoffToHuman` | `handoff_to_human` 事件标识 |
+| Agent 集成 | `agent.go:buildAgentTyped` | 工具注册 + 指令约束 |
+| Dashboard 卡片 | `api/api.go:DashboardResponse.HandoffPendingToday` | 商户一眼看到"今天待处理 N 个" |
+| 埋点查询 | `api/api.go:findHandoffCount` | 复用 `EventFunnelToday` 零额外 SQL |
+
+**为什么不直接接企业微信客服会话？**
+- 当前是 MVP，先把"埋点 + 商户可观测"跑通
+- 工具签名稳定，后续对接微信客服 / udesk / 智齿等第三方时只改实现，不改 Agent 侧
+- 后期商户在后台看到 `HandoffPendingToday > 0` 时，**主动**通过企业微信联系顾客，体验更可控
+
+#### 11.9.3 工具参数
+
+```json
+{
+  "customer": "Alice",                       // 可选，顾客姓名/标识
+  "reason": "顾客要求找店长",                  // 必填，商户能看懂的一句话
+  "last_user_message": "我要投诉 Tony 手法"   // 可选，顾客最后一条原文（截断到 200 字）
+}
+```
+
+**工具返回（给 Agent 看，不是给顾客看）**：
+> 已为顾客 "Alice" 发起人工转接（原因：顾客要求找店长）。请用自然语言告诉顾客已转人工，请稍候。
+
+Agent 拿到后**自己润色**："好的，我帮您转给店员，请稍等"——**不要**把工具的 JSON 原样贴给顾客。
+
+#### 11.9.4 Agent 指令约束
+
+Agent 只能在这 3 类场景调用 `handoff_to_human`：
+
+| 场景 | 例子 |
+|---|---|
+| ① 顾客明确要求找人工 | "叫老板来"、"我要投诉"、"转人工" |
+| ② 业务超出 Agent 能力 | 投诉处理、退款、改价、礼品卡等**没有对应工具**的事 |
+| ③ 连续 2 轮 Agent 都无法识别顾客意图 | 别再死磕，直接转 |
+
+**严禁场景**：
+- 顾客语气不好 / 抱怨排队久 → **不转**，用工具解决
+- Agent 答不上来普通问题 → **不转**，引导顾客换个问法
+- 怕麻烦 / 嫌烦 → **不转**，这是滥用
+
+**约束位置**：`agent.go:buildAgentTyped` 的 instruction 段，注释清楚"严禁"和"允许"两栏。
+
+#### 11.9.5 关键设计决策
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 工具名字 | `handoff_to_human` | 业界通用（Intercom / Zendesk / Salesforce 都用 handoff），Agent 训练语料里多 |
+| 必填字段 | `reason` | 商户在后台看到一条 handoff 事件，第一眼要能看懂"为什么转" |
+| ref_id 来源 | customer 字段 / `unknown-<nano>` | 有 customer 就用，没有就生成 unknown- 兜底，避免多条埋点挤在同 ref_id |
+| meta 截断 | `last_user_message` 限 200 字 | 防止个别顾客粘长文撑爆 event_log.Meta 字段 |
+| 实际触发会话 | 暂不接 | MVP 阶段商户主动联系体验更可控；后期可加真转接 |
+| 去重 | 工具不强制去重 | 商户后台看到多条同源会自然合并处理，工具侧复杂化不划算 |
+| Dashboard 字段 | `HandoffPendingToday`（不是 week/month） | 商户最该看的是"今天的待处理"，长周期用 week/month funnel 已够 |
+| Dashboard 计算 | 复用 `EventFunnelToday` 找值 | 零额外 SQL，纯 Go 端遍历 EventStat 切片 |
+| fallback shopID | 无 ctx 时填 `default` | 避免埋点丢失；wecom 链路必带 shopID，default 是理论兜底 |
+
+#### 11.9.6 测试覆盖（+10 用例）
+
+**tools（+5）** `tools/handoff_to_human_test.go`：
+- `TestHandoffToHumanTool_BasicSuccess`：正常路径 → 写埋点 + 返回成功文案
+- `TestHandoffToHumanTool_EmptyReason_Errors`：缺 reason 必报错 + 不写埋点
+- `TestHandoffToHumanTool_NoShopID_Fallback`：ctx 无 shopID → fallback `default`，不 panic
+- `TestHandoffToHumanTool_NoCustomer_GeneratesRefID`：没 customer → ref_id 用 `unknown-<nano>` 兜底
+- `TestHandoffToHumanTool_LongMessage_Truncated`：超长 last_user_message → 截断到 ~200 字
+
+**api（+5）** `api/dashboard_test.go`：
+- `TestFindHandoffCount_Found`：stats 里有 handoff → 返回正确 count
+- `TestFindHandoffCount_NotFound`：stats 里无 handoff → 返回 0
+- `TestFindHandoffCount_EmptyStats`：nil / 空 stats → 返回 0
+- `TestBuildDashboard_HandoffPendingToday`：3 today + 1 other + 1 old（40 天前）→ `HandoffPendingToday=3`，old 不被计入
+- `TestBuildDashboard_HandoffPendingToday_EmptyDB`：空 DB → 0
+
+#### 11.9.7 后续可继续做（增量）
+
+1. **真转接**：对接企业微信客服会话 API，Agent 调 handoff 后直接拉起人工客服
+2. **HandoffPendingToday 点击钻取**：dashboard 卡片 → 弹最近 N 条 handoff 事件（ref_id + reason + last_user_message）
+3. **Handoff SLA 监控**：超过 X 分钟未处理的 handoff 推送告警给商户
+4. **Agent 自评**："是否真的解决不了"打分，连续 3 轮低分自动 handoff（替代固定 2 轮规则）
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -915,11 +1013,11 @@ func eventFunnel(ctx context.Context, shopID string, since, until time.Time, lim
 
 ---
 
-*文档版本：v3.8 | 更新日期：2026-06-21*
+*文档版本：v3.9 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
 **v3.6 增量**：新增 §11.7.9 P4 query_schedule 视觉区分（`QueryScheduleBreakdown` helper + 三段渲染 + 6 storage 单测 + 6 tools 单测）+ §11.7.10 list_barbers 标记今日请假理发师（8 tools 单测，共 20 个新单测）。
 **v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级 + 14 个新单测）。
 **v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + today/week/month 三窗口 + 9 个 api 单测）+ 修 pre-existing `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在 `shop_id` 列的 SQL warning（5 个 storage 单测）。
-**v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级：Skills 匹配 → 空 Skills 兜底 → 任意 active 保底；新增 `skillContains` helper + 14 个新单测）。
+**v3.9 增量**：新增 §11.9 MVP 第 5 项「转人工兜底」（`HandoffToHumanTool` 写埋点 + 3 类允许场景约束 + `EventHandoffToHuman` 事件类型 + 5 个 tools 单测）+ `DashboardResponse.HandoffPendingToday` 卡片（复用 `EventFunnelToday` 零额外 SQL + 5 个 api 单测），共 +10 个新单测。

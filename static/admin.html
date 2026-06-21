@@ -267,7 +267,7 @@
     <div id="topBarbers"></div>
   </section>
 
-  <section>
+  <section id="eventsSection">
     <h2>
       <span>📊 续费漏斗埋点（最近 100 条）</span>
       <select id="eventTypeFilter" style="font-size:12px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);">
@@ -281,6 +281,7 @@
         <option value="appointment_noshow">appointment_noshow</option>
         <option value="appointment_cancelled">appointment_cancelled</option>
         <option value="appointment_completed">appointment_completed</option>
+        <option value="handoff_to_human">handoff_to_human（待人工）</option>
       </select>
     </h2>
     <div id="events"><div class="empty">加载中...</div></div>
@@ -505,6 +506,10 @@ async function loadDashboard() {
 
 function renderCards(d) {
   const pct = (x) => (x * 100).toFixed(1) + '%';
+  const handoffN = d.handoff_pending_today || 0;
+  // 待人工 = 0 时显示绿色"无待办"，> 0 时显示红色提示商户尽快处理
+  const handoffClass = handoffN > 0 ? 'danger' : 'success';
+  const handoffCursor = handoffN > 0 ? 'pointer' : 'default';
   document.getElementById('cards').innerHTML = `
     <div class="card">
       <div class="label">今日预约</div>
@@ -520,6 +525,11 @@ function renderCards(d) {
       <div class="label">今日爽约率</div>
       <div class="value danger">${pct(d.today.no_show_rate)}</div>
       <div class="sub">cron 每 5min 自动标记</div>
+    </div>
+    <div class="card" style="cursor:${handoffCursor};" onclick="jumpToHandoffEvents()">
+      <div class="label">🤝 待人工</div>
+      <div class="value ${handoffClass}">${handoffN}</div>
+      <div class="sub">${handoffN > 0 ? '点击查看详情 ↓' : '今日无待办'}</div>
     </div>
     <div class="card">
       <div class="label">本周预约</div>
@@ -676,6 +686,19 @@ async function loadEvents() {
         <td><code style="font-size:11px;">${(e.meta || '').slice(0, 80)}</code></td>
       </tr>
     `).join('') + '</tbody></table>';
+}
+
+// jumpToHandoffEvents 从 dashboard 的"待人工"卡片点击调过来
+//   - 把下拉框切到 handoff_to_human
+//   - 滚到事件区
+//   - 重载事件列表
+function jumpToHandoffEvents() {
+  const filter = document.getElementById('eventTypeFilter');
+  if (!filter) return;
+  filter.value = 'handoff_to_human';
+  const section = document.getElementById('eventsSection');
+  if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  loadEvents();
 }
 
 document.addEventListener('DOMContentLoaded', () => {

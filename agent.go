@@ -38,6 +38,9 @@ import (
 //   - tools.QueryScheduleTool      查空闲时段
 //   - tools.CreateAppointmentTool  创建预约（含 Redis 分布式锁）
 //   - tools.CancelAppointmentTool   取消预约
+//   - tools.ListBarbersTool         列本店理发师（含请假标注）
+//   - tools.MarkNoShowTool / tools.MarkCompletedTool  标记爽约/完成
+//   - tools.HandoffToHumanTool      MVP 第 5 项：转人工兜底（写埋点 + 提示）
 //
 // 辅助工具：
 //   - ragTool                       RAG（理发店知识问答，可选）
@@ -86,6 +89,14 @@ func buildAgentTyped[M adk.MessageType](ctx context.Context) (adk.TypedResumable
 			"3. 提供选项：当用户没有指定理发师时，可以同时查询所有理发师的空闲时段供用户选择。\n" +
 			"4. 确认信息：在创建预约前，向用户确认所有关键信息（理发师、日期、时间、服务项目）。\n" +
 			"5. 友好回复：用自然、友好的语言与用户交流，不要太机械。\n\n" +
+			"人工兜底（MVP 第 5 项）：\n" +
+			"当顾客的需求你**确实解决不了**时，调用 handoff_to_human 工具把顾客转给人工客服。\n" +
+			"允许调用的 3 类场景：\n" +
+			"  1) 顾客明确要求找人工（如\"叫老板来\"\"我要投诉\"）；\n" +
+			"  2) 顾客的需求超出你的工具能力（投诉处理、退款、改价、礼品卡等）—— 你没有对应工具就老实转；\n" +
+			"  3) 连续 2 轮对话你都没识别出顾客意图—— 别再死磕，直接转。\n" +
+			"**严禁**：不要因为顾客语气不好、自己答不上来、或者怕麻烦就调。普通业务问题继续用工具解决。\n" +
+			"调用后告诉顾客：\"好的，我帮您转给店员，请稍等\"。**不要把工具返回的原始 JSON 给顾客看**。\n\n" +
 			"示例对话：\n" +
 			"用户：明天下午有时间吗，我想去剪头发\n" +
 			"你：您好！明天下午有不少空闲时段呢。请问您想预约哪位理发师？Tony 还是 Kevin？另外，您具体想约几点呢？\n\n" +
@@ -110,6 +121,7 @@ func buildAgentTyped[M adk.MessageType](ctx context.Context) (adk.TypedResumable
 					&tools.MarkNoShowTool{},
 					&tools.MarkCompletedTool{},
 					&tools.ListBarbersTool{},
+					&tools.HandoffToHumanTool{},
 				},
 			},
 		},

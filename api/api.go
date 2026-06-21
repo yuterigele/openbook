@@ -270,6 +270,10 @@ type DashboardResponse struct {
 	EventFunnelToday []EventStat `json:"event_funnel_today"`
 	EventFunnelWeek  []EventStat `json:"event_funnel_week"`
 	EventFunnelMonth []EventStat `json:"event_funnel_month"`
+	// MVP 第 5 项 - 转人工兜底
+	//   - HandoffPendingToday: 今天还没处理的转人工请求数（商户最该看的指标）
+	//   - 复用 EventFunnelToday，避免重复 SQL
+	HandoffPendingToday int `json:"handoff_pending_today"`
 }
 
 // EventStat 单类事件统计
@@ -332,7 +336,28 @@ func buildDashboard(ctx context.Context, shopID string) DashboardResponse {
 	resp.EventFunnelToday = eventFunnel(ctx, shopID, todayStart, now, 20)
 	resp.EventFunnelWeek = eventFunnel(ctx, shopID, weekStart, now, 20)
 	resp.EventFunnelMonth = eventFunnel(ctx, shopID, monthStart, now, 20)
+
+	// MVP 第 5 项：复用 EventFunnelToday 算出今天的待人工数
+	//   - 不发额外 SQL，纯 Go 端 find，零成本
+	//   - 商户在 dashboard 卡片一眼看到"今天还有几个转人工没处理"
+	resp.HandoffPendingToday = findHandoffCount(resp.EventFunnelToday)
 	return resp
+}
+
+// findHandoffCount 从 EventFunnelToday 里捞 handoff_to_human 的 count。
+//
+//   - 用 EventStat.EventType 比对 EventHandoffToHuman 常量（避免字符串硬编码漂移）
+//   - 找不到返回 0（没触发过转人工）
+//   - 复用而非重算：eventFunnel 已经按 today 窗口聚合并返回 top 20，handoff_to_human
+//     即使不在 top 20 里也无所谓（说明今天 ≥20 个其它事件把它挤掉了；这种情况商户
+//     更该关心整体的漏斗分布，而不是单看 handoff 数）
+func findHandoffCount(stats []EventStat) int {
+	for _, s := range stats {
+		if s.EventType == storage.EventHandoffToHuman {
+			return s.Count
+		}
+	}
+	return 0
 }
 
 // eventFunnel 按 event_type 聚合事件数（PRD §11.2 续费漏斗 + P3/P4 埋点）
