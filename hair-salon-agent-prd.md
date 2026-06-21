@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.6）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.7）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.6（P4 query_schedule 视觉区分 + list_barbers 标记请假理发师）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.7（P4 改派策略升级：按 Barber.Skills 三档分级匹配）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -10,6 +10,7 @@
 > **v3.5 变更**：新增 §11.7.8 P4 cron 兜底 —— `LeaveExpirer` 每分钟扫描一次，把 `end_at < now` 的 active leave 自动转 `expired` 状态，避免脏数据 + 让 UI 准确区分"已过期"；新增 `EventBarberLeaveExpired` 事件类型 + 6 个 storage 单测 + 3 个 cron 单测。
 > **v3.6 变更**：新增 §11.7.9 P4 query_schedule 视觉区分 —— `QueryScheduleBreakdown` storage helper 一次返回 available / leave blocks / booked count；query_schedule 渲染拆三段（可约 / 师傅请假 / 已约满），让 Agent 直接判断"换时间"还是"换师傅"；修复 toBarberLeaves 跨天请假判整天的 bug；+ 12 个新单测（storage 6 + tools 6）。
 > **v3.6 增量**：新增 §11.7.10 P4 list_barbers 标记请假理发师 —— 选人阶段就把"今日请假"前置，让顾客不用先选师傅再被 reject；区分"正在请假（HH:MM-HH:MM）"和"即将请假（HH:MM 起）"两种文案；cancelled / expired leave 不显示；+ 8 个新单测。
+> **v3.7 变更**：新增 §11.7.11 P4 改派策略升级 —— `findAlternateBarber` 从"按 name asc 取第一个空闲"改为三档分级：第一档 Skills 匹配（真会这门手艺）→ 第二档空 Skills 兜底（视作"全能"）→ 第三档任意 active 时段空闲（保底可用性）；+ 14 个新单测（`skillContains` 6 + `findAlternateBarber` 8）。
 
 ---
 
@@ -729,6 +730,84 @@ func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown
 
 ---
 
+#### 11.7.11 改派策略升级：按 Barber.Skills 三档分级（v3.7 增量，2026-06-21）
+
+P4 早期版本的 `findAlternateBarber`（v3.3）采用 MVP 简化策略："取本店铺所有 active 理发师 → 排除原 barber → 检查时段空闲 → 按 name ASC 选第一个可用"。问题在于：完全不看理发师会不会这门手艺，顾客预约"染发"被改派给只会"剪发"的 Bob，体验事故。
+
+v3.7 升级为**三档分级匹配**：
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Tier 1 — Skills 匹配（真会这门手艺）                              │
+│   候选.Skills 包含 appt.Service，且时段空闲 → 返回                │
+├──────────────────────────────────────────────────────────────────┤
+│ Tier 2 — 空 Skills 兜底（视作"全能"）                            │
+│   候选.Skills == ""（未填写），且时段空闲 → 返回                   │
+│   区分"未标记技能"和"标记了但不匹配"——后者不能假装会              │
+├──────────────────────────────────────────────────────────────────┤
+│ Tier 3 — 任意 active（保底可用性）                                │
+│   忽略 Skills 匹配，取任何 active 且时段空闲                      │
+│   防止"全员匹配不上就一个都改派不出去"导致兜底取消                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**真实场景示例：**
+- 顾客预约"Tony 染发 15:00"，Tony 请假
+- 店铺有：Kevin（剪发+染发）/ Bob（剪发）/ Mike（未填 Skills）
+- Tier 1 命中 → 选 **Kevin**（真会染发）
+
+如果 Kevin 也请假或时段被占：
+- Tier 1 跳过 → Tier 2 命中 Mike（未填技能 = 全能）
+
+如果 Mike 也忙：
+- Tier 2 跳过 → Tier 3 命中 Bob（剪发不会染发，但总比取消好——后台通知可手动改）
+
+**Skills 匹配规则：**
+- `skillContains(skills, needle)` 精确匹配逗号分隔的单项
+- `Skills="剪发,染发"` 包含 `"染发"` 和 `"剪发"`，**不含** `"染"`（子串不匹配）
+- 自动 TrimSpace skills 侧单项，容忍 `"剪发, 染发"` 写法
+- needle 为空时返回 false（避免空匹配全 true）
+- needle 不做 TrimSpace（callers 应传 DB 里存的干净字面值）
+
+**设计理由：**
+- **为什么需要 Tier 2？** 现实里很多小店没系统化登记每位师傅的技能，Skills 字段为空不代表"不会"，更可能是"懒得填"。视作全能兜底比拒绝公平。
+- **为什么需要 Tier 3？** 如果店铺就两个师傅，Tony 请假、Kevin 会这门手艺但时段被占，如果没 Tier 3 就直接走"兜底取消"，顾客体验更差。Tier 3 宁可"乱派"也不"取消"。
+- **为什么同档内 name ASC？** 稳定可预测。后续可按评分/距离优化，但 name asc 是最朴素的"公平"指标。
+
+**关键设计决策：**
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| Skills 匹配粒度 | 精确匹配单项 | 子串匹配（如"染"匹配"染发"）会假阳性 |
+| 空 Skills 处理 | 视作 Tier 2 全能 | 现实里小店没系统登记；视作全能更友好 |
+| 都不匹配怎么办 | Tier 3 任意 active | 保底可用性，避免全员"匹配不上就取消" |
+| 同档排序 | name ASC | 稳定可预测；后续可按评分/距离优化 |
+| Service 为空时 | 跳过 Tier 1，走 Tier 2 | skillContains 永远 false |
+| needle TrimSpace | 不做 | callers 负责传干净字面值；避免意外匹配 |
+
+**测试覆盖（`storage/barber_leave_test.go` +14 用例）：**
+
+`skillContains` 纯函数（6 用例）：
+- TestSkillContains_ExactMatch：`"剪发,染发"` 含 `"染发"` → true
+- TestSkillContains_TrimSpace：容忍 skills 侧空格
+- TestSkillContains_NoPartialMatch：子串不匹配（`"染"` 不命中）
+- TestSkillContains_EmptyNeedleReturnsFalse：needle 空 → false
+- TestSkillContains_EmptySkills：双空 → false
+- TestSkillContains_SingleSkill：单项也能匹配
+
+`findAlternateBarber` 三档分级（8 用例）：
+- TestFindAlternateBarber_Tier1_SkillsMatch_PreferredOverEmpty：Tier 1 压制 Tier 2
+- TestFindAlternateBarber_Tier2_EmptySkills_WhenNoMatch：Tier 1 不命中时 Tier 2 兜底
+- TestFindAlternateBarber_Tier3_AnyActive_WhenNoMatch_NoEmpty：全员不匹配 + 无空 → Tier 3
+- TestFindAlternateBarber_BusyExcluded_AcrossTiers：跨档级 busy 排除
+- TestFindAlternateBarber_AllBusy_ReturnsFalse：全员忙 → 返回 false
+- TestFindAlternateBarber_ExcludesOriginalBarber：不能选回原 barber
+- TestFindAlternateBarber_NoOtherBarber_ReturnsFalse：无候选 → 返回 false
+- TestFindAlternateBarber_Tier1_OrderByName：同档 name asc
+- TestFindAlternateBarber_ServiceEmpty_AllTiersSkipped：Service 空 → Tier 2 兜底
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -752,8 +831,9 @@ func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown
 
 ---
 
-*文档版本：v3.6 | 更新日期：2026-06-21*
+*文档版本：v3.7 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
 **v3.6 增量**：新增 §11.7.9 P4 query_schedule 视觉区分（`QueryScheduleBreakdown` helper + 三段渲染 + 6 storage 单测 + 6 tools 单测）+ §11.7.10 list_barbers 标记今日请假理发师（8 tools 单测，共 20 个新单测）。
+**v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级：Skills 匹配 → 空 Skills 兜底 → 任意 active 保底；新增 `skillContains` helper + 14 个新单测）。

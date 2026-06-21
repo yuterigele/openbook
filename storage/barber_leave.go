@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -514,33 +515,98 @@ func cancelApptInTx(tx *gorm.DB, apptID, source, reason string) (*CancelResult, 
 
 // findAlternateBarber 在事务内找一个"同档期 active 状态"的其他理发师
 //
-// 改派策略（MVP 简化版）：
-//   - 取本店铺所有 active 理发师，排除原 barber
-//   - 检查候选理发师在 (appt.Date, appt.Time) 是否已有 active 预约
-//   - 取第一个可用
+// 改派策略（PRD §11.7.11 v3.7 升级）：
+//   1. 第一档（Skills 匹配）：候选理发师 Skills 包含 appt.Service 且时段空闲
+//   2. 第二档（Skills 为空兜底）：候选理发师 Skills 为空（未填写）且时段空闲 —
+//      把"未标记技能"和"标记了技能但不匹配"区分开，标记了的不能假装能染发
+//   3. 兜底（不匹配 Skills）：以上都没有时回退到"任何 active 且时段空闲" —
+//      保底可用性，避免出现"全部匹配不上就一个都改派不出去"
 //
-// 后续可优化：按技能匹配 / 按评分 / 按距离 ...
+// 同档内按 name ASC 排序（稳定、可预测）。
+// 匹配是包含关系：Skills="剪发,染发" 同时匹配 Service="染发" 和 "剪发"。
+//
+// 设计理由：
+//   - 真实场景：顾客预约"染发"，Tony 请假了；Kevin 会剪发+染发，Bob 只剪发
+//     → 应该优先 Kevin（真会染发），而非 Bob（不会）
+//   - Bob 虽然不染发，但作为"什么都能做"的兜底人选是合理的
 func findAlternateBarber(ctx context.Context, tx *gorm.DB, appt *Appointment) (string, bool, error) {
+	// 拿候选：取本店所有 active + 排除原 barber + 按 name ASC
 	var candidates []Barber
 	if err := tx.Where("shop_id = ? AND active = ? AND id != ?", appt.ShopID, true, appt.BarberID).
 		Order("name asc").
 		Find(&candidates).Error; err != nil {
 		return "", false, err
 	}
-	for _, c := range candidates {
-		// 检查该候选理发师在 (appt.Date, appt.Time) 是否已被预约
-		var conflictCount int64
+
+	// 时段空闲检查 helper
+	isSlotFree := func(barberID string) (bool, error) {
+		var n int64
 		if err := tx.Model(&Appointment{}).
 			Where("barber_id = ? AND date = ? AND time = ? AND status = ?",
-				c.ID, appt.Date, appt.Time, "active").
-			Count(&conflictCount).Error; err != nil {
+				barberID, appt.Date, appt.Time, "active").
+			Count(&n).Error; err != nil {
+			return false, err
+		}
+		return n == 0, nil
+	}
+
+	// 第一档：Skills 包含 appt.Service（真会这门手艺）
+	for _, c := range candidates {
+		if c.Skills == "" || !skillContains(c.Skills, appt.Service) {
+			continue
+		}
+		free, err := isSlotFree(c.ID)
+		if err != nil {
 			return "", false, err
 		}
-		if conflictCount == 0 {
+		if free {
 			return c.ID, true, nil
 		}
 	}
+
+	// 第二档：Skills 为空（未填写）的理发师 —— 视作"全能"
+	for _, c := range candidates {
+		if c.Skills != "" {
+			continue
+		}
+		free, err := isSlotFree(c.ID)
+		if err != nil {
+			return "", false, err
+		}
+		if free {
+			return c.ID, true, nil
+		}
+	}
+
+	// 兜底：忽略 Skills 匹配，取任何 active 且时段空闲（保底可用性）
+	for _, c := range candidates {
+		free, err := isSlotFree(c.ID)
+		if err != nil {
+			return "", false, err
+		}
+		if free {
+			return c.ID, true, nil
+		}
+	}
+
 	return "", false, nil
+}
+
+// skillContains 检查逗号分隔的 skills 字符串是否包含 needle（精确匹配单项）
+//
+//  - 匹配是精确匹配单项：Skills="剪发,染发" 包含 "染发" 和 "剪发"，但不含 "染"
+//  - 自动 TrimSpace 容忍 "剪发, 染发" 这种带空格的写法
+//  - needle 为空时返回 false（避免空匹配全 true）
+func skillContains(skills, needle string) bool {
+	if needle == "" {
+		return false
+	}
+	for _, s := range strings.Split(skills, ",") {
+		if strings.TrimSpace(s) == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // getBarberName 通过 ID 拿理发师名（不拿 id 错误返回 ""；callers 用完自己兜底）

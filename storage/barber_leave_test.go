@@ -979,3 +979,353 @@ func TestExpireOverdueLeaves_DBNotInitialized(t *testing.T) {
 		t.Errorf("expired = %d, want 0", n)
 	}
 }
+
+// ===================== v3.7 改派策略升级：findAlternateBarber 三档分级 =====================
+//
+// PRD §11.7.11 v3.7：
+//   - 第一档：Skills 包含 appt.Service（真会这门手艺）
+//   - 第二档：Skills 为空（未填写）—— 视作"全能"兜底
+//   - 第三档：忽略 Skills 匹配，取任何 active 且时段空闲（保底可用性）
+//
+// 本组测试直击 findAlternateBarber 内部逻辑（绕过 CreateLeave），断言三档优先级
+// 和边界（busy / 排除原 barber / name asc 同档排序）。
+
+// setBarberSkills 直接更新 Barber.Skills（MakeBarber 没暴露该字段）
+func setBarberSkills(t *testing.T, barberID, skills string) {
+	t.Helper()
+	if err := DB.Model(&Barber{}).Where("id = ?", barberID).Update("skills", skills).Error; err != nil {
+		t.Fatalf("update skills: %v", err)
+	}
+}
+
+// ---- skillContains 纯函数测试（不需要 DB）----
+
+func TestSkillContains_ExactMatch(t *testing.T) {
+	if !skillContains("剪发,染发", "染发") {
+		t.Error("expected match")
+	}
+	if !skillContains("剪发,染发", "剪发") {
+		t.Error("expected match for first item")
+	}
+}
+
+func TestSkillContains_TrimSpace(t *testing.T) {
+	// skills 字符串容忍空格
+	if !skillContains("剪发, 染发 , 烫发", "染发") {
+		t.Error("expected match even with spaces around items")
+	}
+	if !skillContains("剪发,染发,烫发", "烫发") {
+		t.Error("last item without trailing space should match")
+	}
+	// 注意：当前实现只 TrimSpace skills 侧的单项，不 TrimSpace needle 侧
+	// 这是设计选择：调用方负责传干净的 needle（appointment.Service 是 DB 里存的字面值）
+	if skillContains("剪发,染发", "  染发  ") {
+		t.Error("needle is NOT trimmed (callers should pass clean needle)")
+	}
+}
+
+func TestSkillContains_NoPartialMatch(t *testing.T) {
+	// "染" 是 "染发" 的子串，但不应匹配（精确匹配单项）
+	if skillContains("剪发,染发", "染") {
+		t.Error("partial substring match should NOT count")
+	}
+	if skillContains("剪发,染发", "烫") {
+		t.Error("non-existent skill should NOT match")
+	}
+}
+
+func TestSkillContains_EmptyNeedleReturnsFalse(t *testing.T) {
+	if skillContains("剪发,染发", "") {
+		t.Error("empty needle should return false (avoid matching all)")
+	}
+}
+
+func TestSkillContains_EmptySkills(t *testing.T) {
+	if skillContains("", "染发") {
+		t.Error("empty skills + non-empty needle should return false")
+	}
+	if skillContains("", "") {
+		t.Error("both empty should return false")
+	}
+}
+
+func TestSkillContains_SingleSkill(t *testing.T) {
+	if !skillContains("剪发", "剪发") {
+		t.Error("single skill exact match should return true")
+	}
+}
+
+// ---- findAlternateBarber 三档分级测试（需要 DB）----
+
+func TestFindAlternateBarber_Tier1_SkillsMatch_PreferredOverEmpty(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// Kevin 会染发 → 第一档命中
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, kevin.ID, "剪发,染发")
+	// Bob Skills 为空 → 第二档兜底
+	bob := MakeBarber(t, "barber-Bob", shop.ID, "Bob")
+	setBarberSkills(t, bob.ID, "")
+
+	date, tm := buildApptTime(t, 2)
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find alternate")
+	}
+	if got != kevin.ID {
+		t.Errorf("got = %q, want %q (Tier1 Skills 匹配优先)", got, kevin.ID)
+	}
+	if got == bob.ID {
+		t.Errorf("不应该选 Bob (Tier2 空 Skills 兜底被 Tier1 压制)")
+	}
+}
+
+func TestFindAlternateBarber_Tier2_EmptySkills_WhenNoMatch(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// Kevin 不会染发 → 跳过 Tier1
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, kevin.ID, "剪发,烫发")
+	// Bob Skills 为空 → Tier2 兜底命中
+	bob := MakeBarber(t, "barber-Bob", shop.ID, "Bob")
+	setBarberSkills(t, bob.ID, "")
+
+	date, tm := buildApptTime(t, 2)
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find alternate")
+	}
+	if got != bob.ID {
+		t.Errorf("got = %q, want %q (Tier2 空 Skills 兜底)", got, bob.ID)
+	}
+}
+
+func TestFindAlternateBarber_Tier3_AnyActive_WhenNoMatch_NoEmpty(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// 全员 Skills 都不匹配，也无空 Skills → 走 Tier3 保底
+	// 期望选 Kevin（name asc 靠前于 Tom）
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, kevin.ID, "剪发,烫发")
+	tom := MakeBarber(t, "barber-Tom", shop.ID, "Tom")
+	setBarberSkills(t, tom.ID, "剪发")
+
+	date, tm := buildApptTime(t, 2)
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find alternate via Tier3 fallback")
+	}
+	if got != kevin.ID {
+		t.Errorf("got = %q, want %q (Tier3 任意 active + name asc)", got, kevin.ID)
+	}
+	if got == tom.ID {
+		t.Errorf("name asc 应先 Kevin 后 Tom")
+	}
+}
+
+func TestFindAlternateBarber_BusyExcluded_AcrossTiers(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Carol", 0, 0)
+
+	date, tm := buildApptTime(t, 2)
+	// Kevin 会染发（Tier1），但同时段已被占
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, kevin.ID, "剪发,染发")
+	_ = MakeAppointment(t, shop.ID, cust.ID, "Carol", "Kevin", date, tm)
+	// Bob Skills 为空（Tier2），时段空闲 → 应被选
+	bob := MakeBarber(t, "barber-Bob", shop.ID, "Bob")
+	setBarberSkills(t, bob.ID, "")
+
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find alternate")
+	}
+	if got != bob.ID {
+		t.Errorf("got = %q, want %q (Kevin 忙 → 跳过 Tier1 → Bob Tier2)", got, bob.ID)
+	}
+}
+
+func TestFindAlternateBarber_AllBusy_ReturnsFalse(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	custA := MakeCustomer(t, "Alice", 0, 0)
+	custB := MakeCustomer(t, "Bob", 0, 0)
+
+	date, tm := buildApptTime(t, 2)
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, kevin.ID, "剪发,染发")
+	bob := MakeBarber(t, "barber-Bob", shop.ID, "Bob")
+	setBarberSkills(t, bob.ID, "")
+	_ = MakeAppointment(t, shop.ID, custA.ID, "Alice", "Kevin", date, tm)
+	_ = MakeAppointment(t, shop.ID, custB.ID, "Bob", "Bob", date, tm)
+
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if found {
+		t.Errorf("expected not found (all busy), got %q", got)
+	}
+	if got != "" {
+		t.Errorf("got = %q, want empty", got)
+	}
+}
+
+func TestFindAlternateBarber_ExcludesOriginalBarber(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	// 场景：店铺只有 Tony + Bob 两位，Tony 请假，appt 是 Tony 的
+	// 不能选回 Tony
+	tony := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	setBarberSkills(t, tony.ID, "剪发,染发")
+	bob := MakeBarber(t, "barber-Bob", shop.ID, "Bob")
+	setBarberSkills(t, bob.ID, "剪发,染发")
+
+	date, tm := buildApptTime(t, 2)
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find alternate")
+	}
+	if got == tony.ID {
+		t.Errorf("must NOT return the original barber (id=%q)", tony.ID)
+	}
+	if got != bob.ID {
+		t.Errorf("got = %q, want %q", got, bob.ID)
+	}
+}
+
+func TestFindAlternateBarber_NoOtherBarber_ReturnsFalse(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date, tm := buildApptTime(t, 2)
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if found {
+		t.Errorf("expected not found (no other barber), got %q", got)
+	}
+}
+
+func TestFindAlternateBarber_Tier1_OrderByName(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// 多个 Tier1 命中（都含"染发"），按 name ASC 选 Adam
+	adam := MakeBarber(t, "barber-Adam", shop.ID, "Adam")
+	setBarberSkills(t, adam.ID, "剪发,染发")
+	zoe := MakeBarber(t, "barber-Zoe", shop.ID, "Zoe")
+	setBarberSkills(t, zoe.ID, "剪发,染发")
+
+	date, tm := buildApptTime(t, 2)
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "染发", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find alternate")
+	}
+	if got != adam.ID {
+		t.Errorf("got = %q, want %q (name asc: Adam 在 Zoe 前)", got, adam.ID)
+	}
+}
+
+func TestFindAlternateBarber_ServiceEmpty_AllTiersSkipped(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, kevin.ID, "剪发,染发")
+	bob := MakeBarber(t, "barber-Bob", shop.ID, "Bob")
+	setBarberSkills(t, bob.ID, "")
+
+	date, tm := buildApptTime(t, 2)
+	// Service 为空 → skillContains 永远 false → 跳过 Tier1，但 Tier2 (空 Skills) 仍能命中
+	appt := &Appointment{
+		ID: "appt-1", ShopID: shop.ID,
+		BarberID: "barber-Tony", BarberName: "Tony",
+		Date: date, Time: tm, Service: "", Status: "active",
+	}
+
+	got, found, err := findAlternateBarber(WithCtx(), DB, appt)
+	if err != nil {
+		t.Fatalf("findAlternateBarber: %v", err)
+	}
+	if !found {
+		t.Fatal("expected Tier2 (empty Skills) to be a fallback")
+	}
+	if got != bob.ID {
+		t.Errorf("got = %q, want %q (Service 空 → Tier2 兜底 Bob)", got, bob.ID)
+	}
+}
