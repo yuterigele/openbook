@@ -1119,6 +1119,75 @@ protected.GET("/chain/dashboard", chainDashboardHandler)
 
 ---
 
+### 11.10.8 P2 — 跨店看板时间窗口切换（v4.1 新增，2026-06-21）
+
+#### 业务背景
+
+v4.0 chain dashboard 只能查"过去一个月"，owner 想看"今天"或"本周"必须改 SQL。常见诉求：
+
+- **今日**：店长每天早上看昨天 vs 今天的对比，确认 AI 助手有没有跑偏
+- **本周**：周会时汇报"本周所有店表现"
+- **本月**（默认）：月度复盘、跨店横向对比
+
+加 `?window=today|week|month` query 参数，让前端按钮切换窗口不必改后端。
+
+#### 接口变化
+
+`GET /api/admin/chain/dashboard?window=today|week|month`
+
+| 字段 | v4.0 | v4.1 |
+|---|---|---|
+| Query 参数 | 无 | `window`（可选；默认 `month`；非法返回 400） |
+| 响应新增字段 | — | `window`（回传，方便前端核对）、`ChainTotals.window`（同值） |
+
+#### 窗口边界
+
+按 Asia/Shanghai 计算：
+
+| window | from（含） | to（不含） |
+|---|---|---|
+| today | 当日 00:00:00 | 次日 00:00:00 |
+| week  | 本周一 00:00:00（Sunday=0 时回退 6 天） | 下周一 00:00:00 |
+| month | 当月 1 号 00:00:00 | 次月 1 号 00:00:00 |
+
+#### 关键设计决策
+
+1. **半开区间 [from, to)**：和单店 dashboard 的 ShopAggregateByID 保持一致，避免跨日 / 跨月重复计入
+2. **非法 window → 400 而不是 fallback**：避免"传错参数却拿到数据"的 silent bug
+3. **默认 month**：v4.0 老客户端不传参数时行为不变（兼容性）
+4. **响应回传 window**：前端 button group 切完不需要自己记状态，刷新页面也能从响应恢复
+5. **ChainTotals.window 与 ChainDashboardResponse.window 同时存在**：方便不同消费者（前端用顶层；前端摘要卡用 ChainTotals 里那个）
+
+#### 关键代码
+
+- `api/chain_dashboard.go`：
+  - `parseWindow(raw string) string` —— 空 → 默认；合法 → 原值（trim + lowercase）；其他 → ""
+  - `resolveWindowBounds(now, window) (from, to)` —— 集中处理三种窗口边界，未知 window fallback 到 month（防御性）
+  - `ValidChainDashboardWindows []string`、`DefaultChainDashboardWindow = "month"` —— 公开常量便于前端同步
+  - `buildChainDashboard(ctx, window)` —— 签名加 window 参数
+  - `chainDashboardHandler` —— `c.Query("window")` → `parseWindow` → 非法 400
+
+#### 测试覆盖（+13 用例）
+
+- `parseWindow`：10 个 case（空 / 空白 / 大写 / 注入 / 非法）
+- `resolveWindowBounds`：4 个 case（today / week 周三周日周一 / month 跨年 / fallback）
+- `buildChainDashboard_WindowIsolation`：today vs month 数据隔离验证
+- `buildChainDashboard_DefaultsToMonth`：默认参数行为兼容
+- `chainDashboardHandler_WindowQuery_Today`：?window=today 端到端
+- `chainDashboardHandler_DefaultWindowWhenMissing`：不传 → month
+- `chainDashboardHandler_InvalidWindow_400`：非法 → 400
+
+#### 后续可继续做（P2 增量）
+
+1. ✅ ~~时间窗口 query 参数~~（v4.1 完成）
+2. ⏳ platform_admin 角色限定（待产品定义清晰）
+3. ⏳ 跨店客户分析（top customer by total_visits）
+4. ⏳ 跨店理发师排行（按 barber_name 跨店合并）
+5. ⏳ 批量聚合优化（100+ 店场景）
+6. ⏳ Dashboard UI 切换按钮
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -1142,12 +1211,16 @@ protected.GET("/chain/dashboard", chainDashboardHandler)
 
 ---
 
-*文档版本：v4.0 | 更新日期：2026-06-21*
+*文档版本：v4.1 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
 **v3.6 增量**：新增 §11.7.9 P4 query_schedule 视觉区分（`QueryScheduleBreakdown` helper + 三段渲染 + 6 storage 单测 + 6 tools 单测）+ §11.7.10 list_barbers 标记今日请假理发师（8 tools 单测，共 20 个新单测）。
 **v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级 + 14 个新单测）。
+**v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + 14 个新单测 + 修复 pre-existing SQL warning）。
+**v3.9 增量**：新增 §11.9 MVP §5 转人工兜底（`handoff_to_human` 工具 + 10 个新单测）。
+**v4.0 增量**：新增 §11.10 P2 多店数据汇总 / 连锁看板（`/api/admin/chain/dashboard` + `ListAllShops` / `ShopAggregateByID` / `chainEventFunnel` + 16 个新单测）。
+**v4.1 增量**：新增 §11.10.8 P2 跨店看板时间窗口切换（`?window=today|week|month` + `parseWindow` / `resolveWindowBounds` / `ValidChainDashboardWindows` + 13 个新单测）。
 **v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + today/week/month 三窗口 + 9 个 api 单测）+ 修 pre-existing `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在 `shop_id` 列的 SQL warning（5 个 storage 单测）。
 **v3.9 增量**：新增 §11.9 MVP 第 5 项「转人工兜底」（`HandoffToHumanTool` 写埋点 + 3 类允许场景约束 + `EventHandoffToHuman` 事件类型 + 5 个 tools 单测）+ `DashboardResponse.HandoffPendingToday` 卡片（复用 `EventFunnelToday` 零额外 SQL + 5 个 api 单测），共 +10 个新单测。
 **v4.0 增量**：新增 §11.10 P2 多店数据汇总（`/api/admin/chain/dashboard` 跨店看板 endpoint + `storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper + `chainEventFunnel` 跨店事件漏斗 + 16 个 api 单测）。

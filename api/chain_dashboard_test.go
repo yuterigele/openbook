@@ -194,7 +194,7 @@ func TestShopAggregateByID_ShopIsolation(t *testing.T) {
 
 func TestBuildChainDashboard_EmptyDB(t *testing.T) {
 	setupAPITestDB(t)
-	resp := buildChainDashboard(t.Context())
+	resp := buildChainDashboard(t.Context(), "month")
 	if resp.TotalShops != 0 {
 		t.Errorf("TotalShops = %d, want 0", resp.TotalShops)
 	}
@@ -203,6 +203,9 @@ func TestBuildChainDashboard_EmptyDB(t *testing.T) {
 	}
 	if resp.ChainTotals.Total != 0 {
 		t.Errorf("ChainTotals.Total = %d, want 0", resp.ChainTotals.Total)
+	}
+	if resp.Window != "month" {
+		t.Errorf("Window = %q, want %q", resp.Window, "month")
 	}
 }
 
@@ -216,7 +219,7 @@ func TestBuildChainDashboard_SingleShop(t *testing.T) {
 	seedAppointment(t, "shop-1", "Tony", today, "10:00", "completed")
 	seedAppointment(t, "shop-1", "Kevin", today, "11:00", "noshow")
 
-	resp := buildChainDashboard(t.Context())
+	resp := buildChainDashboard(t.Context(), "today")
 	if resp.TotalShops != 1 {
 		t.Errorf("TotalShops = %d, want 1", resp.TotalShops)
 	}
@@ -235,6 +238,9 @@ func TestBuildChainDashboard_SingleShop(t *testing.T) {
 	}
 	if resp.ChainTotals.NoShow != 1 || resp.ChainTotals.Completed != 1 {
 		t.Errorf("ChainTotals 分项错: %+v", resp.ChainTotals)
+	}
+	if resp.ChainTotals.Window != "today" {
+		t.Errorf("ChainTotals.Window = %q, want %q", resp.ChainTotals.Window, "today")
 	}
 }
 
@@ -256,7 +262,7 @@ func TestBuildChainDashboard_MultiShop(t *testing.T) {
 	}
 	seedAppointment(t, "shop-C", "Leo", today, "14:00", "noshow")
 
-	resp := buildChainDashboard(t.Context())
+	resp := buildChainDashboard(t.Context(), "month")
 	if resp.TotalShops != 3 {
 		t.Errorf("TotalShops = %d, want 3", resp.TotalShops)
 	}
@@ -299,7 +305,7 @@ func TestBuildChainDashboard_TopShops_Limit5(t *testing.T) {
 		}
 	}
 
-	resp := buildChainDashboard(t.Context())
+	resp := buildChainDashboard(t.Context(), "month")
 	if resp.TotalShops != 8 {
 		t.Errorf("TotalShops = %d, want 8", resp.TotalShops)
 	}
@@ -450,5 +456,246 @@ func TestChainDashboardHandler_DBNotInitialized(t *testing.T) {
 	status, _ := runHandler(t, chainDashboardHandler, ctx)
 	if status != 503 {
 		t.Errorf("DB 未初始化应返回 503，got %d", status)
+	}
+}
+
+// ===================== v4.1: parseWindow + resolveWindowBounds =====================
+
+func TestParseWindow(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "month"},                   // 空 → 默认
+		{"   ", "month"},                // 仅空白 → 默认
+		{"today", "today"},              // 小写合法
+		{"TODAY", "today"},              // 大写自动 normalize
+		{"  month  ", "month"},          // trim + 小写
+		{"week", "week"},
+		{"year", ""},                    // 非法 → ""
+		{"daily", ""},                   // 非法 → ""
+		{"yesterday", ""},               // 非法 → ""
+		{"month;DROP TABLE", ""},        // 注入尝试 → ""
+	}
+	for _, c := range cases {
+		got := parseWindow(c.in)
+		if got != c.want {
+			t.Errorf("parseWindow(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestResolveWindowBounds_Today(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	// 周三 2026-06-17 10:30:00
+	now := time.Date(2026, 6, 17, 10, 30, 0, 0, loc)
+	from, to := resolveWindowBounds(now, "today")
+	wantFrom := time.Date(2026, 6, 17, 0, 0, 0, 0, loc)
+	wantTo := time.Date(2026, 6, 18, 0, 0, 0, 0, loc)
+	if !from.Equal(wantFrom) {
+		t.Errorf("today from = %v, want %v", from, wantFrom)
+	}
+	if !to.Equal(wantTo) {
+		t.Errorf("today to = %v, want %v", to, wantTo)
+	}
+}
+
+func TestResolveWindowBounds_Week_StartsOnMonday(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+
+	// 周三 → 本周一 06-15 00:00 到下周一 06-22 00:00
+	nowWed := time.Date(2026, 6, 17, 10, 30, 0, 0, loc)
+	from, to := resolveWindowBounds(nowWed, "week")
+	wantFrom := time.Date(2026, 6, 15, 0, 0, 0, 0, loc)
+	wantTo := time.Date(2026, 6, 22, 0, 0, 0, 0, loc)
+	if !from.Equal(wantFrom) {
+		t.Errorf("周三 week from = %v, want %v（应回退到周一）", from, wantFrom)
+	}
+	if !to.Equal(wantTo) {
+		t.Errorf("周三 week to = %v, want %v", to, wantTo)
+	}
+
+	// 周日 → 本周一 06-15（注意：周日属于"下一周的开始"之前，所以是本周一）= 上周一 +7 天
+	nowSun := time.Date(2026, 6, 21, 23, 59, 59, 0, loc)
+	fromSun, toSun := resolveWindowBounds(nowSun, "week")
+	if !fromSun.Equal(wantFrom) {
+		t.Errorf("周日 week from = %v, want %v（周日也应回退到本周一）", fromSun, wantFrom)
+	}
+	if !toSun.Equal(wantTo) {
+		t.Errorf("周日 week to = %v, want %v", toSun, wantTo)
+	}
+
+	// 周一自身 → 本周一 00:00
+	nowMon := time.Date(2026, 6, 15, 0, 0, 1, 0, loc)
+	fromMon, toMon := resolveWindowBounds(nowMon, "week")
+	if !fromMon.Equal(wantFrom) {
+		t.Errorf("周一 week from = %v, want %v", fromMon, wantFrom)
+	}
+	if !toMon.Equal(wantTo) {
+		t.Errorf("周一 week to = %v, want %v", toMon, wantTo)
+	}
+}
+
+func TestResolveWindowBounds_Month(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, 6, 17, 10, 30, 0, 0, loc)
+	from, to := resolveWindowBounds(now, "month")
+	wantFrom := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
+	wantTo := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+	if !from.Equal(wantFrom) {
+		t.Errorf("month from = %v, want %v", from, wantFrom)
+	}
+	if !to.Equal(wantTo) {
+		t.Errorf("month to = %v, want %v", to, wantTo)
+	}
+
+	// 跨年：12 月 → 次年 1 月
+	nowDec := time.Date(2026, 12, 31, 23, 59, 59, 0, loc)
+	fromDec, toDec := resolveWindowBounds(nowDec, "month")
+	if !fromDec.Equal(time.Date(2026, 12, 1, 0, 0, 0, 0, loc)) {
+		t.Errorf("12 月 from = %v, want 12-01", fromDec)
+	}
+	if !toDec.Equal(time.Date(2027, 1, 1, 0, 0, 0, 0, loc)) {
+		t.Errorf("12 月 to = %v, want 次年 1-01", toDec)
+	}
+}
+
+func TestResolveWindowBounds_FallbackOnUnknown(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, 6, 17, 10, 30, 0, 0, loc)
+	from, to := resolveWindowBounds(now, "year") // 未知值
+	wantFrom := time.Date(2026, 6, 1, 0, 0, 0, 0, loc)
+	wantTo := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+	if !from.Equal(wantFrom) || !to.Equal(wantTo) {
+		t.Errorf("未知 window 应 fallback 到 month, got from=%v to=%v", from, to)
+	}
+}
+
+// ===================== v4.1: buildChainDashboard 按窗口隔离 =====================
+
+func TestBuildChainDashboard_WindowIsolation_TodayVsMonth(t *testing.T) {
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Now().In(loc)
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	farPast := now.AddDate(0, 0, -10).Format("2006-01-02")
+
+	// 今天 2 单（completed/noshow）
+	seedAppointment(t, "shop-1", "Tony", today, "10:00", "completed")
+	seedAppointment(t, "shop-1", "Kevin", today, "11:00", "noshow")
+	// 昨天 1 单（应在 month 内、不在 today 内）
+	seedAppointment(t, "shop-1", "Leo", yesterday, "10:00", "completed")
+	// 10 天前 1 单（仅 month 内，且因为可能跨月，所以用月内偏早日期保险）
+	// 注意：如果 today 是月初（1~10 号），farPast 可能已经不在这个月内；用月初测试更稳
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+	if now.Day() > 10 {
+		// 安全：仅当 today 不是月初时才加这条 farPast
+		seedAppointment(t, "shop-1", "Mike", farPast, "10:00", "completed")
+	} else {
+		// 月初测试：farPast 改成 monthStart + 5 天 = 仍在本月内
+		earlyInMonth := monthStart.AddDate(0, 0, 5).Format("2006-01-02")
+		seedAppointment(t, "shop-1", "Mike", earlyInMonth, "10:00", "completed")
+	}
+
+	respToday := buildChainDashboard(t.Context(), "today")
+	if respToday.ChainTotals.Total != 2 {
+		t.Errorf("today 总数 = %d, want 2（昨天的+月初的不算）", respToday.ChainTotals.Total)
+	}
+
+	respMonth := buildChainDashboard(t.Context(), "month")
+	// month 应至少 3 单（today 2 + yesterday 1），可能 4（如果 farPast/earlyInMonth 在本月内）
+	if respMonth.ChainTotals.Total < 3 {
+		t.Errorf("month 总数 = %d, want >=3", respMonth.ChainTotals.Total)
+	}
+	if respMonth.ChainTotals.Total <= respToday.ChainTotals.Total {
+		t.Errorf("month 应 >= today，got month=%d today=%d",
+			respMonth.ChainTotals.Total, respToday.ChainTotals.Total)
+	}
+}
+
+func TestBuildChainDashboard_DefaultsToMonth(t *testing.T) {
+	// 不传 window → 应等价于 month
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Now().In(loc)
+	today := now.Format("2006-01-02")
+	seedAppointment(t, "shop-1", "Tony", today, "10:00", "completed")
+
+	// 直接传 month 当对照
+	respMonth := buildChainDashboard(t.Context(), "month")
+	if respMonth.Window != "month" {
+		t.Errorf("显式 month 的响应 Window = %q", respMonth.Window)
+	}
+	if respMonth.ChainTotals.Total != 1 {
+		t.Errorf("month Total = %d, want 1", respMonth.ChainTotals.Total)
+	}
+}
+
+// ===================== v4.1: chainDashboardHandler ?window= =====================
+
+func TestChainDashboardHandler_WindowQuery_Today(t *testing.T) {
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Now().In(loc)
+	today := now.Format("2006-01-02")
+	seedAppointment(t, "shop-1", "Tony", today, "10:00", "completed")
+
+	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil,
+		withQuery("window", "today"),
+		withClaims(adminClaims("shop-1")),
+	)
+	status, body := runHandler(t, chainDashboardHandler, ctx)
+	if status != statusOK {
+		t.Fatalf("happy path 应返回 200，got %d, body=%s", status, body)
+	}
+	var resp ChainDashboardResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("反序列化失败: %v, body=%s", err, body)
+	}
+	if resp.Window != "today" {
+		t.Errorf("Window = %q, want today", resp.Window)
+	}
+	if resp.ChainTotals.Window != "today" {
+		t.Errorf("ChainTotals.Window = %q, want today", resp.ChainTotals.Window)
+	}
+}
+
+func TestChainDashboardHandler_DefaultWindowWhenMissing(t *testing.T) {
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+
+	// 不传 window → 默认 month
+	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil,
+		withClaims(adminClaims("shop-1")),
+	)
+	status, body := runHandler(t, chainDashboardHandler, ctx)
+	if status != statusOK {
+		t.Fatalf("默认应返回 200，got %d", status)
+	}
+	var resp ChainDashboardResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("反序列化失败: %v, body=%s", err, body)
+	}
+	if resp.Window != "month" {
+		t.Errorf("默认 Window = %q, want month", resp.Window)
+	}
+}
+
+func TestChainDashboardHandler_InvalidWindow_400(t *testing.T) {
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+
+	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil,
+		withQuery("window", "year"), // 非法
+		withClaims(adminClaims("shop-1")),
+	)
+	status, body := runHandler(t, chainDashboardHandler, ctx)
+	if status != statusBadRequest {
+		t.Errorf("非法 window 应返回 400，got %d, body=%s", status, body)
 	}
 }

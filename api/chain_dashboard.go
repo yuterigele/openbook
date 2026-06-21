@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/auth"
@@ -20,17 +21,18 @@ import (
 //     * TopShops（按 total 排序，limit 5）—— 帮 owner 一眼识别"哪几家店最忙"
 //     * EventFunnelChain（跨店事件漏斗，不按 shop_id 过滤）
 type ChainDashboardResponse struct {
-	GeneratedAt      time.Time                 `json:"generated_at"`
-	TotalShops       int                       `json:"total_shops"`
-	ChainTotals      ChainTotals               `json:"chain_totals"`
-	Shops            []storage.ShopAggregate   `json:"shops"`
-	TopShops         []ShopRank                `json:"top_shops"`         // 按 total DESC
-	EventFunnelChain []EventStat               `json:"event_funnel_chain"` // 跨店事件漏斗（月）
+	GeneratedAt      time.Time               `json:"generated_at"`
+	Window           string                  `json:"window"` // v4.1: today|week|month（响应里回传，便于客户端核对）
+	TotalShops       int                     `json:"total_shops"`
+	ChainTotals      ChainTotals             `json:"chain_totals"`
+	Shops            []storage.ShopAggregate `json:"shops"`
+	TopShops         []ShopRank              `json:"top_shops"`          // 按 total DESC
+	EventFunnelChain []EventStat             `json:"event_funnel_chain"` // 跨店事件漏斗（同窗口）
 }
 
 // ChainTotals 跨店合计（单窗口）
 type ChainTotals struct {
-	Window       string  `json:"window"`         // "today" / "week" / "month"
+	Window       string  `json:"window"` // "today" / "week" / "month"
 	Total        int     `json:"total"`
 	Completed    int     `json:"completed"`
 	NoShow       int     `json:"noshow"`
@@ -47,9 +49,79 @@ type ShopRank struct {
 	Total    int    `json:"total"`
 }
 
-// chainDashboardHandler GET /api/admin/chain/dashboard
+// ValidChainDashboardWindows 跨店看板支持的查询窗口（v4.1）
 //
-// 鉴权策略（v4.0 MVP）：
+//   - today：今日 00:00 到明日 00:00（Asia/Shanghai）
+//   - week ：本周一 00:00 到下周一 00:00（每周一作为周分界）
+//   - month：自然月，今天所在月份的 1 号 00:00 到下月 1 号 00:00
+//
+// 顺序稳定，便于后续扩展（按字典序排列）。
+var ValidChainDashboardWindows = []string{"month", "today", "week"}
+
+// DefaultChainDashboardWindow 默认窗口（month），便于 API 客户端省略 query
+const DefaultChainDashboardWindow = "month"
+
+// parseWindow 解析查询参数里的 window 字符串
+//
+//   - 空串 → DefaultChainDashboardWindow
+//   - 合法值（today/week/month）→ 原值（trim 后小写）
+//   - 其他值 → ""（让调用方决定是 400 还是 fallback 到默认）
+func parseWindow(raw string) string {
+	w := strings.ToLower(strings.TrimSpace(raw))
+	if w == "" {
+		return DefaultChainDashboardWindow
+	}
+	for _, v := range ValidChainDashboardWindows {
+		if w == v {
+			return w
+		}
+	}
+	return ""
+}
+
+// resolveWindowBounds 给定 now + window 返回 [from, to) 半开区间
+//
+//   - today  : 当日 00:00（含）到次日 00:00（不含）
+//   - week   : 本周一 00:00（含）到下周一 00:00（不含）
+//   - month  : 当月 1 号 00:00（含）到次月 1 号 00:00（不含）
+//
+// 默认按 Asia/Shanghai 计算（中国大陆发廊场景；location 加载失败时兜底 +08:00 fixed zone）。
+func resolveWindowBounds(now time.Time, window string) (time.Time, time.Time) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	now = now.In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	switch window {
+	case "today":
+		return todayStart, todayStart.Add(24 * time.Hour)
+	case "week":
+		// time.Weekday(): Sunday=0, Monday=1, ..., Saturday=6
+		// 想要"周一为周开始"，所以 Sunday 要回退 6 天，其他回退 (weekday-1) 天
+		offset := int(now.Weekday()) - int(time.Monday)
+		if offset < 0 {
+			offset += 7
+		}
+		weekStart := todayStart.AddDate(0, 0, -offset)
+		return weekStart, weekStart.AddDate(0, 0, 7)
+	case "month":
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+		return monthStart, monthStart.AddDate(0, 1, 0)
+	default:
+		// 防御性 fallback：未知 window 退回 month（语义等价于调用方自己传 month）
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+		return monthStart, monthStart.AddDate(0, 1, 0)
+	}
+}
+
+// chainDashboardHandler GET /api/admin/chain/dashboard?window=today|week|month
+//
+// Query 参数：
+//   - window：可选；默认 month；非法值返回 400
+//
+// 鉴权策略（v4.0 MVP，v4.1 不变）：
 //   - 当前实现：任何已登录的 admin 都能访问（role != ""）
 //   - 后续要做细粒度控制：要求 role="platform_admin"（待产品定义清晰后）
 //   - 文档里写明这一权衡，避免后续误以为"默认是 owner 限定"
@@ -63,49 +135,53 @@ func chainDashboardHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	resp := buildChainDashboard(ctx)
+	window := parseWindow(c.Query("window"))
+	if window == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid window; want one of: today, week, month",
+		})
+		return
+	}
+	resp := buildChainDashboard(ctx, window)
 	c.JSON(http.StatusOK, resp)
 }
 
-// buildChainDashboard 跨店看板数据组装
+// buildChainDashboard 跨店看板数据组装（v4.1：window 参数化）
 //
 //   - 单次调用：ListAllShops + 每个店 ShopAggregateByID + 跨店 chainEventFunnel
 //   - 性能边界：N 个店 = N+2 次 SQL。当前目标 N=5~20 家店，性能足够；
 //     后续店多到 100+ 时改成批量 appointments 查 + Go 端按 shop_id 分组聚合
-func buildChainDashboard(ctx context.Context) ChainDashboardResponse {
-	loc, _ := time.LoadLocation("Asia/Shanghai")
-	if loc == nil {
-		loc = time.FixedZone("CST", 8*3600)
-	}
-	now := time.Now().In(loc)
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	monthStart := todayStart.AddDate(0, -1, 0)
+//   - window：today/week/month，决定 ChainTotals、Shops[*].Stats、EventFunnelChain 的时间区间
+func buildChainDashboard(ctx context.Context, window string) ChainDashboardResponse {
+	now := time.Now()
+	from, to := resolveWindowBounds(now, window)
 
 	resp := ChainDashboardResponse{
 		GeneratedAt: now,
+		Window:      window,
 	}
 
 	shops := storage.ListAllShops(ctx)
 	resp.TotalShops = len(shops)
 
-	// 1. 每月窗口跨店汇总（商家最关心的"过去一个月整盘经营情况"）
-	monthTotals := ChainTotals{Window: "month"}
+	// 1. 指定窗口的跨店汇总
+	totals := ChainTotals{Window: window}
 	resp.Shops = make([]storage.ShopAggregate, 0, len(shops))
 	resp.TopShops = make([]ShopRank, 0, len(shops))
 
 	for _, s := range shops {
-		stats, err := storage.ShopAggregateByID(ctx, s.ID, monthStart, now.Add(24*time.Hour))
+		stats, err := storage.ShopAggregateByID(ctx, s.ID, from, to)
 		if err != nil {
 			// 单店失败不阻塞整体 —— 留空 stats 继续
 			stats = storage.ShopAggregateStats{}
 		}
 		resp.Shops = append(resp.Shops, storage.ShopAggregate{Shop: s, Stats: stats})
 
-		monthTotals.Total += stats.Total
-		monthTotals.Completed += stats.Completed
-		monthTotals.NoShow += stats.NoShow
-		monthTotals.Cancelled += stats.Cancelled
-		monthTotals.Active += stats.Active
+		totals.Total += stats.Total
+		totals.Completed += stats.Completed
+		totals.NoShow += stats.NoShow
+		totals.Cancelled += stats.Cancelled
+		totals.Active += stats.Active
 
 		resp.TopShops = append(resp.TopShops, ShopRank{
 			ShopID:   s.ID,
@@ -113,12 +189,12 @@ func buildChainDashboard(ctx context.Context) ChainDashboardResponse {
 			Total:    stats.Total,
 		})
 	}
-	closed := monthTotals.NoShow + monthTotals.Completed
+	closed := totals.NoShow + totals.Completed
 	if closed > 0 {
-		monthTotals.NoShowRate = float64(monthTotals.NoShow) / float64(closed)
-		monthTotals.CompleteRate = float64(monthTotals.Completed) / float64(closed)
+		totals.NoShowRate = float64(totals.NoShow) / float64(closed)
+		totals.CompleteRate = float64(totals.Completed) / float64(closed)
 	}
-	resp.ChainTotals = monthTotals
+	resp.ChainTotals = totals
 
 	// 2. TopShops 按 total DESC 排序，limit 5
 	sort.Slice(resp.TopShops, func(i, j int) bool {
@@ -131,8 +207,8 @@ func buildChainDashboard(ctx context.Context) ChainDashboardResponse {
 		resp.TopShops = resp.TopShops[:5]
 	}
 
-	// 3. 跨店事件漏斗（月窗口，不按 shop_id 过滤）
-	resp.EventFunnelChain = chainEventFunnel(ctx, monthStart, now, 20)
+	// 3. 跨店事件漏斗（同窗口，不按 shop_id 过滤）
+	resp.EventFunnelChain = chainEventFunnel(ctx, from, to, 20)
 	return resp
 }
 
