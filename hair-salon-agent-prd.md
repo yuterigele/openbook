@@ -1,10 +1,12 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.2）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.4）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.2（P3 取消策略联动落地）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.4（P4 工具侧集成）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
 > **v3.2 变更**：新增 §11.5 P3「退款/取消策略联动」—— 提前 2h 取消免爽约标记 / 累计晚退订 3 次自动黑名单 / 累计爽约 2 次自动黑名单。详见 §11.5。
+> **v3.3 变更**：新增 §11.7 P4「理发师请假」—— 商户后台一键请假，自动取消 / 改派区间内未来预约，撤销规则限制在 startAt 之前。详见 §11.7。
+> **v3.4 变更**：新增 §11.7.7 P4 工具侧集成 —— `create_appointment` 工具接入请假拦截，避免"预约成功→立即被请假处理取消"体验事故；新增 `IsBarberOnLeaveAt` / `ListBarberLeavesInRange` helpers + 18 个新单测。
 
 ---
 
@@ -411,6 +413,124 @@ LATE_CANCEL_BLACKLIST_THRESHOLD=3
 NOSHOW_BLACKLIST_THRESHOLD=2
 ```
 
+### 11.7 P4 — 理发师请假（v3.3 新增）
+
+> **背景**：理发师临时有事（生病/家中有事/紧急出差），商户在后台点"请假"，系统自动处理该理发师在 [StartAt, EndAt] 区间内的所有未来预约。这是商户日常高频率操作（P3 的补集：P3 处理顾客主动取消，P4 处理商户主动让理发师下架）。
+
+#### 11.7.1 业务场景
+
+- **理发师请病假/家中有事/紧急出差** → 商户在后台点"请假" → 系统根据 Action 处理：
+
+| Action | 行为 | 适用场景 |
+|--------|------|---------|
+| `cancel` | 全部未来预约直接取消 + 微信通知顾客"因 X 师傅请假被取消，请重新预约" | 理发师病假几天（顾客需另约时间）|
+| `reschedule` | 自动找同档期其他 active 理发师改派；改派失败的兜底取消 + 通知 | 理发师临时 1-2 小时外出（短假改派）|
+
+#### 11.7.2 数据模型
+
+新表 `barber_leaves`（AutoMigrate 自动建）：
+
+```go
+type BarberLeave struct {
+    ID         string    // 主键
+    ShopID     string    // 多店隔离
+    BarberID   string    // 哪理发师
+    BarberName string    // 冗余，便于审计
+    StartAt    time.Time // 请假起点（建议：开始时间）
+    EndAt      time.Time // 请假止点（建议：自然恢复时间）
+    Reason     string    // 病假/家中有事/紧急出差
+    Action     string    // cancel / reschedule
+    Status     string    // active / cancelled / expired
+    AffectedCount int    // 受影响预约总数
+    RescheduledCount int // 改派成功数
+    CancelledCount int   // 取消数
+    CreatedBy      string // 商户后台用户名
+    CreatedAt  time.Time
+    UpdatedAt  time.Time
+}
+```
+
+**状态机**：
+- `active` — 生效中（now < end_at）
+- `cancelled` — 商户主动撤销（**仅当 now < start_at 时允许**，因为已开始 / 已改派的预约改不回去了）
+- `expired` — 自然结束（查询时过滤即可，不必显式状态）
+
+#### 11.7.3 关键代码
+
+- `storage/barber_leave.go` — `CreateBarberLeave` / `CancelBarberLeave` / `ListBarberLeaves` / `ListActiveLeaves` / `FindAppointmentsInRange`
+- `storage/models.go BarberLeave` — GORM 模型
+- `api/api.go` — `createBarberLeaveHandler` / `cancelBarberLeaveHandler` / `listBarberLeavesHandler`（路由 `/api/admin/barber/:id/leave*`）
+- `main.go` — `buildLeaveNotificationSender`（wecom 通知适配器）
+- `static/admin.html` — 商户后台"请假管理"section（理发师列表 + 历史 + 请假弹窗）
+
+#### 11.7.4 接口
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| POST | `/api/admin/barber/:id/leave` | 创建请假（Body: `start_at` / `end_at` / `reason` / `action`）|
+| DELETE | `/api/admin/barber/:id/leave/:leaveID` | 撤销请假（仅当还没到 start_at）|
+| GET | `/api/admin/barber/:id/leaves?limit=N` | 历史（默认 limit=50）|
+
+#### 11.7.5 Penalty 联动
+
+所有取消走 `CancelAppointmentWithPolicy(source="admin")` 路径 → **不计顾客 late_cancel / no_show**。这与 P3 的"商户手工取消"逻辑一致：商户/系统原因不能让顾客承担爽约 penalty。
+
+改派不算取消：`appointment.barber_id` 更新 + 写 `EventAppointmentRescheduled` 埋点。
+
+#### 11.7.6 单测覆盖
+
+`storage/barber_leave_test.go` 17 + 12 = 29 个用例：
+
+| 类别 | 用例 |
+|------|------|
+| CreateLeave cancel | 区间内全部取消 / 区间外不受影响 / 参数校验 / 理发师不存在 |
+| CreateLeave reschedule | 有空闲理发师改派成功 / 全部占用兜底取消 / 本店无其他理发师兜底取消 |
+| CancelLeave | start_at 前撤销成功 / start_at 后拒绝（ErrLeaveNotCancellable）/ 重复撤销失败 / 不存在 ID 失败 |
+| List | Active 过滤 expired + cancelled / 按 start_at DESC |
+| Sender 容错 | sender 全失败 → leave 仍创建成功 |
+| ID 生成 | UUID 自动生成 + barber_name 冗余正确 |
+| FindAppointmentsInRange | 区间精筛（区间外的不返回）|
+| IsBarberOnLeaveAt | 区间内 / 边界（start/end 含端点）/ 区间前 / 区间后 / cancelled 不计 / 其他理发师不计 / 无请假 |
+| ListBarberLeavesInRange | 仅返回相交区间 / 空区间 / 过滤 cancelled / 其他理发师不计 |
+
+#### 11.7.7 工具侧集成（v3.4 增量，2026-06-21）
+
+P4 在 storage / api 层完成后，顾客侧的 `create_appointment` 工具必须能感知请假，否则会出现"预约成功→被请假处理自动取消"的体验事故。
+
+集成点：`tools/create_appointment.go`，在"店铺节假日校验"之后、"Redis 锁"之前加一道请假拦截。
+
+调用方式：
+```go
+appointmentAt, _ := time.ParseInLocation("2006-01-02 15:04",
+    params.Date+" "+params.Time, loc) // Asia/Shanghai
+onLeave, leave, err := storage.IsBarberOnLeaveAt(ctx, barber.ID, appointmentAt)
+if onLeave && leave != nil {
+    return "", fmt.Errorf(
+        "理发师 %s 在 %s 至 %s 期间请假（原因：%s），该时段无法预约。",
+        params.BarberName, ..., leave.Reason)
+}
+```
+
+错误文案设计：让 Agent 拿到错误后能直接告诉顾客"X师傅 Y 时段请假（原因：Z），请选其他师傅或换时间"，无需再调一次工具查具体请假区间。
+
+工具描述同步更新：`create_appointment.Info.Desc` 加一句"如果理发师在所选时段请假（P4），会返回错误，需要换理发师或换时间"。
+
+新增 storage helper：
+- `IsBarberOnLeaveAt(ctx, barberID, at time.Time) (bool, *BarberLeave, error)` — 单点查询
+- `ListBarberLeavesInRange(ctx, barberID, from, to)` — 区间列表（预留 query_schedule / list_barbers 后续接入）
+
+测试覆盖（`tools/create_appointment_test.go` 6 用例）：
+- Info.Desc 含"请假"关键字
+- 无请假 → 预约成功
+- 区间覆盖 → 拒绝（错误信息含理发师名 + 请假区间 + 原因；DB 无新增 active 预约）
+- 区间前结束 → 允许
+- cancelled leave → 允许
+- 其他理发师请假 → 允许（不误伤）
+
+放置位置说明：在 Redis 锁**之前**做这个检查是有意为之——
+- 避免 lock TTL（10s）白白占用
+- 失败时 Agent 立即收到清晰错误，不需要等到锁释放再 reject
+
 ---
 
 ## 12. 总结
@@ -436,5 +556,7 @@ NOSHOW_BLACKLIST_THRESHOLD=2
 
 ---
 
-*文档版本：v3.2 | 更新日期：2026-06-21*
+*文档版本：v3.4 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
+
+**v3.4 增量**：新增 §11.7.7 P4 工具侧集成（`create_appointment` 请假拦截 + 12+6 单测）。

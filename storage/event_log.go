@@ -24,6 +24,10 @@ const (
 	EventAppointmentNoShow   = "appointment_noshow"
 	EventAppointmentCompleted = "appointment_completed"
 	EventBlacklisted           = "customer_blacklisted" // P3 自动黑名单
+	// P4 理发师请假
+	EventBarberLeaveCreated    = "barber_leave_created"
+	EventBarberLeaveCancelled  = "barber_leave_cancelled" // 商户撤销
+	EventAppointmentRescheduled = "appointment_rescheduled" // P4 改派
 	// EventIdleSlotPush 是前缀（拼 date+customerID），便于幂等
 	EventIdleSlotPush = "idle_slot_push"
 )

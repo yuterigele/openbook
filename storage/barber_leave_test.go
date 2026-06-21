@@ -1,0 +1,818 @@
+package storage
+
+// barber_leave_test.go
+//
+// P4 理发师请假单测（PRD §11.7 P4）
+//
+// 覆盖：
+//   1. CreateLeave action=cancel → 全部取消（admin 路径，无 penalty）
+//   2. CreateLeave action=reschedule 且有空闲理发师 → 改派成功
+//   3. CreateLeave action=reschedule 但无空闲理发师 → 兜底取消
+//   4. CreateLeave action=reschedule 但本店铺无其他理发师 → 兜底取消
+//   5. CreateLeave 区间外的预约不受影响
+//   6. CreateLeave 参数校验（空 ID / startAt >= endAt / 非法 action）
+//   7. CancelLeave startAt 之前 → OK + 事件埋点
+//   8. CancelLeave startAt 之后 → ErrLeaveNotCancellable
+//   9. CancelLeave 已 cancelled → 错误
+//  10. CancelLeave 不存在 → 错误
+//  11. ListActiveLeaves 过滤掉 expired/cancelled
+//  12. ListBarberLeaves 按 start_at DESC
+//  13. sender 失败 → leave 仍创建成功（事务外通知，不阻塞主链路）
+//  14. IsBarberOnLeaveAt：区间内/外/边界/cancelled/expired/其他理发师
+//  15. ListBarberLeavesInRange：区间相交 / 不相交 / cancelled 过滤
+//
+// ID 约定：
+//   - MakeBarber(t, "barber-Tony", ...) → barber.ID = "barber-Tony"
+//   - MakeAppointment(t, ..., "Tony", ...) → appt.BarberID = "barber-" + "Tony" = "barber-Tony"
+//   - 这样 MakeBarber 创建的 ID 与 MakeAppointment 自动生成的 BarberID 保持一致。
+//
+// Run:
+//   go test ./storage/... -v -run "TestLeave\|TestCancelLeave\|TestListLeave\|TestCreateLeave\|TestFindAppointments\|TestIsBarberOnLeaveAt\|TestListBarberLeavesInRange"
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// ===================== Helpers =====================
+
+// futureTime 返回相对 now 的未来时间
+func futureTime(hoursFromNow float64) time.Time {
+	return time.Now().Add(time.Duration(hoursFromNow * float64(time.Hour)))
+}
+
+// pastTime 返回相对 now 的过去时间
+func pastTime(hoursAgo float64) time.Time {
+	return time.Now().Add(-time.Duration(hoursAgo * float64(time.Hour)))
+}
+
+// fakeSender 记录所有通知调用，用于断言
+type fakeSender struct {
+	mu       sync.Mutex
+	calls    []sentCall
+	failOn   string // customerID 命中则返回 error
+	failWith error
+}
+
+type sentCall struct {
+	CustomerID string
+	Text       string
+}
+
+func (f *fakeSender) send(_ context.Context, customerID, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, sentCall{CustomerID: customerID, Text: text})
+	if f.failOn != "" && f.failOn == customerID {
+		return f.failWith
+	}
+	return nil
+}
+
+// ===================== CreateLeave: action=cancel =====================
+
+func TestCreateLeave_CancelAction_AllAppointmentsCancelled(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	// 注意：barber ID 用 "barber-Tony"，匹配 MakeAppointment 中 "barber-"+name 的约定
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust1 := MakeCustomer(t, "Alice", 0, 0)
+	cust2 := MakeCustomer(t, "Bob", 0, 0)
+	// 两个 Tony 的未来预约（在请假区间内）
+	date1, tm1 := buildApptTime(t, 2) // 2h ahead
+	date2, tm2 := buildApptTime(t, 3) // 3h ahead
+	appt1 := MakeAppointment(t, shop.ID, cust1.ID, "Alice", barberA.Name, date1, tm1)
+	appt2 := MakeAppointment(t, shop.ID, cust2.ID, "Bob", barberA.Name, date2, tm2)
+
+	sender := &fakeSender{}
+	leave := BarberLeave{
+		ShopID:    shop.ID,
+		BarberID:  barberA.ID,
+		StartAt:   futureTime(1),
+		EndAt:     futureTime(4),
+		Reason:    "生病",
+		Action:    LeaveActionCancel,
+		CreatedBy: "test_admin",
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.AffectedCount != 2 {
+		t.Errorf("AffectedCount = %d, want 2", res.AffectedCount)
+	}
+	if res.CancelledCount != 2 {
+		t.Errorf("CancelledCount = %d, want 2", res.CancelledCount)
+	}
+	if res.RescheduledCount != 0 {
+		t.Errorf("RescheduledCount = %d, want 0", res.RescheduledCount)
+	}
+	if len(res.NotifiedCustomers) != 2 {
+		t.Errorf("NotifiedCustomers = %d, want 2", len(res.NotifiedCustomers))
+	}
+
+	// 两条预约都应该是 cancelled + admin_cancel
+	for _, apptID := range []string{appt1.ID, appt2.ID} {
+		var got Appointment
+		DB.First(&got, "id = ?", apptID)
+		if got.Status != "cancelled" {
+			t.Errorf("appt %s Status = %q, want cancelled", apptID, got.Status)
+		}
+		if got.CancelType != CancelTypeAdmin {
+			t.Errorf("appt %s CancelType = %q, want %q", apptID, got.CancelType, CancelTypeAdmin)
+		}
+		if !strings.Contains(got.CancelReason, "理发师请假") {
+			t.Errorf("appt %s CancelReason = %q, want to mention 请假", apptID, got.CancelReason)
+		}
+	}
+
+	// 顾客 penalty 不应增加
+	for _, c := range []*Customer{cust1, cust2} {
+		var got Customer
+		DB.First(&got, "id = ?", c.ID)
+		if got.LateCancelCount != 0 {
+			t.Errorf("customer %s LateCancelCount = %d, want 0 (admin cancel 不计 penalty)", c.ID, got.LateCancelCount)
+		}
+	}
+
+	// barber_leaves 行存在 + 统计字段正确
+	var gotLeave BarberLeave
+	DB.First(&gotLeave, "id = ?", res.LeaveID)
+	if gotLeave.Status != LeaveStatusActive {
+		t.Errorf("Leave Status = %q, want active", gotLeave.Status)
+	}
+	if gotLeave.AffectedCount != 2 || gotLeave.CancelledCount != 2 {
+		t.Errorf("Leave stats wrong: affected=%d cancelled=%d", gotLeave.AffectedCount, gotLeave.CancelledCount)
+	}
+
+	// EventBarberLeaveCreated 事件已埋点
+	var evts []EventLog
+	DB.Where("event_type = ? AND ref_id = ?", EventBarberLeaveCreated, res.LeaveID).Find(&evts)
+	if len(evts) != 1 {
+		t.Errorf("expected 1 barber_leave_created event, got %d", len(evts))
+	}
+
+	// sender 被调用 2 次
+	if len(sender.calls) != 2 {
+		t.Errorf("sender.calls = %d, want 2", len(sender.calls))
+	}
+}
+
+func TestCreateLeave_CancelAction_OutOfRangeNotAffected(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	// 一个在区间外（5h 后，超出 endAt=4h）
+	dateOut, tmOut := buildApptTime(t, 5)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, dateOut, tmOut)
+
+	sender := &fakeSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.AffectedCount != 0 {
+		t.Errorf("AffectedCount = %d, want 0 (预约在区间外)", res.AffectedCount)
+	}
+	if len(sender.calls) != 0 {
+		t.Errorf("sender.calls = %d, want 0", len(sender.calls))
+	}
+}
+
+// ===================== CreateLeave: action=reschedule =====================
+
+func TestCreateLeave_RescheduleAction_FindsAlternativeBarber(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	barberB := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+
+	date, tm := buildApptTime(t, 2) // 区间内
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, date, tm)
+
+	sender := &fakeSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Action: LeaveActionReschedule,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.RescheduledCount != 1 {
+		t.Errorf("RescheduledCount = %d, want 1", res.RescheduledCount)
+	}
+	if res.CancelledCount != 0 {
+		t.Errorf("CancelledCount = %d, want 0 (成功改派)", res.CancelledCount)
+	}
+
+	// appt 状态仍为 active，但 barber_id / barber_name 改了
+	var got Appointment
+	DB.First(&got, "id = ?", appt.ID)
+	if got.Status != "active" {
+		t.Errorf("Status = %q, want active (reschedule 不取消)", got.Status)
+	}
+	if got.BarberID != barberB.ID {
+		t.Errorf("BarberID = %q, want %q (改派到 Kevin)", got.BarberID, barberB.ID)
+	}
+	if got.BarberName != barberB.Name {
+		t.Errorf("BarberName = %q, want %q", got.BarberName, barberB.Name)
+	}
+
+	// EventAppointmentRescheduled 已埋点
+	var evts []EventLog
+	DB.Where("event_type = ? AND ref_id = ?", EventAppointmentRescheduled, appt.ID).Find(&evts)
+	if len(evts) != 1 {
+		t.Errorf("expected 1 appointment_rescheduled event, got %d", len(evts))
+	}
+}
+
+func TestCreateLeave_RescheduleAction_AllAlternatesBusy_FallbackCancel(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	barberB := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	custA := MakeCustomer(t, "Alice", 0, 0)
+	custB := MakeCustomer(t, "Bob", 0, 0)
+
+	// 同一天同时段：Kevin 已被 Bob 占了
+	date, tm := buildApptTime(t, 2)
+	apptA := MakeAppointment(t, shop.ID, custA.ID, "Alice", barberA.Name, date, tm) // 待改派
+	_ = MakeAppointment(t, shop.ID, custB.ID, "Bob", barberB.Name, date, tm)        // 占用 Kevin
+
+	sender := &fakeSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Action: LeaveActionReschedule,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.RescheduledCount != 0 {
+		t.Errorf("RescheduledCount = %d, want 0 (改派失败)", res.RescheduledCount)
+	}
+	if res.CancelledCount != 1 {
+		t.Errorf("CancelledCount = %d, want 1 (兜底取消)", res.CancelledCount)
+	}
+
+	// apptA 应被取消（admin 路径）
+	var got Appointment
+	DB.First(&got, "id = ?", apptA.ID)
+	if got.Status != "cancelled" {
+		t.Errorf("Status = %q, want cancelled (fallback)", got.Status)
+	}
+	if got.CancelType != CancelTypeAdmin {
+		t.Errorf("CancelType = %q, want %q", got.CancelType, CancelTypeAdmin)
+	}
+}
+
+func TestCreateLeave_RescheduleAction_NoOtherBarber_FallbackCancel(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// 本店只有 Tony
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, date, tm)
+
+	sender := &fakeSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Action: LeaveActionReschedule,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.CancelledCount != 1 {
+		t.Errorf("CancelledCount = %d, want 1", res.CancelledCount)
+	}
+	_ = appt
+}
+
+// ===================== CreateLeave: parameter validation =====================
+
+func TestCreateLeave_InvalidParams(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	cases := []struct {
+		name  string
+		leave BarberLeave
+		want  string
+	}{
+		{
+			name: "empty barber_id",
+			leave: BarberLeave{ShopID: shop.ID, StartAt: futureTime(1), EndAt: futureTime(2), Action: LeaveActionCancel},
+			want: "barber_id",
+		},
+		{
+			name: "empty shop_id",
+			leave: BarberLeave{BarberID: barberA.ID, StartAt: futureTime(1), EndAt: futureTime(2), Action: LeaveActionCancel},
+			want: "shop_id",
+		},
+		{
+			name: "start_at >= end_at",
+			leave: BarberLeave{ShopID: shop.ID, BarberID: barberA.ID, StartAt: futureTime(3), EndAt: futureTime(1), Action: LeaveActionCancel},
+			want: "start_at",
+		},
+		{
+			name: "invalid action",
+			leave: BarberLeave{ShopID: shop.ID, BarberID: barberA.ID, StartAt: futureTime(1), EndAt: futureTime(2), Action: "unknown"},
+			want: "action",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := CreateBarberLeave(WithCtx(), tc.leave, nil)
+			if err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want contains %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestCreateLeave_BarberNotFound(t *testing.T) {
+	SetupTestDB(t)
+	leave := BarberLeave{
+		ShopID: "shop-1", BarberID: "nonexistent",
+		StartAt: futureTime(1), EndAt: futureTime(2),
+		Action: LeaveActionCancel,
+	}
+	_, err := CreateBarberLeave(WithCtx(), leave, nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent barber")
+	}
+	if !strings.Contains(err.Error(), "理发师") {
+		t.Errorf("error should mention 理发师, got %q", err.Error())
+	}
+}
+
+// ===================== CancelLeave =====================
+
+func TestCancelLeave_BeforeStart_OK(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	leave := MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(2), futureTime(4), LeaveActionCancel)
+
+	got, err := CancelBarberLeave(WithCtx(), leave.ID, "test_admin")
+	if err != nil {
+		t.Fatalf("CancelBarberLeave: %v", err)
+	}
+	if got.Status != LeaveStatusCancelled {
+		t.Errorf("Status = %q, want cancelled", got.Status)
+	}
+
+	// 事件埋点
+	var evts []EventLog
+	DB.Where("event_type = ? AND ref_id = ?", EventBarberLeaveCancelled, leave.ID).Find(&evts)
+	if len(evts) != 1 {
+		t.Errorf("expected 1 barber_leave_cancelled event, got %d", len(evts))
+	}
+}
+
+func TestCancelLeave_AfterStart_Fails(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// startAt 已过 1 小时
+	leave := MakeBarberLeave(t, shop.ID, barberA.ID, pastTime(1), futureTime(2), LeaveActionCancel)
+
+	_, err := CancelBarberLeave(WithCtx(), leave.ID, "test_admin")
+	if !errors.Is(err, ErrLeaveNotCancellable) {
+		t.Fatalf("expected ErrLeaveNotCancellable, got %v", err)
+	}
+}
+
+func TestCancelLeave_AlreadyCancelled_Fails(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	leave := MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(2), futureTime(4), LeaveActionCancel)
+
+	if _, err := CancelBarberLeave(WithCtx(), leave.ID, "op"); err != nil {
+		t.Fatalf("first cancel: %v", err)
+	}
+	_, err := CancelBarberLeave(WithCtx(), leave.ID, "op")
+	if err == nil {
+		t.Fatal("expected error on second cancel")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("error should mention cancelled, got %q", err.Error())
+	}
+}
+
+func TestCancelLeave_NotFound(t *testing.T) {
+	SetupTestDB(t)
+	_, err := CancelBarberLeave(WithCtx(), "nonexistent", "op")
+	if err == nil {
+		t.Fatal("expected error for nonexistent leave")
+	}
+}
+
+// ===================== ListLeaves =====================
+
+func TestListActiveLeaves_FiltersExpiredAndCancelled(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	barberB := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+
+	// 1) 未来 active（应被列出）
+	MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(2), futureTime(4), LeaveActionCancel)
+	// 2) 已过期（endAt 在过去 → 应被过滤）
+	MakeBarberLeave(t, shop.ID, barberA.ID, pastTime(3), pastTime(1), LeaveActionCancel)
+	// 3) 已 cancelled（应被过滤）
+	cancelled := MakeBarberLeave(t, shop.ID, barberB.ID, futureTime(2), futureTime(4), LeaveActionCancel)
+	cancelled.Status = LeaveStatusCancelled
+	DB.Save(cancelled)
+
+	active, err := ListActiveLeaves(WithCtx(), shop.ID)
+	if err != nil {
+		t.Fatalf("ListActiveLeaves: %v", err)
+	}
+	if len(active) != 1 {
+		t.Errorf("len(active) = %d, want 1 (only future+active)", len(active))
+	}
+}
+
+func TestListBarberLeaves_OrdersByStartDesc(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	l1 := MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(10), futureTime(11), LeaveActionCancel)
+	l2 := MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(2), futureTime(3), LeaveActionCancel)
+	l3 := MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(20), futureTime(21), LeaveActionCancel)
+
+	leaves, err := ListBarberLeaves(WithCtx(), barberA.ID, 0)
+	if err != nil {
+		t.Fatalf("ListBarberLeaves: %v", err)
+	}
+	if len(leaves) != 3 {
+		t.Fatalf("len = %d, want 3", len(leaves))
+	}
+	// 按 start_at DESC：l3 > l1 > l2
+	if leaves[0].ID != l3.ID || leaves[1].ID != l1.ID || leaves[2].ID != l2.ID {
+		t.Errorf("order wrong: got [%s, %s, %s], want [%s, %s, %s]",
+			leaves[0].ID, leaves[1].ID, leaves[2].ID,
+			l3.ID, l1.ID, l2.ID)
+	}
+}
+
+// ===================== Sender failure handling =====================
+
+func TestCreateLeave_SenderFailure_LeaveStillCreated(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, date, tm)
+
+	// sender 对该顾客通知失败
+	sender := &fakeSender{
+		failOn:   cust.ID,
+		failWith: errors.New("wechat api down"),
+	}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave should not fail when sender errors: %v", err)
+	}
+	if res.CancelledCount != 1 {
+		t.Errorf("CancelledCount = %d, want 1", res.CancelledCount)
+	}
+	if len(res.NotifiedCustomers) != 0 {
+		t.Errorf("NotifiedCustomers = %d, want 0 (sender 全失败)", len(res.NotifiedCustomers))
+	}
+
+	// leave row 仍然存在
+	var gotLeave BarberLeave
+	DB.First(&gotLeave, "id = ?", res.LeaveID)
+	if gotLeave.CancelledCount != 1 {
+		t.Errorf("leave.CancelledCount = %d, want 1", gotLeave.CancelledCount)
+	}
+}
+
+// ===================== FindAppointmentsInRange =====================
+
+func TestFindAppointmentsInRange(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+
+	// 区间 [1h, 4h] 内一个，外面两个
+	dateIn, tmIn := buildApptTime(t, 2)
+	dateBefore, tmBefore := buildApptTime(t, 0.5)
+	dateAfter, tmAfter := buildApptTime(t, 6)
+	inAppt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, dateIn, tmIn)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, dateBefore, tmBefore)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, dateAfter, tmAfter)
+
+	appts, err := FindAppointmentsInRange(WithCtx(), barberA.ID, futureTime(1), futureTime(4))
+	if err != nil {
+		t.Fatalf("FindAppointmentsInRange: %v", err)
+	}
+	if len(appts) != 1 || appts[0].ID != inAppt.ID {
+		t.Errorf("got %d appts, want 1 with id=%s", len(appts), inAppt.ID)
+	}
+}
+
+// ===================== ID generation =====================
+
+func TestCreateLeave_GeneratesIDAndBarberName(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(2),
+		Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, nil)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.LeaveID == "" {
+		t.Error("LeaveID should be generated")
+	}
+	if _, err := uuid.Parse(res.LeaveID); err != nil {
+		t.Errorf("LeaveID should be a valid UUID, got %q", res.LeaveID)
+	}
+
+	var got BarberLeave
+	DB.First(&got, "id = ?", res.LeaveID)
+	if got.BarberName != barberA.Name {
+		t.Errorf("BarberName = %q, want %q", got.BarberName, barberA.Name)
+	}
+}
+
+// ===================== IsBarberOnLeaveAt =====================
+//
+// 用于 tools/create_appointment.go 在顾客下单前检查"理发师今天是否有事"。
+
+func TestIsBarberOnLeaveAt_InsideWindow(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	start := futureTime(1) // +1h
+	end := futureTime(3)   // +3h
+	mid := futureTime(2)   // +2h
+
+	MakeBarberLeave(t, shop.ID, barber.ID, start, end, LeaveActionCancel)
+
+	onLeave, got, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, mid)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !onLeave {
+		t.Fatal("should be on leave at mid time")
+	}
+	if got == nil || got.BarberID != barber.ID {
+		t.Errorf("got leave = %+v, want BarberID=%s", got, barber.ID)
+	}
+}
+
+func TestIsBarberOnLeaveAt_BoundaryStart(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	start := futureTime(1)
+	end := futureTime(3)
+	// 边界：start_at 正好命中 → 应判为请假中（含端点）
+	MakeBarberLeave(t, shop.ID, barber.ID, start, end, LeaveActionCancel)
+
+	onLeave, _, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, start)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !onLeave {
+		t.Error("at start_at boundary should be on leave (inclusive)")
+	}
+}
+
+func TestIsBarberOnLeaveAt_BoundaryEnd(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	start := futureTime(1)
+	end := futureTime(3)
+	// 边界：end_at 正好命中 → 应判为请假中（含端点）
+	MakeBarberLeave(t, shop.ID, barber.ID, start, end, LeaveActionCancel)
+
+	onLeave, _, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, end)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !onLeave {
+		t.Error("at end_at boundary should be on leave (inclusive)")
+	}
+}
+
+func TestIsBarberOnLeaveAt_BeforeWindow(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	start := futureTime(2)
+	end := futureTime(4)
+	before := futureTime(1)
+
+	MakeBarberLeave(t, shop.ID, barber.ID, start, end, LeaveActionCancel)
+
+	onLeave, _, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, before)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if onLeave {
+		t.Error("before start_at should NOT be on leave")
+	}
+}
+
+func TestIsBarberOnLeaveAt_AfterWindow(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	start := futureTime(1)
+	end := futureTime(2)
+	after := futureTime(3)
+
+	MakeBarberLeave(t, shop.ID, barber.ID, start, end, LeaveActionCancel)
+
+	onLeave, _, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, after)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if onLeave {
+		t.Error("after end_at should NOT be on leave")
+	}
+}
+
+func TestIsBarberOnLeaveAt_CancelledLeaveIgnored(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	start := futureTime(1)
+	end := futureTime(3)
+
+	leave := MakeBarberLeave(t, shop.ID, barber.ID, start, end, LeaveActionCancel)
+	// 商户主动撤销
+	if _, err := CancelBarberLeave(WithCtx(), leave.ID, "admin"); err != nil {
+		t.Fatalf("CancelBarberLeave: %v", err)
+	}
+
+	onLeave, _, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, futureTime(2))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if onLeave {
+		t.Error("cancelled leave should NOT count")
+	}
+}
+
+func TestIsBarberOnLeaveAt_OtherBarberNotAffected(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	barberB := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+
+	start := futureTime(1)
+	end := futureTime(3)
+
+	MakeBarberLeave(t, shop.ID, barberA.ID, start, end, LeaveActionCancel)
+
+	onLeave, _, err := IsBarberOnLeaveAt(WithCtx(), barberB.ID, futureTime(2))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if onLeave {
+		t.Error("Kevin should not be on leave when only Tony is")
+	}
+}
+
+func TestIsBarberOnLeaveAt_NoLeave(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	onLeave, got, err := IsBarberOnLeaveAt(WithCtx(), barber.ID, time.Now())
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if onLeave || got != nil {
+		t.Errorf("no leave should return (false, nil, nil), got (%v, %v)", onLeave, got)
+	}
+}
+
+// ===================== ListBarberLeavesInRange =====================
+
+func TestListBarberLeavesInRange_OverlapOnly(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	// 三段请假：
+	//   #1  [-3h, -2h]  → 不重叠（查询范围 [0, +10h]）
+	//   #2  [+1h, +2h]  → 重叠
+	//   #3  [+5h, +6h]  → 重叠
+	MakeBarberLeave(t, shop.ID, barber.ID, futureTime(-3), futureTime(-2), LeaveActionCancel)
+	MakeBarberLeave(t, shop.ID, barber.ID, futureTime(1), futureTime(2), LeaveActionCancel)
+	MakeBarberLeave(t, shop.ID, barber.ID, futureTime(5), futureTime(6), LeaveActionCancel)
+
+	got, err := ListBarberLeavesInRange(WithCtx(), barber.ID, futureTime(0), futureTime(10))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d leaves, want 2 (#2 + #3)", len(got))
+	}
+}
+
+func TestListBarberLeavesInRange_EmptyRange(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	MakeBarberLeave(t, shop.ID, barber.ID, futureTime(1), futureTime(2), LeaveActionCancel)
+
+	// 查询过去区间
+	got, err := ListBarberLeavesInRange(WithCtx(), barber.ID, futureTime(-10), futureTime(-5))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d, want 0", len(got))
+	}
+}
+
+func TestListBarberLeavesInRange_FilterCancelled(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	l1 := MakeBarberLeave(t, shop.ID, barber.ID, futureTime(1), futureTime(2), LeaveActionCancel)
+	l2 := MakeBarberLeave(t, shop.ID, barber.ID, futureTime(3), futureTime(4), LeaveActionCancel)
+	if _, err := CancelBarberLeave(WithCtx(), l1.ID, "admin"); err != nil {
+		t.Fatalf("CancelBarberLeave: %v", err)
+	}
+	_ = l2
+
+	got, err := ListBarberLeavesInRange(WithCtx(), barber.ID, futureTime(0), futureTime(10))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d, want 1 (only l2)", len(got))
+	}
+}
+
+func TestListBarberLeavesInRange_OtherBarberNotIncluded(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	barberB := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+
+	MakeBarberLeave(t, shop.ID, barberA.ID, futureTime(1), futureTime(3), LeaveActionCancel)
+	MakeBarberLeave(t, shop.ID, barberB.ID, futureTime(1), futureTime(3), LeaveActionCancel)
+
+	got, err := ListBarberLeavesInRange(WithCtx(), barberA.ID, futureTime(0), futureTime(10))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("got %d, want 1 (only Tony's leave)", len(got))
+	}
+}

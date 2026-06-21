@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -22,10 +24,24 @@ import (
 type AdminConfig struct {
 	// 兼容旧版：保留单一 ADMIN_TOKEN（用 env 注入），非空时启用 fallback 鉴权
 	LegacyToken string
+
+	// NotifSender 顾客通知发送器（PRD §11.7 P4 理发师请假通知顾客用）
+	//
+	// 签名：(ctx, customerID, text) -> error
+	// 由 main.go 注入；为 nil 时请假设无通知能力（不影响 leave row 写入，只是不发微信）。
+	NotifSender func(ctx context.Context, customerID, text string) error
 }
+
+// notifSender 包级 handler 访问点（在 RegisterRoutes 时赋值一次）
+//
+// 不放 ctx；调用方负责传 ctx。
+var notifSender func(ctx context.Context, customerID, text string) error
 
 // RegisterRoutes 注册 /api/* + /admin 路由
 func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
+	// 注入 handler 共享依赖
+	notifSender = cfg.NotifSender
+
 	// 公开：登录
 	h.POST("/api/auth/login", loginHandler)
 
@@ -44,6 +60,14 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/me", meHandler)
 	protected.POST("/change-password", changePasswordHandler)
 	protected.POST("/logout", logoutHandler)
+	// P4 理发师请假（RESTful 路径：/barber/:id/leave*）
+	protected.POST("/barber/:id/leave", createBarberLeaveHandler)
+	protected.DELETE("/barber/:id/leave/:leaveID", cancelBarberLeaveHandler)
+	protected.GET("/barber/:id/leaves", listBarberLeavesHandler)
+	// P4 备用接口（barber_id / leave_id 在 body，便于跨理发师聚合查询 + 后台管理）
+	protected.POST("/leave/create", createLeaveHandler)
+	protected.POST("/leave/cancel", cancelLeaveHandler)
+	protected.GET("/leave/list", listLeavesHandler)
 
 	// 静态：商户后台页面
 	h.GET("/admin", func(ctx context.Context, c *app.RequestContext) {
@@ -636,4 +660,344 @@ func newID() string {
 
 func staticAdmin() ([]byte, error) {
 	return os.ReadFile("static/admin.html")
+}
+
+// ============================================================
+// P4 理发师请假（PRD §11.7）
+// ============================================================
+
+// createBarberLeaveHandler 创建一条理发师请假
+//
+// POST /api/admin/barber/:id/leave
+// Body: { start_at, end_at, reason, action }
+//   - action: "cancel" | "reschedule"
+//   - start_at / end_at: ISO8601（RFC3339）
+//
+// 响应：{ leave_id, affected_count, rescheduled_count, cancelled_count, notified_count }
+func createBarberLeaveHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	barberID := c.Param("id")
+	if barberID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "barber id required"})
+		return
+	}
+	var req struct {
+		StartAt string `json:"start_at"`
+		EndAt   string `json:"end_at"`
+		Reason  string `json:"reason"`
+		Action  string `json:"action"`
+	}
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	startAt, err := time.Parse(time.RFC3339, req.StartAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "start_at 格式错误，需 RFC3339"})
+		return
+	}
+	endAt, err := time.Parse(time.RFC3339, req.EndAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "end_at 格式错误，需 RFC3339"})
+		return
+	}
+	if !startAt.Before(endAt) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "start_at 必须早于 end_at"})
+		return
+	}
+
+	// 多店隔离：先验证理发师属于本店
+	var barber storage.Barber
+	if err := storage.DB.WithContext(ctx).Where("id = ?", barberID).First(&barber).Error; err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "理发师不存在"})
+		return
+	}
+	if barber.ShopID != shopID {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的理发师"})
+		return
+	}
+
+	leave := storage.BarberLeave{
+		ShopID:   shopID,
+		BarberID: barberID,
+		StartAt:  startAt,
+		EndAt:    endAt,
+		Reason:   req.Reason,
+		Action:   req.Action,
+	}
+	res, err := storage.CreateBarberLeave(ctx, leave, notifSender)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"leave_id":           res.LeaveID,
+		"affected_count":     res.AffectedCount,
+		"rescheduled_count":  res.RescheduledCount,
+		"cancelled_count":    res.CancelledCount,
+		"notified_count":     len(res.NotifiedCustomers),
+	})
+}
+
+// cancelBarberLeaveHandler 撤销一条请假（仅当还没到 start_at）
+//
+// DELETE /api/admin/barber/:id/leave/:leaveID
+func cancelBarberLeaveHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	barberID := c.Param("id")
+	leaveID := c.Param("leaveID")
+	if barberID == "" || leaveID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "barber id + leave id required"})
+		return
+	}
+	// 多店隔离：先验 leave 属于本店
+	var leave storage.BarberLeave
+	if err := storage.DB.WithContext(ctx).Where("id = ?", leaveID).First(&leave).Error; err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "请假记录不存在"})
+		return
+	}
+	if leave.ShopID != shopID {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的请假"})
+		return
+	}
+	if leave.BarberID != barberID {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "barber id 与 leave 不匹配"})
+		return
+	}
+	username, _ := c.Get("auth_claims")
+	operator := ""
+	if username != nil {
+		if claims, ok := username.(*auth.Claims); ok {
+			operator = fmt.Sprintf("admin#%d", claims.AdminID)
+		}
+	}
+	if _, err := storage.CancelBarberLeave(ctx, leaveID, operator); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// listBarberLeavesHandler 列某理发师的请假历史
+//
+// GET /api/admin/barber/:id/leaves?limit=20
+func listBarberLeavesHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	barberID := c.Param("id")
+	if barberID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "barber id required"})
+		return
+	}
+	limit := 50
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 && v <= 200 {
+		limit = v
+	}
+	leaves, err := storage.ListBarberLeaves(ctx, barberID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// 多店隔离：过滤掉非本店的 leave
+	filtered := make([]storage.BarberLeave, 0, len(leaves))
+	for _, l := range leaves {
+		if l.ShopID == shopID {
+			filtered = append(filtered, l)
+		}
+	}
+	c.JSON(http.StatusOK, filtered)
+}
+
+// ============================================================
+// P4 备用接口风格（路径短，barber_id/leave_id 在 body）
+//   - POST /api/admin/leave/create   → createLeaveHandler
+//   - POST /api/admin/leave/cancel   → cancelLeaveHandler
+//   - GET  /api/admin/leave/list?status=&barber_id=  → listLeavesHandler
+//
+// 与 RESTful 风格 (/barber/:id/leave) 等价；保留两个接口是因为：
+//   1) /leave/list 可以跨理发师聚合查询
+//   2) 一些商户 UI 直接按 leave_id 撤销更顺手（不用先知道 barber_id）
+// ============================================================
+
+// createLeaveHandler
+//
+// POST /api/admin/leave/create
+// Body: { barber_id, start_at, end_at, reason, action }
+func createLeaveHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	var req struct {
+		BarberID string `json:"barber_id"`
+		StartAt  string `json:"start_at"`
+		EndAt    string `json:"end_at"`
+		Reason   string `json:"reason"`
+		Action   string `json:"action"`
+	}
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if req.BarberID == "" || req.StartAt == "" || req.EndAt == "" || req.Action == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "barber_id / start_at / end_at / action 都是必填"})
+		return
+	}
+	startAt, err := time.Parse(time.RFC3339, req.StartAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "start_at 格式错误，需 RFC3339"})
+		return
+	}
+	endAt, err := time.Parse(time.RFC3339, req.EndAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "end_at 格式错误，需 RFC3339"})
+		return
+	}
+	if req.Action != storage.LeaveActionCancel && req.Action != storage.LeaveActionReschedule {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "action 必须是 cancel 或 reschedule"})
+		return
+	}
+
+	// 多店隔离：理发师属于本店
+	var barber storage.Barber
+	if err := storage.DB.WithContext(ctx).Where("id = ?", req.BarberID).First(&barber).Error; err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "理发师不存在或不属于本店"})
+		return
+	}
+	if barber.ShopID != shopID {
+		// 不泄露存在性，对外只说"不属于本店"
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "理发师不属于本店"})
+		return
+	}
+
+	leave := storage.BarberLeave{
+		ShopID:   shopID,
+		BarberID: req.BarberID,
+		StartAt:  startAt,
+		EndAt:    endAt,
+		Reason:   req.Reason,
+		Action:   req.Action,
+	}
+	res, err := storage.CreateBarberLeave(ctx, leave, notifSender)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"leave_id":          res.LeaveID,
+		"affected_count":    res.AffectedCount,
+		"rescheduled_count": res.RescheduledCount,
+		"cancelled_count":   res.CancelledCount,
+		"notified_count":    len(res.NotifiedCustomers),
+	})
+}
+
+// cancelLeaveHandler
+//
+// POST /api/admin/leave/cancel
+// Body: { leave_id }
+func cancelLeaveHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	var req struct {
+		LeaveID string `json:"leave_id"`
+	}
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if req.LeaveID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "leave_id 必须"})
+		return
+	}
+	// 多店隔离：先查 leave 所属店铺
+	var leave storage.BarberLeave
+	if err := storage.DB.WithContext(ctx).Where("id = ?", req.LeaveID).First(&leave).Error; err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "请假记录不存在"})
+		return
+	}
+	if leave.ShopID != shopID {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的请假"})
+		return
+	}
+	operator := currentOperator(c)
+	got, err := storage.CancelBarberLeave(ctx, req.LeaveID, operator)
+	if err != nil {
+		// 已开始 → 409 Conflict；其他 → 500
+		if errors.Is(err, storage.ErrLeaveNotCancellable) {
+			c.JSON(http.StatusConflict, map[string]string{"error": err.Error() + "（leave has already started, cannot cancel）"})
+			return
+		}
+		if strings.Contains(err.Error(), "已是 cancelled") {
+			c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": got.Status})
+}
+
+// listLeavesHandler
+//
+// GET /api/admin/leave/list?status=&barber_id=&limit=
+//   - 不传 status：默认仅返回 active
+//   - status=cancelled|expired：过滤对应状态
+//   - barber_id=xxx：仅返回某理发师
+func listLeavesHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	status := c.Query("status")
+	barberID := c.Query("barber_id")
+	limit := 50
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 && v <= 200 {
+		limit = v
+	}
+	q := storage.DB.WithContext(ctx).Model(&storage.BarberLeave{}).Where("shop_id = ?", shopID)
+	if barberID != "" {
+		q = q.Where("barber_id = ?", barberID)
+	}
+	switch status {
+	case "":
+		// 默认：只列 active
+		q = q.Where("status = ?", storage.LeaveStatusActive)
+	case storage.LeaveStatusCancelled, storage.LeaveStatusExpired, storage.LeaveStatusActive:
+		q = q.Where("status = ?", status)
+	}
+	var leaves []storage.BarberLeave
+	if err := q.Order("start_at DESC").Limit(limit).Find(&leaves).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if leaves == nil {
+		leaves = []storage.BarberLeave{}
+	}
+	c.JSON(http.StatusOK, leaves)
+}
+
+// currentOperator 从 JWT claims 取当前操作人标识（MVP 简化：admin#<id>）
+func currentOperator(c *app.RequestContext) string {
+	cl := auth.GetClaims(c)
+	if cl == nil {
+		return ""
+	}
+	return fmt.Sprintf("admin#%d", cl.AdminID)
 }

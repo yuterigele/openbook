@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -262,9 +263,46 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	// 注册商户后台 + API 路由（PRD §11.2）
 	api.RegisterRoutes(srv.EnsureHertz(), api.AdminConfig{
 		LegacyToken: os.Getenv("ADMIN_TOKEN"), // 兼容旧版；非空时作为 fallback
+
+		// P4 理发师请假通知：构造一个 sender 把 (customerID, text) 映射到企业微信发送
+		//
+		// 缺失/未配置 wecom 时 sender = nil，leave row 仍会写，顾客不会收到微信通知（管理员需另行沟通）。
+		NotifSender: buildLeaveNotificationSender(wecomClient),
 	})
 
 	log.Printf("starting server on http://localhost:%s", port)
 	log.Printf("商户后台: http://localhost:%s/admin (默认 admin/admin123，首次登录后请改密码)", port)
 	srv.Spin()
+}
+
+// buildLeaveNotificationSender 构造请假通知发送器（P4）
+//
+// 行为：
+//   - wecomClient == nil：返回 nil（通知能力缺失，但不影响 leave row 写入）
+//   - customerID 为空：no-op
+//   - 查 customer 表取 external_userid / wechat_open_id（优先 external）→ 调 wecomClient.SendTextMessage
+//   - 失败只 log，不返回 error 给上层（避免一个顾客失败影响整个 leave）
+//
+// 注意：这里直接用 storage.DB 是为了保持简单；不抽 repo 是不想为这个一次性通知路径多写一层。
+func buildLeaveNotificationSender(wecomClient *wecom.Client) func(ctx context.Context, customerID, text string) error {
+	if wecomClient == nil {
+		return nil
+	}
+	return func(ctx context.Context, customerID, text string) error {
+		if customerID == "" {
+			return nil
+		}
+		var cust storage.Customer
+		if err := storage.DB.WithContext(ctx).Where("id = ?", customerID).First(&cust).Error; err != nil {
+			return fmt.Errorf("顾客 %s 不存在: %w", customerID, err)
+		}
+		target := cust.ExternalUserID
+		if target == "" {
+			target = cust.WechatOpenID
+		}
+		if target == "" {
+			return fmt.Errorf("顾客 %s 无 external_userid / wechat_open_id", customerID)
+		}
+		return wecomClient.SendTextMessage(ctx, target, text)
+	}
 }

@@ -14,6 +14,7 @@ func (Subscription) TableName() string { return "subscriptions" }
 func (WecomMessageLog) TableName() string { return "wecom_message_logs" }
 func (ReminderLog) TableName() string  { return "reminder_logs" }
 func (EventLog) TableName() string     { return "event_logs" }
+func (BarberLeave) TableName() string  { return "barber_leaves" }
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
@@ -173,4 +174,35 @@ type EventLog struct {
 	RefID      string    `gorm:"size:64" json:"ref_id"` // 关联 ID
 	Meta       string    `gorm:"size:2048" json:"meta"`  // JSON 备注
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}
+
+// BarberLeave 理发师请假记录（PRD §11.7 P4）
+//
+// 业务场景：理发师临时有事（生病/家里有事），商户在后台点"请假"。
+// 系统根据 Action 把 [StartAt, EndAt] 区间内的未来预约：
+//   - cancel     : 全部取消 + 通知顾客
+//   - reschedule : 改派到同档期其他 active 理发师；改派失败的兜底取消 + 通知
+//
+// 状态机：
+//   - active    : 生效中（当前时间在 [StartAt, EndAt] 内，或尚未到 EndAt）
+//   - cancelled : 商户主动撤销（仅允许在 StartAt 之前撤销）
+//   - expired   : 已经过 EndAt（cron 兜底标记，或简单查询时过滤）
+//
+// Penalty 联动（P3）：取消走 source="admin"，不计入顾客 late_cancel / no_show。
+type BarberLeave struct {
+	ID         string     `gorm:"primaryKey;size:64" json:"id"`
+	ShopID     string     `gorm:"size:64;index;not null" json:"shop_id"`
+	BarberID   string     `gorm:"size:64;index;not null" json:"barber_id"`
+	BarberName string     `gorm:"size:64" json:"barber_name"` // 冗余，便于审计
+	StartAt    time.Time  `gorm:"index;not null" json:"start_at"`
+	EndAt      time.Time  `gorm:"index;not null" json:"end_at"`
+	Reason     string     `gorm:"size:256" json:"reason"`           // 病假/家中有事/紧急出差
+	Action     string     `gorm:"size:16;not null" json:"action"`   // cancel / reschedule
+	Status     string     `gorm:"size:16;default:active;index" json:"status"`
+	AffectedCount int      `gorm:"default:0" json:"affected_count"` // 影响的预约数（cancel 或 reschedule 总和）
+	RescheduledCount int  `gorm:"default:0" json:"rescheduled_count"`
+	CancelledCount int    `gorm:"default:0" json:"cancelled_count"`
+	CreatedBy  string     `gorm:"size:64" json:"created_by"`         // 商户后台用户名
+	CreatedAt  time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }

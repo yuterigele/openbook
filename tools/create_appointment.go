@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -35,7 +36,8 @@ func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 	return &schema.ToolInfo{
 		Name: "create_appointment",
 		Desc: "为顾客创建一个新的预约。需要提供理发师姓名、顾客姓名、日期、时间，可选择服务项目。" +
-			"同一理发师的同一时段只能有一个预约；并发请求会被 Redis 锁挡掉。",
+			"同一理发师的同一时段只能有一个预约；并发请求会被 Redis 锁挡掉。" +
+			"如果理发师在所选时段请假（P4），会返回错误，需要换理发师或换时间。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"barber_name": {
 				Type: "string", Desc: "理发师姓名，例如：Tony、Kevin", Required: true,
@@ -85,6 +87,33 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	shop, _ := storage.GetShopByID(ctx, barber.ShopID)
 	if storage.IsShopHoliday(shop, params.Date) {
 		return "", fmt.Errorf("%s 是店铺休息日，无法预约", params.Date)
+	}
+
+	// P4 理发师请假拦截（PRD §11.7.4）：
+	//   - 在加锁之前检查，避免"预约成功→立即被请假处理流程取消"的体验事故
+	//   - 时区按 Asia/Shanghai，与 IsValidSlot / FindAppointmentsInRange 保持一致
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	appointmentAt, parseErr := time.ParseInLocation("2006-01-02 15:04", params.Date+" "+params.Time, loc)
+	if parseErr != nil {
+		// 时段格式异常已被 IsValidSlot 过滤过；这里再兜一道
+		return "", fmt.Errorf("时间格式无法解析: %s %s", params.Date, params.Time)
+	}
+	onLeave, leave, err := storage.IsBarberOnLeaveAt(ctx, barber.ID, appointmentAt)
+	if err != nil {
+		// DB 抖动不阻塞下单，但记一笔 log 便于排查（标准 log 包）
+		fmt.Printf("[create_appointment] IsBarberOnLeaveAt query failed: %v\n", err)
+	}
+	if onLeave && leave != nil {
+		return "", fmt.Errorf(
+			"理发师 %s 在 %s 至 %s 期间请假（原因：%s），该时段无法预约。请选择其他理发师或换个时间。",
+			params.BarberName,
+			leave.StartAt.In(loc).Format("01-02 15:04"),
+			leave.EndAt.In(loc).Format("01-02 15:04"),
+			leave.Reason,
+		)
 	}
 
 	// 加 Redis 分布式锁（PRD §3.3 防并发预约冲突）

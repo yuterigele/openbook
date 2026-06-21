@@ -285,7 +285,34 @@
     </h2>
     <div id="events"><div class="empty">加载中...</div></div>
   </section>
+
+  <!-- P4 理发师请假 -->
+  <section>
+    <h2>🏖️ 理发师请假管理</h2>
+    <div id="leaveBarbers"><div class="empty">加载中...</div></div>
+  </section>
 </main>
+
+<!-- ====== 请假弹窗（P4） ====== -->
+<div class="login-overlay" id="leaveOverlay" style="display:none;">
+  <div class="login-box" style="max-width:520px;">
+    <h2>给 <span id="leaveBarberName"></span> 请假</h2>
+    <label style="font-size:13px;color:var(--muted);">开始时间（起）</label>
+    <input id="leaveStartAt" type="datetime-local" />
+    <label style="font-size:13px;color:var(--muted);">结束时间（止）</label>
+    <input id="leaveEndAt" type="datetime-local" />
+    <label style="font-size:13px;color:var(--muted);">原因</label>
+    <input id="leaveReason" type="text" placeholder="例如：生病、家中有事" />
+    <label style="font-size:13px;color:var(--muted);">处理方式</label>
+    <select id="leaveAction" style="padding:8px;border:1px solid var(--border);border-radius:4px;">
+      <option value="reschedule">改派到其他理发师（改派失败的自动取消）</option>
+      <option value="cancel">全部取消 + 通知顾客</option>
+    </select>
+    <div class="err" id="leaveErr"></div>
+    <button onclick="submitLeave()">提交</button>
+    <button class="secondary" style="background:#f3f4f6;margin-top:8px;" onclick="document.getElementById('leaveOverlay').style.display='none'">取消</button>
+  </div>
+</div>
 
 <!-- ====== 改密弹窗 ====== -->
 <div class="login-overlay" id="pwdOverlay" style="display:none;">
@@ -431,6 +458,7 @@ function loadAll() {
   loadUpcoming();
   loadAppointments();
   loadEvents();
+  loadLeaveBarbers(); // P4
 }
 
 function startAutoRefresh() {
@@ -664,6 +692,140 @@ async function doChangePassword() {
   }
   alert('密码已修改，请用新密码重新登录');
   logout();
+}
+
+// ========== P4 理发师请假 ==========
+
+let CURRENT_LEAVE_BARBER_ID = null;
+
+// 加载本店理发师列表 + 每个的请假历史（取最近 5 条）
+async function loadLeaveBarbers() {
+  const el = document.getElementById('leaveBarbers');
+  if (!el) return;
+  try {
+    // 1) 拉所有 active 理发师（先用 list_barbers 工具？这里 admin 后台没有现成 endpoint，复用 dashboard 接口里的逻辑不可行）
+    // 简化：从 dashboard 拉 top_barbers，然后逐个查 leaves
+    const dashResp = await fetch('/api/shop/' + SHOP_ID + '/dashboard', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+    if (!dashResp.ok) { el.innerHTML = '<div class="empty">加载失败</div>'; return; }
+    const dash = await dashResp.json();
+    // top_barbers 是近 30 天数据，但我们要"所有 active 理发师"。
+    // 兜底：直接从 upcoming / appointments 聚合理发师集合（包含有/无预约的）
+    const resp = await fetch('/api/shop/' + SHOP_ID + '/appointments?status=active', {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (!resp.ok) { el.innerHTML = '<div class="empty">加载失败</div>'; return; }
+    const data = await resp.json();
+    // 后端返回 []Appointment（裸数组），不是 {appointments: [...]}
+    const list = Array.isArray(data) ? data : (data.appointments || []);
+    const barberMap = new Map();
+    for (const a of list) {
+      if (!barberMap.has(a.barber_id)) {
+        barberMap.set(a.barber_id, { id: a.barber_id, name: a.barber_name });
+      }
+    }
+    const barbers = [...barberMap.values()];
+    if (barbers.length === 0) {
+      el.innerHTML = '<div class="empty">暂无理发师数据</div>';
+      return;
+    }
+    // 2) 并发查每个理发师的最近 5 条 leave
+    const leavesByBarber = {};
+    await Promise.all(barbers.map(async (b) => {
+      const r = await fetch('/api/admin/barber/' + b.id + '/leaves?limit=5', {
+        headers: { 'Authorization': 'Bearer ' + TOKEN }
+      });
+      if (r.ok) {
+        leavesByBarber[b.id] = await r.json();
+      }
+    }));
+    el.innerHTML = '<table><thead><tr><th>理发师</th><th>请假历史（近 5 条）</th><th>操作</th></tr></thead><tbody>' +
+      barbers.map(b => {
+        const leaves = leavesByBarber[b.id] || [];
+        const hist = leaves.length === 0
+          ? '<span style="color:var(--muted);">无</span>'
+          : '<ul style="margin:0;padding-left:18px;">' + leaves.map(l => {
+              const s = l.status === 'active' ? '🟢' : (l.status === 'cancelled' ? '⚪' : '⚫');
+              const action = l.action === 'cancel' ? '取消' : '改派';
+              return `<li>${s} ${formatDT(l.start_at)} → ${formatDT(l.end_at)}（${action}，影响 ${l.affected_count} 单）</li>`;
+            }).join('') + '</ul>';
+        return `<tr>
+          <td><strong>${escapeHtml(b.name)}</strong></td>
+          <td style="font-size:12px;">${hist}</td>
+          <td><button onclick="openLeaveModal('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 12px;font-size:13px;">请假</button></td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  } catch (e) {
+    el.innerHTML = '<div class="empty">加载异常: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function openLeaveModal(barberId, barberName) {
+  CURRENT_LEAVE_BARBER_ID = barberId;
+  document.getElementById('leaveBarberName').textContent = barberName;
+  // 默认值：今天 14:00 起，到明天 18:00 止
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 24*3600*1000);
+  document.getElementById('leaveStartAt').value = toLocalInput(now);
+  document.getElementById('leaveEndAt').value = toLocalInput(tomorrow);
+  document.getElementById('leaveReason').value = '';
+  document.getElementById('leaveAction').value = 'reschedule';
+  document.getElementById('leaveErr').textContent = '';
+  document.getElementById('leaveOverlay').style.display = 'flex';
+}
+
+async function submitLeave() {
+  if (!CURRENT_LEAVE_BARBER_ID) return;
+  const startAt = document.getElementById('leaveStartAt').value;
+  const endAt = document.getElementById('leaveEndAt').value;
+  const reason = document.getElementById('leaveReason').value.trim();
+  const action = document.getElementById('leaveAction').value;
+  if (!startAt || !endAt) {
+    document.getElementById('leaveErr').textContent = '请填写开始/结束时间';
+    return;
+  }
+  if (new Date(startAt) >= new Date(endAt)) {
+    document.getElementById('leaveErr').textContent = '开始时间必须早于结束时间';
+    return;
+  }
+  // datetime-local 没时区后缀，按本地时区构造 Date 后 toISOString
+  const r = await fetch('/api/admin/barber/' + CURRENT_LEAVE_BARBER_ID + '/leave', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+    body: JSON.stringify({
+      start_at: new Date(startAt).toISOString(),
+      end_at: new Date(endAt).toISOString(),
+      reason, action
+    })
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    document.getElementById('leaveErr').textContent = e.error || '提交失败';
+    return;
+  }
+  const data = await r.json();
+  document.getElementById('leaveOverlay').style.display = 'none';
+  const msg = `请假已创建：影响 ${data.affected_count} 单预约（改派 ${data.rescheduled_count} / 取消 ${data.cancelled_count}，已通知 ${data.notified_count} 位顾客）`;
+  alert(msg);
+  loadLeaveBarbers();
+}
+
+function toLocalInput(d) {
+  // d = Date → 'YYYY-MM-DDTHH:MM' 本地时区（datetime-local 格式）
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
+    + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function formatDT(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
+    + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 }
 </script>
 

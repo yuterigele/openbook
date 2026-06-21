@@ -67,6 +67,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&ReminderLog{},
 		&EventLog{},
 		&ShopAdmin{},
+		&BarberLeave{}, // P4 理发师请假（2026-06-21）
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
