@@ -245,6 +245,19 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 				_ = idlePusher.Stop(stopCtx)
 			}()
 		}
+
+		// 理发师请假过期扫描（PRD §11.7 P4 兜底：end_at < now 的 active leave 自动 expired）
+		// 不依赖 wecom 客户端，所以单独 if 一层
+		leaveExpirer := cronpkg.NewLeaveExpirer()
+		if err := leaveExpirer.Start(ctx); err != nil {
+			log.Printf("⚠️  启动 leave expirer cron 失败: %v", err)
+		} else {
+			defer func() {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = leaveExpirer.Stop(stopCtx)
+			}()
+		}
 	}
 
 	srv := server.New[M](server.Config[M]{

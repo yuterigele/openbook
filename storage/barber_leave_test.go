@@ -816,3 +816,166 @@ func TestListBarberLeavesInRange_OtherBarberNotIncluded(t *testing.T) {
 		t.Errorf("got %d, want 1 (only Tony's leave)", len(got))
 	}
 }
+
+// ===================== ExpireOverdueLeaves（PRD §11.7.8 cron 兜底） =====================
+
+// TestExpireOverdueLeaves_ExpiresPastEndAt 校验 happy path：
+//   - 2 条已过期 active → expire
+//   - 1 条未来 active → 保持
+//   - 1 条 cancelled → 不动
+func TestExpireOverdueLeaves_ExpiresPastEndAt(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	// 2 条已过期
+	past1 := MakeBarberLeave(t, shop.ID, barber.ID, pastTime(2), pastTime(1), LeaveActionCancel)
+	past2 := MakeBarberLeave(t, shop.ID, barber.ID, pastTime(5), pastTime(3), LeaveActionReschedule)
+	// 1 条未来
+	future := MakeBarberLeave(t, shop.ID, barber.ID, futureTime(1), futureTime(2), LeaveActionCancel)
+	// 1 条 cancelled（手动改 status）
+	cancelled := MakeBarberLeave(t, shop.ID, barber.ID, pastTime(1), pastTime(0.5), LeaveActionCancel)
+	if err := DB.Model(cancelled).Update("status", LeaveStatusCancelled).Error; err != nil {
+		t.Fatalf("update cancelled: %v", err)
+	}
+
+	n, err := ExpireOverdueLeaves(WithCtx(), time.Now())
+	if err != nil {
+		t.Fatalf("ExpireOverdueLeaves: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expired count = %d, want 2", n)
+	}
+
+	// 校验每条状态
+	checkStatus := func(leaveID, want string) {
+		var got BarberLeave
+		if err := DB.Where("id = ?", leaveID).First(&got).Error; err != nil {
+			t.Fatalf("query %s: %v", leaveID, err)
+		}
+		if got.Status != want {
+			t.Errorf("leave %s status = %q, want %q", leaveID, got.Status, want)
+		}
+	}
+	checkStatus(past1.ID, LeaveStatusExpired)
+	checkStatus(past2.ID, LeaveStatusExpired)
+	checkStatus(future.ID, LeaveStatusActive)
+	checkStatus(cancelled.ID, LeaveStatusCancelled)
+}
+
+// TestExpireOverdueLeaves_NoOpWhenNothingPast 全部未来 → 0 expired
+func TestExpireOverdueLeaves_NoOpWhenNothingPast(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	MakeBarberLeave(t, shop.ID, barber.ID, futureTime(1), futureTime(2), LeaveActionCancel)
+	MakeBarberLeave(t, shop.ID, barber.ID, futureTime(3), futureTime(5), LeaveActionReschedule)
+
+	n, err := ExpireOverdueLeaves(WithCtx(), time.Now())
+	if err != nil {
+		t.Fatalf("ExpireOverdueLeaves: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expired count = %d, want 0", n)
+	}
+}
+
+// TestExpireOverdueLeaves_Idempotent 同一 now 跑两次：第二次应该 no-op（全部已 expired）
+func TestExpireOverdueLeaves_Idempotent(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	MakeBarberLeave(t, shop.ID, barber.ID, pastTime(2), pastTime(1), LeaveActionCancel)
+
+	n1, err := ExpireOverdueLeaves(WithCtx(), time.Now())
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if n1 != 1 {
+		t.Errorf("first expired = %d, want 1", n1)
+	}
+
+	n2, err := ExpireOverdueLeaves(WithCtx(), time.Now())
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("second expired = %d, want 0 (idempotent)", n2)
+	}
+}
+
+// TestExpireOverdueLeaves_Boundary 边界：end_at == now 应被过期（end_at < now 不含等号，但下一分钟 cron 就过期了）
+//
+// 这个 case 用来证明我们用 < 不会过早；now 向前推 1ms 时，end_at > now 仍是 active。
+func TestExpireOverdueLeaves_Boundary(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	now := time.Now()
+	// end_at 恰好等于 now → not expired（用 < 过滤）
+	l := MakeBarberLeave(t, shop.ID, barber.ID, now.Add(-time.Hour), now, LeaveActionCancel)
+
+	n, err := ExpireOverdueLeaves(WithCtx(), now)
+	if err != nil {
+		t.Fatalf("ExpireOverdueLeaves: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expired = %d, want 0 (end_at == now, not < now)", n)
+	}
+
+	// now 推后 1ms → end_at < now 成立
+	n2, err := ExpireOverdueLeaves(WithCtx(), now.Add(time.Millisecond))
+	if err != nil {
+		t.Fatalf("ExpireOverdueLeaves (now+1ms): %v", err)
+	}
+	if n2 != 1 {
+		t.Errorf("expired (now+1ms) = %d, want 1", n2)
+	}
+	_ = l
+}
+
+// TestExpireOverdueLeaves_WritesExpiredEvent 校验 barber_leave_expired 事件被正确写入
+func TestExpireOverdueLeaves_WritesExpiredEvent(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	leave := MakeBarberLeave(t, shop.ID, barber.ID, pastTime(2), pastTime(1), LeaveActionCancel)
+
+	if _, err := ExpireOverdueLeaves(WithCtx(), time.Now()); err != nil {
+		t.Fatalf("ExpireOverdueLeaves: %v", err)
+	}
+
+	var ev EventLog
+	if err := DB.Where("ref_id = ? AND event_type = ?", leave.ID, EventBarberLeaveExpired).
+		First(&ev).Error; err != nil {
+		t.Fatalf("query event: %v", err)
+	}
+	if ev.ShopID != shop.ID {
+		t.Errorf("event shop_id = %q, want %q", ev.ShopID, shop.ID)
+	}
+	if ev.EventType != EventBarberLeaveExpired {
+		t.Errorf("event type = %q, want %q", ev.EventType, EventBarberLeaveExpired)
+	}
+	if !strings.Contains(ev.Meta, "barber-Tony") {
+		t.Errorf("event meta missing barber_id: %s", ev.Meta)
+	}
+	if !strings.Contains(ev.Meta, LeaveStatusExpired) && !strings.Contains(ev.Meta, "expired_at") {
+		// meta 至少应包含 expired_at 字段
+		t.Errorf("event meta missing expired_at: %s", ev.Meta)
+	}
+}
+
+// TestExpireOverdueLeaves_DBNotInitialized DB=nil 时 no-op
+func TestExpireOverdueLeaves_DBNotInitialized(t *testing.T) {
+	DB = nil
+	defer func() { DB = nil }() // 保证不污染其他测试
+	n, err := ExpireOverdueLeaves(WithCtx(), time.Now())
+	if err != nil {
+		t.Errorf("err = %v, want nil", err)
+	}
+	if n != 0 {
+		t.Errorf("expired = %d, want 0", n)
+	}
+}

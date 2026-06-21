@@ -1,12 +1,15 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.4）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.6）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.4（P4 工具侧集成）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.6（P4 query_schedule 视觉区分 + list_barbers 标记请假理发师）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
 > **v3.2 变更**：新增 §11.5 P3「退款/取消策略联动」—— 提前 2h 取消免爽约标记 / 累计晚退订 3 次自动黑名单 / 累计爽约 2 次自动黑名单。详见 §11.5。
 > **v3.3 变更**：新增 §11.7 P4「理发师请假」—— 商户后台一键请假，自动取消 / 改派区间内未来预约，撤销规则限制在 startAt 之前。详见 §11.7。
 > **v3.4 变更**：新增 §11.7.7 P4 工具侧集成 —— `create_appointment` 工具接入请假拦截，避免"预约成功→立即被请假处理取消"体验事故；新增 `IsBarberOnLeaveAt` / `ListBarberLeavesInRange` helpers + 18 个新单测。
+> **v3.5 变更**：新增 §11.7.8 P4 cron 兜底 —— `LeaveExpirer` 每分钟扫描一次，把 `end_at < now` 的 active leave 自动转 `expired` 状态，避免脏数据 + 让 UI 准确区分"已过期"；新增 `EventBarberLeaveExpired` 事件类型 + 6 个 storage 单测 + 3 个 cron 单测。
+> **v3.6 变更**：新增 §11.7.9 P4 query_schedule 视觉区分 —— `QueryScheduleBreakdown` storage helper 一次返回 available / leave blocks / booked count；query_schedule 渲染拆三段（可约 / 师傅请假 / 已约满），让 Agent 直接判断"换时间"还是"换师傅"；修复 toBarberLeaves 跨天请假判整天的 bug；+ 12 个新单测（storage 6 + tools 6）。
+> **v3.6 增量**：新增 §11.7.10 P4 list_barbers 标记请假理发师 —— 选人阶段就把"今日请假"前置，让顾客不用先选师傅再被 reject；区分"正在请假（HH:MM-HH:MM）"和"即将请假（HH:MM 起）"两种文案；cancelled / expired leave 不显示；+ 8 个新单测。
 
 ---
 
@@ -531,6 +534,199 @@ if onLeave && leave != nil {
 - 避免 lock TTL（10s）白白占用
 - 失败时 Agent 立即收到清晰错误，不需要等到锁释放再 reject
 
+#### 11.7.8 cron 兜底：LeaveExpirer（v3.5 增量，2026-06-21）
+
+P4 的请假 row 创建后状态为 `active`，设计预期是 end_at 过了之后**自然**转为 `expired` —— 但这个状态迁移没有自动机制，靠人工去改既不可靠也无法扩展。所以引入一个 1 分钟粒度的 cron 兜底。
+
+**为什么需要这个 cron？**
+- 数据卫生：UI（query_schedule / list_barbers）要准确区分"已结束" vs "已撤销" vs "仍生效中"；如果 active 永远不收敛，列表会一直显示"今天 14:00-16:00 Tony 师傅请假"——但他其实已经回来上班了
+- 商户视角：商户看历史请假记录时，"expired" 状态比 "active" 更能反映实际情况
+- 状态机完整性：active → {cancelled, expired}，两个出口都应该被代码覆盖
+
+**为什么不"创建时预判状态"？**
+- 状态是相对当前时间的，活的状态机必须有执行者
+- 数据库存的是绝对时间，cron 才是状态机的执行者（noshow / lifecycle / reminder 也是同款思路）
+
+**实现要点：**
+
+```go
+// storage/barber_leave.go
+func ExpireOverdueLeaves(ctx context.Context, now time.Time) (int, error) {
+    // 1) 找出所有"将过期"的 leave
+    var toExpire []BarberLeave
+    DB.Where("status = ? AND end_at < ?", LeaveStatusActive, now).Find(&toExpire)
+    // 2) 一次 UPDATE 全部标 expired（带 status=active 守卫防 cancel 抢）
+    res := DB.Model(&BarberLeave{}).
+        Where("status = ? AND end_at < ?", LeaveStatusActive, now).
+        Updates(map[string]interface{}{"status": LeaveStatusExpired, "updated_at": now})
+    // 3) 逐条写 barber_leave_expired 事件（best-effort）
+    for i := range toExpire {
+        TrackEvent(ctx, toExpire[i].ShopID, EventBarberLeaveExpired, toExpire[i].ID, ...)
+    }
+    return int(res.RowsAffected), nil
+}
+```
+
+```go
+// cron/leave.go
+type LeaveExpirer struct{ scheduler *cron.Cron }
+func (l *LeaveExpirer) Start(ctx context.Context) error {
+    l.scheduler.AddFunc("0 * * * * *", l.scan)  // 每分钟
+    l.scheduler.Start()
+}
+func (l *LeaveExpirer) scan() {
+    expired, err := storage.ExpireOverdueLeaves(ctx, time.Now())
+    if err != nil { log.Printf(...) ; return }
+    if expired > 0 { log.Printf("[leave-expirer] 已过期 %d 条请假", expired) }
+}
+```
+
+**关键设计决策：**
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 频率 | 每分钟 1 次 | 比 noshow（5 分钟）更敏感：顾客/商户想立刻看到状态变化，但 SQL 很轻（status+end_at 双索引） |
+| 边界 | `end_at < now` | end_at == now 仍算 active，下一分钟过期；语义清晰（end_at 当天最后一秒还在请假内） |
+| 守卫 | `WHERE status='active' AND end_at < now` | 防与商户主动 `CancelBarberLeave` 抢；如果同时发生，update 影响 0 行，写埋点 0 次 |
+| 通知 | 不发微信 | 顾客通知在 CreateBarberLeave 时一次发完；expire 是后台状态迁移，对顾客无感知 |
+| wecom 依赖 | 不需要 | LeaveExpirer 不发任何微信，与 reminder/noshow/lifecycle 解耦；方便单独跑测试 / debug |
+| 失败处理 | log 不 return error | 单次失败不应让 cron 退出；下分钟再试 |
+| 事件 | `barber_leave_expired` 埋点 | 后续 dashboard 可统计"理发师请假频次 / 平均时长" |
+
+**测试覆盖（`storage/barber_leave_test.go` 6 用例 + `cron/leave_test.go` 3 用例）：**
+- ExpiresPastEndAt：2 已过期 + 1 未来 + 1 cancelled → 仅 2 转 expired
+- NoOpWhenNothingPast：全部未来 → 0 expired
+- Idempotent：连续跑两次 → 第二次 0
+- Boundary：end_at == now 仍 active；now + 1ms → 转 expired
+- WritesExpiredEvent：event type / shop_id / meta 正确
+- DBNotInitialized：DB=nil → no-op（不 panic）
+- cron/StartStop：能启动并立即停止
+- cron/StopOnNilScheduler：nil 调度器 Stop 安全
+- cron/ScanDBNotInitialized：DB=nil 时 scan 不 panic
+
+**新增事件类型：**
+- `EventBarberLeaveExpired = "barber_leave_expired"` —— cron 自然过期
+
+**main.go 集成点：** 在 `if wecomClient != nil` 块的 idlePusher 之后，单独启动 LeaveExpirer（虽然 LeaveExpirer 不需要 wecom，但放在同一处方便看到所有 cron 集合）
+
+#### 11.7.9 query_schedule 视觉区分请假占用（v3.6 增量，2026-06-21）
+
+P4 前几个迭代（v3.4 工具拦截 / v3.5 cron 兜底）解决了"顾客成功预约到请假的 slot 后被自动取消"的体验事故，但 query_schedule 工具渲染时只把请假占用的 slot 静默掉 + 末尾加一句"已有请假"。对 Agent 来说这有个问题：
+
+- Agent 看到 "14:00 没了"，无法判断"因为有人约了"还是"师傅请假"
+- 两种情况的可执行建议不同：约满了只能换时间；请假了可以换师傅（推荐）+ 换时间
+
+所以本轮把"可约 / 师傅请假 / 已被预约"三类在渲染时分开：
+
+**新的渲染格式：**
+
+```
+理发师 Tony 在 2026-06-22 的可预约时段：
+  09:00, 09:30, 10:00, 10:30, 11:00, 11:30, 13:30, 16:30, 17:00, 17:30, 18:00
+师傅请假占用：14:00-16:00（体检）
+（这些时段是师傅临时请假，建议换时间或换其他理发师）
+其余 2 个时段均已被预约。
+```
+
+三段语义：
+- **可约** — 顶部"可预约时段"段，逗号分隔
+- **师傅请假占用** — 单独一段，列请假区间和原因 + 建议"换时间或换其他理发师"
+- **已预约** — 末尾一行"其余 N 个时段均已被预约"，不展开明细（避免长尾刷屏）
+
+**storage 新 helper `QueryScheduleBreakdown`：**
+
+```go
+type ScheduleBreakdown struct {
+    Available   []string     // 可约 slot
+    LeaveBlocks []LeaveBlock // 区间 + 原因，按 start_at ASC
+    BookedCount int          // 已预约数（不展开）
+}
+
+type LeaveBlock struct {
+    StartHM string  // "14:00"
+    EndHM   string  // "16:00"
+    Reason  string
+}
+
+func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown
+```
+
+设计要点：
+- 一次性返回三个维度，调用方不用再拼 SQL
+- 已预约的 slot 数 (BookedCount) 不展开明细——大多数情况下明细列表会让回复过长，对 Agent 决策无价值
+- **整天请假也走同一三段路径**（v3.6 设计决策）：
+  - LeaveBlocks 包含 "00:00-00:00"（整天请假的典型存储）
+  - Available 为空 → "当天没有可预约的时段"
+  - LeaveBlocks 段照常渲染 + 建议
+  - **不再走"整天请假专门文案"路径**——视觉一致，Agent 不用为"整天请假"和"部分请假"学两套文案
+- LeaveBlocks 排序依赖 `ListBarberLeavesInRange` 已按 `start_at ASC`
+
+**决策变更记录**：v3.6 早期版本曾为整天请假设计专门文案（"全天请假 + 原因 + 建议换人/换天"），后续与并发 agent 写的 `TestQuerySchedule_FullDayLeave_FallbackShowsLeaveNote` 冲突，**统一改成三段路径**——简洁性 > 文案差异化。已删除 `isFullDayLeave` / `toBarberLeaves` 函数。
+
+**为什么用逗号分隔而不展开明细？**
+- list_barbers（v3.6 §11.7.10 标记请假理发师）已经把"今天能不能约"前置在选人阶段
+- query_schedule 主要用于"我已选定 Tony，看哪天有空"——此时重点是"哪些时段是请假/已约满"，不是"具体被谁约了"
+- 视觉三段（可约 / 请假 / 已约满）让 Agent 5 秒内能给出可执行建议
+
+**测试覆盖（`storage/repo_test.go` 6 用例 + `tools/query_schedule_test.go` 6 用例）：**
+- storage: TestQueryScheduleBreakdown_Empty / PartialLeave_Booked / FullDayLeave_BlocksAll / CancelledLeave_NotCounted / UnknownBarber_ReturnsZeros / MultipleLeaves_PreservesOrder
+- tools: TestQueryScheduleTool_InfoMentionsLeave / PartialLeave_SlotsFilteredAndLeaveNoteShown / FullDayLeave_FallbackShowsLeaveNote / CancelledLeave_NotCounted / OtherBarberLeave_NotAffected / HolidayOverridesLeave
+
+**为什么不直接在 `query_schedule.go` 里拼 SQL？**
+- storage helper 让 admin UI / future dashboard 也能直接复用（不需要为前端再开一个 API）
+- 单测更聚焦（storage 测试 SQL 正确性，tools 测试文案正确性）
+
+#### 11.7.10 list_barbers 标记请假理发师（v3.6 增量，2026-06-21）
+
+§11.7.9 把 query_schedule 渲染分了三段（可约 / 师傅请假 / 已约满）——但这一步要顾客先选好理发师才能查到请假。如果顾客一开始就不知道"我应该约谁"，Agent 会默认推荐 list_barbers 列出来的师傅；选错了才发现"哦他今天请假"，对话来回多一轮，体验损失。
+
+本轮把"今日是否请假"前置到 list_barbers：
+
+**新文案格式：**
+```
+本店可预约的理发师：
+  1. Tony（擅长：剪发，今日 14:00-16:00 请假（原因：体检））
+  2. Kevin（擅长：剪发，今日 14:30 起请假（原因：私事））
+  3. Mike（擅长：剪发）
+```
+
+**两种文案区分：**
+- **当前正在请假**（`now ∈ [start_at, end_at]`）：`今日 HH:MM-HH:MM 请假（原因：xxx）`
+- **即将请假**（`now < start_at`）：`今日 HH:MM 起请假（原因：xxx）`
+
+文案区别很重要：
+- "14:00-16:00" 告诉顾客**这个时间段都不能约**——给他换师傅 / 改时间的清晰边界
+- "14:30 起" 告诉顾客**前半段还能约**——他可以赶在请假前来
+
+**实现细节：**
+- 复用 §11.7.7 的 `ListBarberLeavesInRange(barberID, dayStart, dayEnd)` 拿今天相交的 active leave
+- cancelled / expired leave 已被底层 SQL 过滤掉（`status='active'` 守卫）
+- 取第一条 leave（ListBarberLeavesInRange 已按 start_at ASC，多条取最早那条——大多数场景只有一条）
+- 不在 list_barbers 文案里区分 leave.action（cancel / reschedule）——内部行为对顾客无意义
+
+**为什么用 `今日` 前缀？**
+- list_barbers 默认是"今天可约"的语境，不显式说日期顾客也能懂
+- 后续如果支持"未来 N 天"维度（PRD §11.7 远期），可以扩展成"6/22 请假"等
+
+**关键设计决策：**
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 显示窗口 | 仅今日 | list_barbers 是"现在能约谁"的语义，看太远反而干扰 |
+| 多条 leave | 取最早一条 | 大多数场景只有一条；多条时"接下来还有"会让文案变长，对顾客决策无增量价值 |
+| leave.action | 不显示 | cancel / reschedule 是内部处理逻辑，顾客只需要"能不能约" |
+| cancelled / expired | 不显示 | UI 一致性原则：只显示对顾客当下决策有用的信息 |
+
+**测试覆盖（`tools/list_barbers_test.go` 8 用例）：**
+- TestListBarbersTool_InfoMentionsLeave：Info 描述里提到请假
+- TestListBarbers_NoLeave_NormalList：无请假 → 正常列表
+- TestListBarbers_OngoingLeave_ShowsFullRange：正在请假 → HH:MM-HH:MM + 原因
+- TestListBarbers_UpcomingLeave_ShowsStartOnly：即将请假 → HH:MM 起 + 原因
+- TestListBarbers_CancelledLeave_NoTag：cancelled leave 不显示
+- TestListBarbers_ExpiredLeave_NoTag：expired leave 不显示
+- TestListBarbers_OtherBarberLeave_OnlyAffectsThatBarber：多理发师时只标记请假的
+- TestListBarbers_NoBarbers_FallbackMessage：空店兜底文案
+
 ---
 
 ## 12. 总结
@@ -556,7 +752,8 @@ if onLeave && leave != nil {
 
 ---
 
-*文档版本：v3.4 | 更新日期：2026-06-21*
+*文档版本：v3.6 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
-**v3.4 增量**：新增 §11.7.7 P4 工具侧集成（`create_appointment` 请假拦截 + 12+6 单测）。
+**v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
+**v3.6 增量**：新增 §11.7.9 P4 query_schedule 视觉区分（`QueryScheduleBreakdown` helper + 三段渲染 + 6 storage 单测 + 6 tools 单测）+ §11.7.10 list_barbers 标记今日请假理发师（8 tools 单测，共 20 个新单测）。

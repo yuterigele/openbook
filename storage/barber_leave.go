@@ -404,6 +404,62 @@ func ListBarberLeavesInRange(ctx context.Context, barberID string, from, to time
 	return out, nil
 }
 
+// ExpireOverdueLeaves 把所有 end_at < now 的 active 请假标记为 expired（cron 兜底）
+//
+// 设计要点：
+//   - 一次 UPDATE 完成（避免 SELECT + N 个 UPDATE 的来回）
+//   - WHERE 既过滤 status=active 又过滤 end_at<now，原子性由 SQL 引擎保证
+//   - 拿到 RowsAffected 后逐条写 barber_leave_expired 事件（用于后续分析）
+//   - 顾客通知已在 CreateBarberLeave 时一次发完，expire 不再发微信
+//
+// 返回：本次被过期的 leave 数；DB 错误时返回 (0, err)
+//
+// 调用方：cron/leave.go 的 LeaveExpirer，每分钟一次
+func ExpireOverdueLeaves(ctx context.Context, now time.Time) (int, error) {
+	if DB == nil {
+		return 0, nil
+	}
+	// 1) 找出所有"将过期"的 leave（用于写埋点）
+	var toExpire []BarberLeave
+	if err := DB.WithContext(ctx).
+		Where("status = ? AND end_at < ?", LeaveStatusActive, now).
+		Find(&toExpire).Error; err != nil {
+		return 0, fmt.Errorf("查询待过期 leave 失败: %w", err)
+	}
+	if len(toExpire) == 0 {
+		return 0, nil
+	}
+
+	// 2) 一次 UPDATE 把全部标 expired（带 status=active 守卫，防止和 cancel 抢）
+	res := DB.WithContext(ctx).Model(&BarberLeave{}).
+		Where("status = ? AND end_at < ?", LeaveStatusActive, now).
+		Updates(map[string]interface{}{
+			"status":     LeaveStatusExpired,
+			"updated_at": now,
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("更新 leave 状态失败: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		// 极端情况：刚被 cancel 抢了，正常返回 0
+		return 0, nil
+	}
+
+	// 3) 写埋点（best-effort，失败只 log 不影响 return）
+	for i := range toExpire {
+		leave := &toExpire[i]
+		TrackEvent(ctx, leave.ShopID, EventBarberLeaveExpired, leave.ID, map[string]any{
+			"barber_id":   leave.BarberID,
+			"barber_name": leave.BarberName,
+			"start_at":    leave.StartAt,
+			"end_at":      leave.EndAt,
+			"reason":      leave.Reason,
+			"expired_at":  now,
+		})
+	}
+	return int(res.RowsAffected), nil
+}
+
 // ============ 内部辅助 ============
 
 // cancelApptInTx 在事务内取消预约（包一层避免事务嵌套）

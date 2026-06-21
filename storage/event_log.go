@@ -27,6 +27,7 @@ const (
 	// P4 理发师请假
 	EventBarberLeaveCreated    = "barber_leave_created"
 	EventBarberLeaveCancelled  = "barber_leave_cancelled" // 商户撤销
+	EventBarberLeaveExpired    = "barber_leave_expired"   // cron 自然过期（end_at < now）
 	EventAppointmentRescheduled = "appointment_rescheduled" // P4 改派
 	// EventIdleSlotPush 是前缀（拼 date+customerID），便于幂等
 	EventIdleSlotPush = "idle_slot_push"

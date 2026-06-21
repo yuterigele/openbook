@@ -36,6 +36,15 @@ func mustDB() *gorm.DB {
 }
 
 // QueryAvailableSlots 查询理发师在指定日期的可预约时段
+//
+// 同时排除：
+//   - 已被预约的时段（appt.status='active'）
+//   - 落在 active 请假区间内的时段（PRD §11.7.9 P4 工具层请假感知）
+//
+// 时区：Asia/Shanghai（与 Appointment.Date/Time 一致）
+//
+// 返回的 slots 是经过两道过滤后的纯可预约时段；调用方若需要"哪些时段被请假占用"
+// 的文案，请再调 `ListBarberLeavesInRange` 自行渲染。
 func QueryAvailableSlots(barberName, date string) []string {
 	var barber Barber
 	if err := mustDB().Where("name = ? AND active = ?", barberName, true).First(&barber).Error; err != nil {
@@ -50,12 +59,144 @@ func QueryAvailableSlots(barberName, date string) []string {
 	for _, a := range booked {
 		bookedSet[a.Time] = true
 	}
+
+	// 加载当天 active leave（区间相交即可捕获）
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, derr := time.ParseInLocation("2006-01-02", date, loc)
+	if derr != nil {
+		// 日期格式异常时不做 leave 过滤（保持旧行为不崩）
+		out := make([]string, 0, len(DefaultSlots))
+		for _, slot := range DefaultSlots {
+			if !bookedSet[slot] {
+				out = append(out, slot)
+			}
+		}
+		return out
+	}
+	dayEnd := dayStart.Add(24 * time.Hour)
+	leaves, _ := ListBarberLeavesInRange(context.Background(), barber.ID, dayStart, dayEnd)
+
+	// 计算哪些 slot 被 leave 覆盖
+	onLeave := leaveCoveredSlots(leaves, date, loc)
+
 	out := make([]string, 0, len(DefaultSlots))
 	for _, slot := range DefaultSlots {
-		if !bookedSet[slot] {
-			out = append(out, slot)
+		if bookedSet[slot] || onLeave[slot] {
+			continue
+		}
+		out = append(out, slot)
+	}
+	return out
+}
+
+// leaveCoveredSlots 把落在任何 leave [start_at, end_at] 区间内的 DefaultSlot 标为 true
+//
+// 用法：QueryAvailableSlots 在过滤 booked 之后再过滤 leave；
+// 也可以单独给其他场景（如 admin UI 高亮）调用。
+func leaveCoveredSlots(leaves []BarberLeave, date string, loc *time.Location) map[string]bool {
+	out := make(map[string]bool)
+	dayStart, err := time.ParseInLocation("2006-01-02", date, loc)
+	if err != nil {
+		return out
+	}
+	for _, l := range leaves {
+		for _, slot := range DefaultSlots {
+			slotAt, err := time.ParseInLocation("15:04", slot, loc)
+			if err != nil {
+				continue
+			}
+			slotAt = time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(),
+				slotAt.Hour(), slotAt.Minute(), 0, 0, loc)
+			// 区间 [l.StartAt, l.EndAt] 含端点（与 IsBarberOnLeaveAt 一致）
+			if !slotAt.Before(l.StartAt) && !slotAt.After(l.EndAt) {
+				out[slot] = true
+			}
 		}
 	}
+	return out
+}
+
+// ScheduleBreakdown 单日排班的分组视图（PRD §11.7.10 v3.6 query_schedule 用）
+//
+// 三个维度拆开，让 tools/query_schedule 渲染时能视觉区分"可约"vs"请假"vs"已约满"：
+//   - Available   : 顾客可以约的 slot（已扣除 booked + leave）
+//   - LeaveBlocks : 当天 active leave 的「起-止 + 原因」列表（用于文案拼"师傅请假"提示）
+//   - BookedCount : 被预约占用的 slot 数（不展开明细，避免长尾刷屏；用 "其余 X 个时段已约满" 提示即可）
+type ScheduleBreakdown struct {
+	Available   []string
+	LeaveBlocks []LeaveBlock
+	BookedCount int
+}
+
+// LeaveBlock 一段请假区间（用于文案）
+type LeaveBlock struct {
+	StartHM string // "14:00"
+	EndHM   string // "16:00"
+	Reason  string
+}
+
+// QueryScheduleBreakdown 返回单日排班的分组视图
+//
+// 一次性返回 available + leave blocks + booked count，调用方不用再拼 SQL。
+// 用途：query_schedule 工具让 Agent 知道"为什么 11:00-13:00 不能约"（是预约占的？还是师傅请假？）
+//
+// 返回规则：
+//   - barber 不存在 / 不 active：返回零值（nil slices + 0 count），不报错——query_schedule
+//     工具已经在外层判断过 barber 存在，这里只兜底
+//   - date 格式错误：跳过 leave 过滤，Available = booked 之外的 slot；LeaveBlocks 为空
+//   - 全天都没有 leave 时 LeaveBlocks 为空 slice（非 nil，json 友好）
+func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown {
+	var out ScheduleBreakdown
+	var barber Barber
+	if err := mustDB().Where("name = ? AND active = ?", barberName, true).First(&barber).Error; err != nil {
+		return out
+	}
+
+	var booked []Appointment
+	mustDB().Where("barber_id = ? AND date = ? AND status = ?", barber.ID, date, "active").
+		Select("time").Find(&booked)
+	bookedSet := make(map[string]bool, len(booked))
+	for _, a := range booked {
+		bookedSet[a.Time] = true
+	}
+
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, derr := time.ParseInLocation("2006-01-02", date, loc)
+	if derr != nil {
+		// 日期格式异常时退化为"只过滤 booked"模式
+		out.Available = make([]string, 0, len(DefaultSlots))
+		for _, slot := range DefaultSlots {
+			if !bookedSet[slot] {
+				out.Available = append(out.Available, slot)
+			}
+		}
+		out.BookedCount = len(booked)
+		return out
+	}
+	dayEnd := dayStart.Add(24 * time.Hour)
+	leaves, _ := ListBarberLeavesInRange(context.Background(), barber.ID, dayStart, dayEnd)
+
+	onLeave := leaveCoveredSlots(leaves, date, loc)
+
+	out.Available = make([]string, 0, len(DefaultSlots))
+	for _, slot := range DefaultSlots {
+		if bookedSet[slot] || onLeave[slot] {
+			continue
+		}
+		out.Available = append(out.Available, slot)
+	}
+
+	// 构造 LeaveBlocks（按 start_at ASC，ListBarberLeavesInRange 已排序）
+	out.LeaveBlocks = make([]LeaveBlock, 0, len(leaves))
+	for _, l := range leaves {
+		out.LeaveBlocks = append(out.LeaveBlocks, LeaveBlock{
+			StartHM: l.StartAt.In(loc).Format("15:04"),
+			EndHM:   l.EndAt.In(loc).Format("15:04"),
+			Reason:  strings.TrimSpace(l.Reason),
+		})
+	}
+
+	out.BookedCount = len(booked)
 	return out
 }
 

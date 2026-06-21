@@ -13,8 +13,10 @@ package storage
 //   go test ./storage/... -v -run "TestIsValidSlot|TestParseDate|TestIsShopHoliday|TestAllShopHolidays|TestVerifyAdminPassword"
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -181,5 +183,299 @@ func TestTrimSpaceUsedByParseDate(t *testing.T) {
 	trimmed := strings.TrimSpace(in)
 	if trimmed != "2026-06-21" {
 		t.Errorf("TrimSpace: got %q, want %q", trimmed, "2026-06-21")
+	}
+}
+
+// ===================== QueryAvailableSlots：leave 感知（PRD §11.7.9 v3.6） =====================
+//
+// 之前 QueryAvailableSlots 只过滤已预约的时段；v3.6 起再过滤被请假区间覆盖的时段，
+// 避免顾客在 query_schedule 里看到 14:00 可约、create_appointment 时却被 leave 拒。
+
+// TestQueryAvailableSlots_FiltersLeaveCoveredSlots：leave 覆盖 14:00-16:00，
+// 这些 slot 不应出现在 available 列表里。
+func TestQueryAvailableSlots_FiltersLeaveCoveredSlots(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date := "2026-06-21"
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	// Tony 在 14:00-16:00 请假
+	MakeBarberLeave(t, shop.ID, barber.ID,
+		dayStart.Add(14*time.Hour), dayStart.Add(16*time.Hour),
+		LeaveActionCancel)
+
+	got := QueryAvailableSlots("Tony", date)
+	for _, s := range got {
+		// 14:00 / 14:30 / 15:00 / 15:30 / 16:00 都应被排除（区间含端点）
+		if s == "14:00" || s == "14:30" || s == "15:00" || s == "15:30" || s == "16:00" {
+			t.Errorf("slot %s should be excluded by leave, but appeared in %v", s, got)
+		}
+	}
+	// 至少应包含未受影响的 slot（09:00 / 17:30 等）
+	if len(got) == 0 {
+		t.Errorf("expected some non-leave slots, got none")
+	}
+}
+
+// TestQueryAvailableSlots_FullDayLeave：整天请假应返回空
+func TestQueryAvailableSlots_FullDayLeave(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date := "2026-06-21"
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	MakeBarberLeave(t, shop.ID, barber.ID,
+		dayStart, dayStart.Add(24*time.Hour), LeaveActionCancel)
+
+	got := QueryAvailableSlots("Tony", date)
+	if len(got) != 0 {
+		t.Errorf("full-day leave should yield empty slots, got %v", got)
+	}
+}
+
+// TestQueryAvailableSlots_CancelledLeaveIgnored：已撤销的 leave 不影响 slots
+func TestQueryAvailableSlots_CancelledLeaveIgnored(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date := "2026-06-21"
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	l := MakeBarberLeave(t, shop.ID, barber.ID,
+		dayStart.Add(14*time.Hour), dayStart.Add(16*time.Hour),
+		LeaveActionCancel)
+	// 标记为 cancelled
+	if err := DB.Model(l).Update("status", LeaveStatusCancelled).Error; err != nil {
+		t.Fatalf("update cancelled: %v", err)
+	}
+
+	got := QueryAvailableSlots("Tony", date)
+	// 应包含 14:00、14:30、15:00、15:30、16:00
+	expectPresent := []string{"14:00", "14:30", "15:00", "15:30", "16:00"}
+	for _, s := range expectPresent {
+		found := false
+		for _, g := range got {
+			if g == s {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("slot %s should be present after leave cancelled, got %v", s, got)
+		}
+	}
+}
+
+// TestQueryAvailableSlots_LeaveFromOtherBarberIgnored：其他理发师的 leave 不影响当前理发师
+func TestQueryAvailableSlots_LeaveFromOtherBarberIgnored(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	kevin := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+
+	date := "2026-06-21"
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	// Kevin 请假 14:00-16:00
+	MakeBarberLeave(t, shop.ID, kevin.ID,
+		dayStart.Add(14*time.Hour), dayStart.Add(16*time.Hour),
+		LeaveActionCancel)
+
+	got := QueryAvailableSlots("Tony", date)
+	// Tony 的 14:00 / 14:30 / 15:00 / 15:30 / 16:00 都应该在 got 里（不被排除）
+	mustHave := []string{"14:00", "14:30", "15:00", "15:30", "16:00"}
+	for _, want := range mustHave {
+		found := false
+		for _, s := range got {
+			if s == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Tony's slot %s should be present (Kevin's leave shouldn't affect Tony), got %v", want, got)
+		}
+	}
+}
+
+// TestQueryAvailableSlots_BookedSlotStillExcluded：已预约的 slot 也照常排除（与 leave 解耦）
+func TestQueryAvailableSlots_BookedSlotStillExcluded(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date := "2026-06-21"
+	// 已有人预约 10:00
+	MakeAppointment(t, shop.ID, "cust-1", "Alice", "Tony", date, "10:00")
+
+	got := QueryAvailableSlots("Tony", date)
+	for _, s := range got {
+		if s == "10:00" {
+			t.Errorf("booked slot 10:00 should be excluded, got %v", got)
+		}
+	}
+}
+
+// ===================== QueryScheduleBreakdown (PRD §11.7.10 v3.6) =====================
+//
+// 一次性返回 available + leave blocks + booked count
+// 关键不变量：
+//   - available 里的 slot 一定不在 booked / leave 覆盖里
+//   - leave blocks 按 start_at ASC（ListBarberLeavesInRange 已保证）
+//   - booked count == 该天 active appt 数
+
+// TestQueryScheduleBreakdown_Empty：空数据 → 全可约，0 booked，0 leaves
+func TestQueryScheduleBreakdown_Empty(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	got := QueryScheduleBreakdown("Tony", "2026-06-21")
+	if got.BookedCount != 0 {
+		t.Errorf("empty: BookedCount should be 0, got %d", got.BookedCount)
+	}
+	if len(got.LeaveBlocks) != 0 {
+		t.Errorf("empty: LeaveBlocks should be empty, got %v", got.LeaveBlocks)
+	}
+	if len(got.Available) != len(DefaultSlots) {
+		t.Errorf("empty: Available should be all %d default slots, got %d", len(DefaultSlots), len(got.Available))
+	}
+}
+
+// TestQueryScheduleBreakdown_PartialLeave_Booked：同时有 leave + booked → 三个维度都正确
+func TestQueryScheduleBreakdown_PartialLeave_Booked(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+
+	date := "2026-06-21"
+	// 占用 2 个 slot：09:00 / 10:00
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", date, "09:00")
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", date, "10:00")
+	// 请假：14:00-16:00
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(14*time.Hour), dayStart.Add(16*time.Hour), LeaveActionCancel)
+	DB.Model(&BarberLeave{}).Where("barber_id = ?", "barber-Tony").Update("reason", "体检")
+
+	got := QueryScheduleBreakdown("Tony", date)
+
+	if got.BookedCount != 2 {
+		t.Errorf("BookedCount should be 2, got %d", got.BookedCount)
+	}
+	if len(got.LeaveBlocks) != 1 {
+		t.Fatalf("LeaveBlocks should have 1 entry, got %d", len(got.LeaveBlocks))
+	}
+	lb := got.LeaveBlocks[0]
+	if lb.StartHM != "14:00" || lb.EndHM != "16:00" {
+		t.Errorf("LeaveBlocks[0] should be 14:00-16:00, got %s-%s", lb.StartHM, lb.EndHM)
+	}
+	if lb.Reason != "体检" {
+		t.Errorf("LeaveBlocks[0].Reason should be '体检', got %q", lb.Reason)
+	}
+
+	// available 应该排除 09:00 / 10:00 / 14:00 / 14:30 / 15:00 / 15:30 / 16:00
+	for _, slot := range got.Available {
+		for _, banned := range []string{"09:00", "10:00", "14:00", "14:30", "15:00", "15:30", "16:00"} {
+			if slot == banned {
+				t.Errorf("slot %q should be excluded from Available, but it is in: %v", banned, got.Available)
+			}
+		}
+	}
+}
+
+// TestQueryScheduleBreakdown_FullDayLeave_BlocksAll：整天请假 → available 为空
+func TestQueryScheduleBreakdown_FullDayLeave_BlocksAll(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date := "2026-06-21"
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	// 整天请假：00:00 - 次日 00:00
+	MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart, dayStart.Add(24*time.Hour), LeaveActionCancel)
+
+	got := QueryScheduleBreakdown("Tony", date)
+	if len(got.Available) != 0 {
+		t.Errorf("full-day-leave: Available should be empty, got %v", got.Available)
+	}
+	if len(got.LeaveBlocks) != 1 {
+		t.Errorf("full-day-leave: LeaveBlocks should have 1 entry, got %d", len(got.LeaveBlocks))
+	}
+}
+
+// TestQueryScheduleBreakdown_CancelledLeave_NotCounted：cancelled leave 不算
+func TestQueryScheduleBreakdown_CancelledLeave_NotCounted(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	// 用"明天"——确保 leave 还没开始，否则 CancelBarberLeave 会拒
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	tomorrow := time.Now().In(loc).AddDate(0, 0, 1)
+	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, loc)
+	date := tomorrow.Format("2006-01-02")
+
+	leave := MakeBarberLeave(t, shop.ID, "barber-Tony",
+		tomorrow.Add(14*time.Hour), tomorrow.Add(16*time.Hour), LeaveActionCancel)
+	if _, err := CancelBarberLeave(context.Background(), leave.ID, "admin"); err != nil {
+		t.Fatalf("CancelBarberLeave: %v", err)
+	}
+
+	got := QueryScheduleBreakdown("Tony", date)
+	if len(got.LeaveBlocks) != 0 {
+		t.Errorf("cancelled leave should not appear in LeaveBlocks, got %v", got.LeaveBlocks)
+	}
+	if len(got.Available) != len(DefaultSlots) {
+		t.Errorf("cancelled leave: Available should be all default slots, got %d/%d", len(got.Available), len(DefaultSlots))
+	}
+}
+
+// TestQueryScheduleBreakdown_UnknownBarber_ReturnsZeros：barber 不存在时返回零值
+func TestQueryScheduleBreakdown_UnknownBarber_ReturnsZeros(t *testing.T) {
+	SetupTestDB(t)
+	got := QueryScheduleBreakdown("Nobody", "2026-06-21")
+	if got.BookedCount != 0 {
+		t.Errorf("unknown barber: BookedCount should be 0, got %d", got.BookedCount)
+	}
+	if len(got.Available) != 0 {
+		t.Errorf("unknown barber: Available should be empty, got %v", got.Available)
+	}
+	if len(got.LeaveBlocks) != 0 {
+		t.Errorf("unknown barber: LeaveBlocks should be empty, got %v", got.LeaveBlocks)
+	}
+}
+
+// TestQueryScheduleBreakdown_MultipleLeaves_PreservesOrder：多条 leave 按 start_at ASC
+func TestQueryScheduleBreakdown_MultipleLeaves_PreservesOrder(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	date := "2026-06-21"
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
+	// 故意倒序插入
+	MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(16*time.Hour), dayStart.Add(17*time.Hour), LeaveActionCancel)
+	MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(11*time.Hour), dayStart.Add(12*time.Hour), LeaveActionCancel)
+
+	got := QueryScheduleBreakdown("Tony", date)
+	if len(got.LeaveBlocks) != 2 {
+		t.Fatalf("LeaveBlocks should have 2 entries, got %d", len(got.LeaveBlocks))
+	}
+	if got.LeaveBlocks[0].StartHM != "11:00" || got.LeaveBlocks[1].StartHM != "16:00" {
+		t.Errorf("LeaveBlocks should be sorted by start_at ASC, got %s then %s",
+			got.LeaveBlocks[0].StartHM, got.LeaveBlocks[1].StartHM)
 	}
 }
