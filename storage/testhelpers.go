@@ -55,6 +55,7 @@ func SetupTestDB(t *testing.T) {
 		&Appointment{},
 		&ShopAdmin{},
 		&EventLog{},
+		&BarberLeave{},
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
@@ -71,10 +72,14 @@ func SetupTestDB(t *testing.T) {
 }
 
 // MakeCustomer creates a customer with optional late-cancel and no-show counts.
+//
+// 注意：wechat_open_id 设置为 UUID（不依赖 name），避免同一 test 多次调用时
+// 撞 unique index。
 func MakeCustomer(t *testing.T, name string, lateCancelCount, noShowCount int) *Customer {
 	t.Helper()
 	c := &Customer{
 		ID:              uuid.NewString(),
+		WechatOpenID:    "wx-" + uuid.NewString(),
 		Name:            name,
 		LateCancelCount: lateCancelCount,
 		NoShowCount:     noShowCount,
@@ -125,4 +130,50 @@ func MakeShop(t *testing.T, id, holidays string) *Shop {
 		t.Fatalf("create shop: %v", err)
 	}
 	return s
+}
+
+// MakeBarber creates a barber record with the given ID and shop.
+//
+//   - id 会同时作为 PrimaryKey，方便测试断言
+//   - active 默认 true
+func MakeBarber(t *testing.T, id, shopID, name string) *Barber {
+	t.Helper()
+	b := &Barber{
+		ID:        id,
+		ShopID:    shopID,
+		Name:      name,
+		Active:    true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := DB.Create(b).Error; err != nil {
+		t.Fatalf("create barber: %v", err)
+	}
+	return b
+}
+
+// MakeBarberLeave creates a leave record with the given params.
+//
+// startAt/endAt 直接用调用方传入的 time.Time（便于精确控制未来/过去）。
+// status 默认 active。
+func MakeBarberLeave(t *testing.T, shopID, barberID string, startAt, endAt time.Time, action string) *BarberLeave {
+	t.Helper()
+	l := &BarberLeave{
+		ID:         uuid.NewString(),
+		ShopID:     shopID,
+		BarberID:   barberID,
+		BarberName: "Test Barber " + barberID,
+		StartAt:    startAt,
+		EndAt:      endAt,
+		Reason:     "test leave",
+		Action:     action,
+		Status:     LeaveStatusActive,
+		CreatedBy:  "test_admin",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	if err := DB.Create(l).Error; err != nil {
+		t.Fatalf("create barber leave: %v", err)
+	}
+	return l
 }
