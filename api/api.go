@@ -64,6 +64,15 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.POST("/barber/:id/leave", createBarberLeaveHandler)
 	protected.DELETE("/barber/:id/leave/:leaveID", cancelBarberLeaveHandler)
 	protected.GET("/barber/:id/leaves", listBarberLeavesHandler)
+	// P5 理发师管理（CRUD）
+	//   - /barbers          GET  列表（含 inactive）
+	//   - /barbers          POST 创建
+	//   - /barbers/:id      DELETE 软删除（有未来预约时拒绝）
+	//   - /barbers/:id/activate POST 重新激活
+	protected.GET("/barbers", listBarbersHandler)
+	protected.POST("/barbers", createBarberHandler)
+	protected.DELETE("/barbers/:id", softDeleteBarberHandler)
+	protected.POST("/barbers/:id/activate", activateBarberHandler)
 	// P4 备用接口（barber_id / leave_id 在 body，便于跨理发师聚合查询 + 后台管理）
 	protected.POST("/leave/create", createLeaveHandler)
 	protected.POST("/leave/cancel", cancelLeaveHandler)
