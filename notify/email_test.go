@@ -330,3 +330,166 @@ func TestBuildMIMEMessage_BasicStructure(t *testing.T) {
 		t.Error("missing HTML body")
 	}
 }
+
+// ---- RenderWeeklyReportHTML (v4.3 PRD §11.12) ----
+
+// makeWeeklyReport 构造一个标准周报 fixture
+func makeWeeklyReport() storage.WeeklyReport {
+	return storage.WeeklyReport{
+		ShopID:                "shop-1",
+		ShopName:              "Tony's Salon",
+		GeneratedAt:           time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC),
+		WindowStart:           time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC),
+		WindowEnd:             time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC),
+		WindowDays:            7,
+		TotalAppointments:     50,
+		CompletedAppointments: 40,
+		NoShowAppointments:    5,
+		CancelledAppointments: 2,
+		ActiveAppointments:    3,
+		CompletionRate:        0.889,
+		NoShowRate:            0.111,
+		UniqueServices:        3,
+		UniqueCustomers:       20,
+		ServiceRank: []storage.ServiceStat{
+			{Service: "剪发", Count: 30},
+			{Service: "染发", Count: 15},
+			{Service: "烫发", Count: 5},
+		},
+		TopCustomers: []storage.CustomerStat{
+			{CustomerID: "c1", Name: "Alice", Total: 4},
+			{CustomerID: "c2", Name: "Bob", Total: 3},
+		},
+		LastWeekTotal:       40,
+		LastWeekCompleted:   30,
+		LastWeekNoShow:      6,
+		TotalGrowthRate:     0.25,
+		CompletedGrowthRate: 0.333,
+		NoShowDelta:         -1,
+		DailyTrend: []storage.DailyStat{
+			{Date: "2026-06-15", Total: 8, Completed: 7, NoShow: 1, Cancelled: 0},
+			{Date: "2026-06-16", Total: 10, Completed: 8, NoShow: 1, Cancelled: 1},
+			{Date: "2026-06-17", Total: 5, Completed: 4, NoShow: 0, Cancelled: 1},
+			{Date: "2026-06-18", Total: 7, Completed: 6, NoShow: 1, Cancelled: 0},
+			{Date: "2026-06-19", Total: 9, Completed: 7, NoShow: 1, Cancelled: 1},
+			{Date: "2026-06-20", Total: 6, Completed: 5, NoShow: 1, Cancelled: 0},
+			{Date: "2026-06-21", Total: 5, Completed: 3, NoShow: 0, Cancelled: 0},
+		},
+	}
+}
+
+func TestRenderWeeklyReportHTML_ContainsKeyFields(t *testing.T) {
+	rep := makeWeeklyReport()
+	subject, html := RenderWeeklyReportHTML(rep)
+
+	if !strings.Contains(subject, "Tony's Salon") {
+		t.Errorf("subject 应包含店名, got %q", subject)
+	}
+	if !strings.Contains(subject, "06-15") || !strings.Contains(subject, "06-22") {
+		t.Errorf("subject 应包含统计区间, got %q", subject)
+	}
+	if !strings.Contains(html, "上周经营周报") {
+		t.Error("html 应包含标题")
+	}
+	if !strings.Contains(html, "50") {
+		t.Error("html 应包含总预约数")
+	}
+	if !strings.Contains(html, "周环比") {
+		t.Error("html 应包含周环比 section")
+	}
+	if !strings.Contains(html, "服务排行") {
+		t.Error("html 应包含服务排行 section")
+	}
+	if !strings.Contains(html, "剪发") {
+		t.Error("html 应包含服务名")
+	}
+	if !strings.Contains(html, "Alice") {
+		t.Error("html 应包含熟客名")
+	}
+	if !strings.Contains(html, "7 天日趋势") {
+		t.Error("html 应包含日趋势 section")
+	}
+}
+
+func TestRenderWeeklyReportHTML_EmptyReportDoesNotCrash(t *testing.T) {
+	rep := storage.WeeklyReport{} // 零值
+	subject, html := RenderWeeklyReportHTML(rep)
+	if subject == "" {
+		t.Error("subject 零值时不应为空")
+	}
+	if !strings.Contains(html, "上周经营周报") {
+		t.Error("html 零值时仍应渲染标题")
+	}
+}
+
+func TestRenderWeeklyReportHTML_HTMLEscapesShopName(t *testing.T) {
+	rep := makeWeeklyReport()
+	rep.ShopName = `Tony's <script>alert(1)</script>`
+	_, html := RenderWeeklyReportHTML(rep)
+	if strings.Contains(html, "<script>") {
+		t.Errorf("html 应转义 <script>, got: %s", html)
+	}
+	if !strings.Contains(html, "&lt;script&gt;") {
+		t.Error("html 应包含转义后的 script")
+	}
+}
+
+func TestRenderWeeklyReportHTML_DailyBarsRender(t *testing.T) {
+	rep := makeWeeklyReport()
+	_, html := RenderWeeklyReportHTML(rep)
+	// 7 天都应有进度条 div（每行含 background-color: #2563eb）
+	count := strings.Count(html, "background-color: #2563eb")
+	if count < 7 {
+		t.Errorf("日趋势应有 7 个条形图，实际 %d 个", count)
+	}
+	// 验证 date label 切到 MM-DD 格式
+	if !strings.Contains(html, "06-15") {
+		t.Error("html 应包含切短后的日期 06-15")
+	}
+}
+
+// ---- RenderChainWeeklyReportHTML (v4.3 PRD §11.12 连锁版) ----
+
+func TestRenderChainWeeklyReportHTML_BasicShape(t *testing.T) {
+	rep := storage.ChainWeeklyReport{
+		GeneratedAt: time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC),
+		WindowStart: time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC),
+		WindowEnd:   time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC),
+		WindowDays:  7,
+		WeekLabel:   "2026-06-15 ~ 2026-06-22",
+		ShopCount:   2,
+		Total: storage.ChainWeeklyTotals{
+			TotalAppointments:     100,
+			CompletedAppointments: 80,
+			NoShowAppointments:    10,
+			CompletionRate:        0.889,
+			NoShowRate:            0.111,
+		},
+		PerShop: []storage.WeeklyReport{
+			{ShopID: "shop-1", ShopName: "总店", TotalAppointments: 60, CompletedAppointments: 50, NoShowAppointments: 5},
+			{ShopID: "shop-2", ShopName: "分店", TotalAppointments: 40, CompletedAppointments: 30, NoShowAppointments: 5},
+		},
+		TopServices: []storage.ServiceStat{
+			{Service: "剪发", Count: 60},
+		},
+		TopCustomers: []storage.CustomerStat{
+			{CustomerID: "c1", Name: "Alice", Total: 8},
+		},
+	}
+	subject, html := RenderChainWeeklyReportHTML(rep)
+	if !strings.Contains(subject, "2 家店") {
+		t.Errorf("subject 应包含店家数, got %q", subject)
+	}
+	if !strings.Contains(html, "连锁周报") {
+		t.Error("html 应包含标题")
+	}
+	if !strings.Contains(html, "总店") || !strings.Contains(html, "分店") {
+		t.Error("html 应包含各店名")
+	}
+	if !strings.Contains(html, "100") {
+		t.Error("html 应包含跨店总数")
+	}
+	if !strings.Contains(html, "跨店总览") {
+		t.Error("html 应包含跨店总览 section")
+	}
+}

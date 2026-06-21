@@ -276,6 +276,28 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 				_ = leaveExpirer.Stop(stopCtx)
 			}()
 		}
+
+		// 周报触发器（PRD §8.2 / §11.12 v4.3 — 每周一 9:00 给所有店发周报邮件）
+		//   - 复用同一份 SMTP 配（与 D+15 共用 sender）
+		//   - 复用 REPORT_TO 配（与 D+15 共用收件人）
+		//   - 不依赖 wecom 客户端，单独 if 一层
+		weeklyReporter := cronpkg.NewWeeklyReporter()
+		weeklyReporter.SetSender(notify.NewSender(emailCfg))
+		if len(reportTo) > 0 {
+			weeklyReporter.SetReportTo(reportTo)
+			log.Printf("[weekly] 周报邮件已启用，收件人 %d 人：%v", len(reportTo), reportTo)
+		} else {
+			log.Printf("[weekly] REPORT_TO 未配置，周报邮件跳过（仅写埋点）")
+		}
+		if err := weeklyReporter.Start(ctx); err != nil {
+			log.Printf("⚠️  启动 weekly reporter cron 失败: %v", err)
+		} else {
+			defer func() {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = weeklyReporter.Stop(stopCtx)
+			}()
+		}
 	}
 
 	srv := server.New[M](server.Config[M]{

@@ -53,9 +53,11 @@ func SetupTestDB(t *testing.T) {
 		&Barber{},
 		&Customer{},
 		&Appointment{},
+		&Subscription{}, // v4.4 续费测试需要
 		&ShopAdmin{},
 		&EventLog{},
 		&BarberLeave{},
+		&Service{}, // v4.4 服务目录
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

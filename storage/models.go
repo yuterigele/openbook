@@ -15,6 +15,7 @@ func (WecomMessageLog) TableName() string { return "wecom_message_logs" }
 func (ReminderLog) TableName() string  { return "reminder_logs" }
 func (EventLog) TableName() string     { return "event_logs" }
 func (BarberLeave) TableName() string  { return "barber_leaves" }
+func (Service) TableName() string      { return "services" }
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
@@ -205,4 +206,22 @@ type BarberLeave struct {
 	CreatedBy  string     `gorm:"size:64" json:"created_by"`         // 商户后台用户名
 	CreatedAt  time.Time  `gorm:"index" json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// Service 服务项目（PRD §11.4 v4.4 服务目录）
+//
+// 业务场景：商户在后台维护本店可提供的服务（剪发/烫发/染发/护理...），
+// 每项服务有名字、预估时长、价格区间。后端 Agent 工具 list_services 用此表。
+//
+// 多店隔离：每个 Service 绑定一个 ShopID。
+type Service struct {
+	ID            string    `gorm:"primaryKey;size:64" json:"id"`
+	ShopID        string    `gorm:"size:64;index;not null" json:"shop_id"`
+	Name          string    `gorm:"size:64;not null" json:"name"`            // 剪发/烫发/染发/洗吹/护理/造型/其他
+	EstimatedMin  int       `gorm:"default:30" json:"estimated_min"`          // 预估时长(分钟)
+	PriceRange    string    `gorm:"size:64" json:"price_range"`              // 价格区间描述，如 "80-120"
+	IsActive      bool      `gorm:"default:true;index" json:"is_active"`     // false = 已下架（保留历史）
+	SortOrder     int       `gorm:"default:0" json:"sort_order"`             // 列表展示顺序，asc
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }

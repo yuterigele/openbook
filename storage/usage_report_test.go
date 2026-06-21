@@ -383,3 +383,285 @@ func floatNear(a, b, eps float64) bool {
 	}
 	return diff < eps
 }
+
+// ---- 周报（v4.3 PRD §11.12） ----
+//
+// 覆盖维度：
+//   - 基础聚合：window=[now-7d, now)，总览字段 + 率
+//   - 服务 / 顾客排行（同 D+15 口径）
+//   - 日趋势：长度恒为 7；缺失日期补 0
+//   - 边界：DB 未初始化 / shop 不存在 / 空店 / 窗口外预约不计入
+//   - ListAllShopIDs：列全部店铺
+//
+// 测试时间窗：now = 2026-06-22 00:00 UTC → window = [2026-06-15, 2026-06-22)
+
+var weeklyTestNow = time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
+
+func TestBuildWeeklyUsageReport_BasicAggregates(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	shopID := "weekly-basic"
+
+	MakeShop(t, shopID, "")
+
+	// 7 笔覆盖上周：3 completed + 1 noshow + 1 cancelled + 2 active
+	mkAppt(t, shopID, "C1", "Alice", "Tony", "2026-06-15", "10:00", "completed")
+	mkAppt(t, shopID, "C1", "Alice", "Tony", "2026-06-16", "10:00", "completed")
+	mkAppt(t, shopID, "C2", "Bob", "Tony", "2026-06-17", "10:00", "completed")
+	mkAppt(t, shopID, "C3", "Cara", "Tony", "2026-06-18", "10:00", "noshow")
+	mkAppt(t, shopID, "C4", "Dan", "Tony", "2026-06-19", "10:00", "cancelled")
+	mkAppt(t, shopID, "C5", "Eve", "Tony", "2026-06-20", "10:00", "active")
+	mkAppt(t, shopID, "C6", "Finn", "Tony", "2026-06-21", "10:00", "active")
+
+	rep, err := BuildWeeklyUsageReport(ctx, shopID, weeklyTestNow)
+	if err != nil {
+		t.Fatalf("BuildWeeklyUsageReport failed: %v", err)
+	}
+
+	if rep.TotalAppointments != 7 {
+		t.Errorf("TotalAppointments: want 7, got %d", rep.TotalAppointments)
+	}
+	if rep.CompletedAppointments != 3 {
+		t.Errorf("CompletedAppointments: want 3, got %d", rep.CompletedAppointments)
+	}
+	if rep.NoShowAppointments != 1 {
+		t.Errorf("NoShowAppointments: want 1, got %d", rep.NoShowAppointments)
+	}
+	if rep.CancelledAppointments != 1 {
+		t.Errorf("CancelledAppointments: want 1, got %d", rep.CancelledAppointments)
+	}
+	if rep.ActiveAppointments != 2 {
+		t.Errorf("ActiveAppointments: want 2, got %d", rep.ActiveAppointments)
+	}
+	// completion_rate = 3 / (3+1) = 0.75
+	if !floatNear(rep.CompletionRate, 0.75, 0.001) {
+		t.Errorf("CompletionRate: want 0.75, got %f", rep.CompletionRate)
+	}
+	// no_show_rate = 1 / (3+1) = 0.25
+	if !floatNear(rep.NoShowRate, 0.25, 0.001) {
+		t.Errorf("NoShowRate: want 0.25, got %f", rep.NoShowRate)
+	}
+	if rep.WindowDays != 7 {
+		t.Errorf("WindowDays: want 7, got %d", rep.WindowDays)
+	}
+	// windowStart = now - 7d
+	wantStart := weeklyTestNow.AddDate(0, 0, -7)
+	if !rep.WindowStart.Equal(wantStart) {
+		t.Errorf("WindowStart: want %v, got %v", wantStart, rep.WindowStart)
+	}
+	if !rep.WindowEnd.Equal(weeklyTestNow) {
+		t.Errorf("WindowEnd: want %v, got %v", weeklyTestNow, rep.WindowEnd)
+	}
+}
+
+func TestBuildWeeklyUsageReport_ServiceAndCustomerRanking(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	shopID := "weekly-rank"
+
+	MakeShop(t, shopID, "")
+
+	// 服务分布：剪发 x4、染发 x2、烫发 x1
+	for i := 15; i <= 18; i++ {
+		mkApptWithService(t, shopID, "C1", "Alice", "Tony", dayStr(i), "10:00", "completed", "剪发")
+	}
+	mkApptWithService(t, shopID, "C2", "Bob", "Tony", "2026-06-19", "10:00", "completed", "染发")
+	mkApptWithService(t, shopID, "C2", "Bob", "Tony", "2026-06-20", "10:00", "completed", "染发")
+	mkApptWithService(t, shopID, "C3", "Cara", "Tony", "2026-06-21", "10:00", "completed", "烫发")
+
+	rep, err := BuildWeeklyUsageReport(ctx, shopID, weeklyTestNow)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if rep.UniqueServices != 3 {
+		t.Errorf("UniqueServices: want 3, got %d", rep.UniqueServices)
+	}
+	if len(rep.ServiceRank) != 3 {
+		t.Fatalf("ServiceRank len: want 3, got %d", len(rep.ServiceRank))
+	}
+	if rep.ServiceRank[0].Service != "剪发" || rep.ServiceRank[0].Count != 4 {
+		t.Errorf("ServiceRank[0]: want 剪发/4, got %s/%d", rep.ServiceRank[0].Service, rep.ServiceRank[0].Count)
+	}
+
+	// 顾客排行：Alice 4 / Bob 2 / Cara 1
+	if rep.UniqueCustomers != 3 {
+		t.Errorf("UniqueCustomers: want 3, got %d", rep.UniqueCustomers)
+	}
+	if rep.TopCustomers[0].Name != "Alice" || rep.TopCustomers[0].Total != 4 {
+		t.Errorf("TopCustomers[0]: want Alice/4, got %s/%d", rep.TopCustomers[0].Name, rep.TopCustomers[0].Total)
+	}
+}
+
+func TestBuildWeeklyUsageReport_DailyTrend_FillsGaps(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	shopID := "weekly-daily"
+
+	MakeShop(t, shopID, "")
+
+	// 只有 6/16 和 6/19 有预约，其余 5 天应补 0
+	mkAppt(t, shopID, "C1", "Alice", "Tony", "2026-06-16", "10:00", "completed")
+	mkAppt(t, shopID, "C1", "Alice", "Tony", "2026-06-16", "14:00", "completed")
+	mkAppt(t, shopID, "C2", "Bob", "Tony", "2026-06-19", "11:00", "completed")
+
+	rep, err := BuildWeeklyUsageReport(ctx, shopID, weeklyTestNow)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// 7 天趋势：now=2026-06-22, window=[06-15, 06-22)
+	wantDates := []string{
+		"2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18",
+		"2026-06-19", "2026-06-20", "2026-06-21",
+	}
+	if len(rep.DailyTrend) != 7 {
+		t.Fatalf("DailyTrend len: want 7, got %d", len(rep.DailyTrend))
+	}
+	for i, want := range wantDates {
+		if rep.DailyTrend[i].Date != want {
+			t.Errorf("DailyTrend[%d].Date: want %s, got %s", i, want, rep.DailyTrend[i].Date)
+		}
+	}
+	// 6/15 补 0
+	if rep.DailyTrend[0].Total != 0 {
+		t.Errorf("DailyTrend[0].Total: want 0, got %d", rep.DailyTrend[0].Total)
+	}
+	// 6/16 有 2 笔
+	if rep.DailyTrend[1].Total != 2 {
+		t.Errorf("DailyTrend[1].Total: want 2, got %d", rep.DailyTrend[1].Total)
+	}
+	// 6/17 补 0
+	if rep.DailyTrend[2].Total != 0 {
+		t.Errorf("DailyTrend[2].Total: want 0, got %d", rep.DailyTrend[2].Total)
+	}
+	// 6/19 有 1 笔
+	if rep.DailyTrend[4].Total != 1 {
+		t.Errorf("DailyTrend[4].Total: want 1, got %d", rep.DailyTrend[4].Total)
+	}
+}
+
+func TestBuildWeeklyUsageReport_EmptyShop(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	shopID := "weekly-empty"
+
+	MakeShop(t, shopID, "")
+
+	rep, err := BuildWeeklyUsageReport(ctx, shopID, weeklyTestNow)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if rep.TotalAppointments != 0 {
+		t.Errorf("TotalAppointments: want 0, got %d", rep.TotalAppointments)
+	}
+	if rep.CompletionRate != 0 || rep.NoShowRate != 0 {
+		t.Errorf("rates: want 0/0, got %f/%f", rep.CompletionRate, rep.NoShowRate)
+	}
+	if len(rep.DailyTrend) != 7 {
+		t.Errorf("DailyTrend len: want 7, got %d", len(rep.DailyTrend))
+	}
+	// 7 天都应该是 0
+	for i, ds := range rep.DailyTrend {
+		if ds.Total != 0 {
+			t.Errorf("DailyTrend[%d]: want 0, got %d", i, ds.Total)
+		}
+	}
+}
+
+func TestBuildWeeklyUsageReport_ShopNotFound(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	_, err := BuildWeeklyUsageReport(ctx, "nonexistent", weeklyTestNow)
+	if err == nil {
+		t.Fatal("want error for nonexistent shop, got nil")
+	}
+}
+
+func TestBuildWeeklyUsageReport_DBNotInitialized(t *testing.T) {
+	DB = nil
+	defer func() { DB = nil }()
+
+	_, err := BuildWeeklyUsageReport(context.Background(), "any", weeklyTestNow)
+	if err == nil {
+		t.Fatal("want error when DB nil, got nil")
+	}
+}
+
+func TestBuildWeeklyUsageReport_OutOfWindowExcluded(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	shopID := "weekly-window"
+
+	MakeShop(t, shopID, "")
+
+	// 窗口内 1 笔（6/16）
+	mkAppt(t, shopID, "C1", "Alice", "Tony", "2026-06-16", "10:00", "completed")
+	// 窗口外（now 之后 — 6/22 算今天）1 笔
+	mkAppt(t, shopID, "C2", "Bob", "Tony", "2026-06-22", "10:00", "completed")
+	// 窗口外（now-7d 之前）1 笔 — 6/14
+	mkAppt(t, shopID, "C3", "Cara", "Tony", "2026-06-14", "10:00", "completed")
+
+	rep, err := BuildWeeklyUsageReport(ctx, shopID, weeklyTestNow)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if rep.TotalAppointments != 1 {
+		t.Errorf("TotalAppointments: want 1 (only in-window), got %d", rep.TotalAppointments)
+	}
+}
+
+func TestBuildWeeklyUsageReport_ServiceRankLimitApplied(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+	shopID := "weekly-limit"
+
+	MakeShop(t, shopID, "")
+
+	// 6 种服务各 1 笔（只 1 次 / 服务），应有 6 个不同服务；RankLimit=5 应截断
+	for i, svc := range []string{"剪发", "染发", "烫发", "洗吹", "护理", "造型"} {
+		mkApptWithService(t, shopID, "C1", "Alice", "Tony", dayStr(15+i%7), "10:00", "completed", svc)
+	}
+
+	rep, err := BuildWeeklyUsageReport(ctx, shopID, weeklyTestNow)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if rep.UniqueServices != 6 {
+		t.Errorf("UniqueServices: want 6, got %d", rep.UniqueServices)
+	}
+	if len(rep.ServiceRank) != 5 {
+		t.Errorf("ServiceRank len: want 5 (RankLimit), got %d", len(rep.ServiceRank))
+	}
+}
+
+func TestListAllShopIDs(t *testing.T) {
+	SetupTestDB(t)
+	ctx := context.Background()
+
+	MakeShop(t, "shop-a", "")
+	MakeShop(t, "shop-b", "")
+	MakeShop(t, "shop-c", "")
+
+	ids, err := ListAllShopIDs(ctx)
+	if err != nil {
+		t.Fatalf("ListAllShopIDs: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Errorf("want 3 ids, got %d", len(ids))
+	}
+
+	// DB nil 时返 nil
+	DB = nil
+	defer func() { DB = nil }()
+	ids2, err2 := ListAllShopIDs(ctx)
+	if err2 != nil {
+		t.Errorf("DB nil should not error, got %v", err2)
+	}
+	if ids2 != nil {
+		t.Errorf("DB nil should return nil, got %v", ids2)
+	}
+}

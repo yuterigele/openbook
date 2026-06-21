@@ -531,3 +531,559 @@ func htmlEscape(s string) string {
 	)
 	return r.Replace(s)
 }
+
+// ---- 周报（v4.3 PRD §11.12） ----
+
+// RenderWeeklyReportHTML 渲染单店周报 HTML 邮件（v4.3 PRD §11.12）
+//
+//   - 输入：storage.WeeklyReport（受控数据）
+//   - 输出：subject + htmlBody
+//   - 与 D+15 区别：每周一发（不依赖 first_appointment），周环比 + 7 天日趋势
+//   - 设计：复用 v4.2 的内联 CSS / 表格布局 / XSS 转义（保持邮件客户端兼容性）
+func RenderWeeklyReportHTML(rep storage.WeeklyReport) (subject, htmlBody string) {
+	startStr := rep.WindowStart.Format("01-02")
+	endStr := rep.WindowEnd.Format("01-02")
+	if rep.ShopName != "" {
+		subject = fmt.Sprintf("【周报】%s · 上周经营数据（%s ~ %s）", rep.ShopName, startStr, endStr)
+	} else {
+		subject = fmt.Sprintf("【周报】上周经营数据（%s ~ %s）", startStr, endStr)
+	}
+
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>周报</title>
+</head>
+<body style="font-family: -apple-system, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif; background-color: #f4f6f8; margin: 0; padding: 20px; color: #1f2937;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+  <tr>
+    <td style="padding: 32px 32px 16px 32px; background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%); color: #ffffff;">
+      <h1 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 600;">上周经营周报</h1>
+      <p style="margin: 0; font-size: 14px; opacity: 0.9;">`)
+	b.WriteString(htmlEscape(rep.ShopName))
+	b.WriteString(` · `)
+	b.WriteString(startStr)
+	b.WriteString(` ~ `)
+	b.WriteString(endStr)
+	b.WriteString(`</p>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding: 24px 32px;">
+      <p style="margin: 0 0 16px 0; font-size: 14px; line-height: 1.6;">`)
+	b.WriteString(fmt.Sprintf("统计区间：%s 至 %s（共 %d 天）",
+		rep.WindowStart.Format("2006-01-02"),
+		rep.WindowEnd.Format("2006-01-02"),
+		rep.WindowDays))
+	b.WriteString(`</p>
+    </td>
+  </tr>
+
+  <!-- 总览 -->`)
+	b.WriteString(renderWeeklyOverviewSection(rep))
+
+	b.WriteString(`
+  <!-- 周环比 -->`)
+	b.WriteString(renderWeeklyDeltaSection(rep))
+
+	b.WriteString(`
+  <!-- 服务排行 -->`)
+	b.WriteString(renderWeeklyServiceSection(rep))
+
+	b.WriteString(`
+  <!-- 顾客排行 -->`)
+	b.WriteString(renderWeeklyCustomerSection(rep))
+
+	b.WriteString(`
+  <!-- 日趋势 -->`)
+	b.WriteString(renderWeeklyDailySection(rep))
+
+	b.WriteString(`
+  <!-- 页脚 -->
+  <tr>
+    <td style="padding: 24px 32px 32px 32px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; line-height: 1.5;">
+      <p style="margin: 0 0 4px 0;">本报告由「美发店 AI Agent」自动生成</p>
+      <p style="margin: 0;">生成时间：`)
+	b.WriteString(rep.GeneratedAt.Format("2006-01-02 15:04"))
+	b.WriteString(`</p>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`)
+	return subject, b.String()
+}
+
+func renderWeeklyOverviewSection(rep storage.WeeklyReport) string {
+	completePct := formatPercent(rep.CompletionRate)
+	noShowPct := formatPercent(rep.NoShowRate)
+
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 0 32px 24px 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">📊 上周总览</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #f9fafb; border-radius: 6px;">
+        <tr>
+          <td style="padding: 12px 16px; width: 50%;">
+            <div style="font-size: 12px; color: #6b7280;">总预约</div>
+            <div style="font-size: 24px; font-weight: 600; color: #1f2937;">`)
+	b.WriteString(strconv.Itoa(rep.TotalAppointments))
+	b.WriteString(`</div>
+          </td>
+          <td style="padding: 12px 16px; width: 50%;">
+            <div style="font-size: 12px; color: #6b7280;">独立顾客</div>
+            <div style="font-size: 24px; font-weight: 600; color: #1f2937;">`)
+	b.WriteString(strconv.Itoa(rep.UniqueCustomers))
+	b.WriteString(`</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 12px 16px; width: 50%;">
+            <div style="font-size: 12px; color: #6b7280;">完成率</div>
+            <div style="font-size: 18px; font-weight: 600; color: #059669;">`)
+	b.WriteString(completePct)
+	b.WriteString(`</div>
+          </td>
+          <td style="padding: 12px 16px; width: 50%;">
+            <div style="font-size: 12px; color: #6b7280;">爽约率</div>
+            <div style="font-size: 18px; font-weight: 600; color: #dc2626;">`)
+	b.WriteString(noShowPct)
+	b.WriteString(`</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+func renderWeeklyDeltaSection(rep storage.WeeklyReport) string {
+	// 周环比：本周 vs 上周
+	totalRateColor := "#6b7280"
+	totalRateSign := ""
+	if rep.TotalGrowthRate > 0 {
+		totalRateColor = "#059669"
+		totalRateSign = "↑"
+	} else if rep.TotalGrowthRate < 0 {
+		totalRateColor = "#dc2626"
+		totalRateSign = "↓"
+	}
+	completedRateColor := "#6b7280"
+	completedRateSign := ""
+	if rep.CompletedGrowthRate > 0 {
+		completedRateColor = "#059669"
+		completedRateSign = "↑"
+	} else if rep.CompletedGrowthRate < 0 {
+		completedRateColor = "#dc2626"
+		completedRateSign = "↓"
+	}
+	noShowDeltaColor := "#6b7280"
+	noShowDeltaSign := ""
+	if rep.NoShowDelta < 0 {
+		noShowDeltaColor = "#059669"
+		noShowDeltaSign = "↓"
+	} else if rep.NoShowDelta > 0 {
+		noShowDeltaColor = "#dc2626"
+		noShowDeltaSign = "↑"
+	}
+
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 0 32px 24px 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">📈 周环比</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #f9fafb; border-radius: 6px; font-size: 13px;">
+        <tr>
+          <td style="padding: 8px 12px; color: #6b7280; width: 40%;">指标</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">上周</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">本周</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">变化</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; color: #1f2937;">总预约</td>
+          <td style="padding: 8px 12px; text-align: right;">`)
+	b.WriteString(strconv.Itoa(rep.LastWeekTotal))
+	b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; font-weight: 600;">`)
+	b.WriteString(strconv.Itoa(rep.TotalAppointments))
+	b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; color: `)
+	b.WriteString(totalRateColor)
+	b.WriteString(`; font-weight: 600;">`)
+	b.WriteString(totalRateSign)
+	b.WriteString(formatPercent(rep.TotalGrowthRate))
+	b.WriteString(`</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; color: #1f2937;">完成数</td>
+          <td style="padding: 8px 12px; text-align: right;">`)
+	b.WriteString(strconv.Itoa(rep.LastWeekCompleted))
+	b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; font-weight: 600;">`)
+	b.WriteString(strconv.Itoa(rep.CompletedAppointments))
+	b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; color: `)
+	b.WriteString(completedRateColor)
+	b.WriteString(`; font-weight: 600;">`)
+	b.WriteString(completedRateSign)
+	b.WriteString(formatPercent(rep.CompletedGrowthRate))
+	b.WriteString(`</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; color: #1f2937;">爽约数</td>
+          <td style="padding: 8px 12px; text-align: right;">`)
+	b.WriteString(strconv.Itoa(rep.LastWeekNoShow))
+	b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; font-weight: 600;">`)
+	b.WriteString(strconv.Itoa(rep.NoShowAppointments))
+	b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; color: `)
+	b.WriteString(noShowDeltaColor)
+	b.WriteString(`; font-weight: 600;">`)
+	b.WriteString(noShowDeltaSign)
+	b.WriteString(strconv.Itoa(rep.NoShowDelta))
+	b.WriteString(`</td>
+        </tr>
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+func renderWeeklyServiceSection(rep storage.WeeklyReport) string {
+	if len(rep.ServiceRank) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 0 32px 24px 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">💇 服务排行 TOP `)
+	b.WriteString(strconv.Itoa(len(rep.ServiceRank)))
+	b.WriteString(`</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size: 13px; background-color: #f9fafb; border-radius: 6px;">
+        <tr>
+          <td style="padding: 8px 12px; color: #6b7280; width: 24px;">#</td>
+          <td style="padding: 8px 12px; color: #6b7280;">服务</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">单数</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">占比</td>
+        </tr>`)
+	for i, s := range rep.ServiceRank {
+		pct := 0.0
+		if rep.TotalAppointments > 0 {
+			pct = float64(s.Count) / float64(rep.TotalAppointments)
+		}
+		b.WriteString(`
+        <tr>
+          <td style="padding: 8px 12px; color: #6b7280;">`)
+		b.WriteString(strconv.Itoa(i + 1))
+		b.WriteString(`</td>
+          <td style="padding: 8px 12px; color: #1f2937;">`)
+		b.WriteString(htmlEscape(s.Service))
+		b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right;">`)
+		b.WriteString(strconv.Itoa(s.Count))
+		b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right; color: #6b7280;">`)
+		b.WriteString(formatPercent(pct))
+		b.WriteString(`</td>
+        </tr>`)
+	}
+	b.WriteString(`
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+func renderWeeklyCustomerSection(rep storage.WeeklyReport) string {
+	if len(rep.TopCustomers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 0 32px 24px 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">👥 熟客排行 TOP `)
+	b.WriteString(strconv.Itoa(len(rep.TopCustomers)))
+	b.WriteString(`</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size: 13px; background-color: #f9fafb; border-radius: 6px;">
+        <tr>
+          <td style="padding: 8px 12px; color: #6b7280; width: 24px;">#</td>
+          <td style="padding: 8px 12px; color: #6b7280;">顾客</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">到店次数</td>
+        </tr>`)
+	for i, c := range rep.TopCustomers {
+		b.WriteString(`
+        <tr>
+          <td style="padding: 8px 12px; color: #6b7280;">`)
+		b.WriteString(strconv.Itoa(i + 1))
+		b.WriteString(`</td>
+          <td style="padding: 8px 12px; color: #1f2937;">`)
+		b.WriteString(htmlEscape(c.Name))
+		b.WriteString(`</td>
+          <td style="padding: 8px 12px; text-align: right;">`)
+		b.WriteString(strconv.Itoa(c.Total))
+		b.WriteString(`</td>
+        </tr>`)
+	}
+	b.WriteString(`
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+func renderWeeklyDailySection(rep storage.WeeklyReport) string {
+	if len(rep.DailyTrend) == 0 {
+		return ""
+	}
+	// 找 max 用于条形图（按比例计算 width %）
+	maxTotal := 0
+	for _, ds := range rep.DailyTrend {
+		if ds.Total > maxTotal {
+			maxTotal = ds.Total
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 0 32px 24px 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">📅 7 天日趋势</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size: 12px; background-color: #f9fafb; border-radius: 6px;">`)
+	for _, ds := range rep.DailyTrend {
+		// 显示日期 "MM-DD"
+		dateLabel := ds.Date
+		if len(dateLabel) >= 10 {
+			dateLabel = dateLabel[5:] // 截 MM-DD
+		}
+		barWidth := 0
+		if maxTotal > 0 {
+			barWidth = ds.Total * 100 / maxTotal
+			if ds.Total > 0 && barWidth < 4 {
+				barWidth = 4 // 至少 4% 让 1 笔也可见
+			}
+		}
+		b.WriteString(`
+        <tr>
+          <td style="padding: 6px 12px; color: #6b7280; width: 60px;">`)
+		b.WriteString(dateLabel)
+		b.WriteString(`</td>
+          <td style="padding: 6px 12px; width: 50%;">
+            <div style="background-color: #2563eb; height: 8px; width: `)
+		b.WriteString(strconv.Itoa(barWidth))
+		b.WriteString(`%; border-radius: 4px;"></div>
+          </td>
+          <td style="padding: 6px 12px; text-align: right; color: #1f2937;">`)
+		b.WriteString(strconv.Itoa(ds.Total))
+		b.WriteString(` 单</td>
+        </tr>`)
+	}
+	b.WriteString(`
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+// RenderChainWeeklyReportHTML 渲染跨店周报 HTML 邮件（v4.3 PRD §11.12 连锁版）
+//
+//   - 输入：storage.ChainWeeklyReport（受控数据）
+//   - 输出：subject + htmlBody
+//   - 设计：复用单店周报的样式 + 加跨店汇总段 + 列出每店 TOP
+//   - 用途：连锁 owner 一次性看 N 家店 + 跨店汇总（暂未接 cron，留 v4.4 增量）
+func RenderChainWeeklyReportHTML(rep storage.ChainWeeklyReport) (subject, htmlBody string) {
+	subject = fmt.Sprintf("【连锁周报】%d 家店 · 上周经营汇总（%s）",
+		rep.ShopCount, rep.WeekLabel)
+
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>连锁周报</title>
+</head>
+<body style="font-family: -apple-system, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif; background-color: #f4f6f8; margin: 0; padding: 20px; color: #1f2937;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width: 720px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+  <tr>
+    <td style="padding: 32px 32px 16px 32px; background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%); color: #ffffff;">
+      <h1 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 600;">连锁周报</h1>
+      <p style="margin: 0; font-size: 14px; opacity: 0.9;">`)
+	b.WriteString(htmlEscape(rep.WeekLabel))
+	b.WriteString(` · `)
+	b.WriteString(strconv.Itoa(rep.ShopCount))
+	b.WriteString(` 家店</p>
+    </td>
+  </tr>
+
+  <!-- 跨店汇总 -->`)
+	b.WriteString(renderChainTotalsSection(rep))
+
+	b.WriteString(`
+  <!-- 跨店服务/顾客排行 -->`)
+	b.WriteString(renderChainRankSection(rep))
+
+	b.WriteString(`
+  <!-- 各店明细 -->`)
+	b.WriteString(renderChainPerShopSection(rep))
+
+	b.WriteString(`
+  <!-- 页脚 -->
+  <tr>
+    <td style="padding: 24px 32px 32px 32px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; line-height: 1.5;">
+      <p style="margin: 0 0 4px 0;">本报告由「美发店 AI Agent」自动生成</p>
+      <p style="margin: 0;">生成时间：`)
+	b.WriteString(rep.GeneratedAt.Format("2006-01-02 15:04"))
+	b.WriteString(`</p>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`)
+	return subject, b.String()
+}
+
+func renderChainTotalsSection(rep storage.ChainWeeklyReport) string {
+	completePct := formatPercent(rep.Total.CompletionRate)
+	noShowPct := formatPercent(rep.Total.NoShowRate)
+
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 24px 32px 0 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">📊 跨店总览</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #f9fafb; border-radius: 6px;">
+        <tr>
+          <td style="padding: 12px 16px; width: 33%;">
+            <div style="font-size: 12px; color: #6b7280;">总预约</div>
+            <div style="font-size: 24px; font-weight: 600; color: #1f2937;">`)
+	b.WriteString(strconv.Itoa(rep.Total.TotalAppointments))
+	b.WriteString(`</div>
+          </td>
+          <td style="padding: 12px 16px; width: 33%;">
+            <div style="font-size: 12px; color: #6b7280;">完成率</div>
+            <div style="font-size: 18px; font-weight: 600; color: #059669;">`)
+	b.WriteString(completePct)
+	b.WriteString(`</div>
+          </td>
+          <td style="padding: 12px 16px; width: 33%;">
+            <div style="font-size: 12px; color: #6b7280;">爽约率</div>
+            <div style="font-size: 18px; font-weight: 600; color: #dc2626;">`)
+	b.WriteString(noShowPct)
+	b.WriteString(`</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+func renderChainRankSection(rep storage.ChainWeeklyReport) string {
+	if len(rep.TopServices) == 0 && len(rep.TopCustomers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 24px 32px 0 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">💇 跨店服务 / 熟客排行</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size: 13px; background-color: #f9fafb; border-radius: 6px;">`)
+	if len(rep.TopServices) > 0 {
+		b.WriteString(`
+        <tr>
+          <td colspan="4" style="padding: 8px 12px; color: #6b7280; background-color: #f3f4f6; font-weight: 600;">服务 TOP</td>
+        </tr>`)
+		for i, s := range rep.TopServices {
+			b.WriteString(`
+        <tr>
+          <td style="padding: 6px 12px; color: #6b7280; width: 24px;">`)
+			b.WriteString(strconv.Itoa(i + 1))
+			b.WriteString(`</td>
+          <td style="padding: 6px 12px; color: #1f2937;">`)
+			b.WriteString(htmlEscape(s.Service))
+			b.WriteString(`</td>
+          <td style="padding: 6px 12px; text-align: right; color: #6b7280;">单数</td>
+          <td style="padding: 6px 12px; text-align: right; font-weight: 600;">`)
+			b.WriteString(strconv.Itoa(s.Count))
+			b.WriteString(`</td>
+        </tr>`)
+		}
+	}
+	if len(rep.TopCustomers) > 0 {
+		b.WriteString(`
+        <tr>
+          <td colspan="4" style="padding: 8px 12px; color: #6b7280; background-color: #f3f4f6; font-weight: 600;">熟客 TOP</td>
+        </tr>`)
+		for i, c := range rep.TopCustomers {
+			b.WriteString(`
+        <tr>
+          <td style="padding: 6px 12px; color: #6b7280; width: 24px;">`)
+			b.WriteString(strconv.Itoa(i + 1))
+			b.WriteString(`</td>
+          <td style="padding: 6px 12px; color: #1f2937;">`)
+			b.WriteString(htmlEscape(c.Name))
+			b.WriteString(`</td>
+          <td style="padding: 6px 12px; text-align: right; color: #6b7280;">到店</td>
+          <td style="padding: 6px 12px; text-align: right; font-weight: 600;">`)
+			b.WriteString(strconv.Itoa(c.Total))
+			b.WriteString(`</td>
+        </tr>`)
+		}
+	}
+	b.WriteString(`
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}
+
+func renderChainPerShopSection(rep storage.ChainWeeklyReport) string {
+	if len(rep.PerShop) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`
+  <tr>
+    <td style="padding: 24px 32px 0 32px;">
+      <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1f2937;">🏪 各店明细</h2>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size: 12px; background-color: #f9fafb; border-radius: 6px;">
+        <tr>
+          <td style="padding: 8px 12px; color: #6b7280;">店铺</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">总预约</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">完成</td>
+          <td style="padding: 8px 12px; color: #6b7280; text-align: right;">爽约</td>
+        </tr>`)
+	for _, s := range rep.PerShop {
+		b.WriteString(`
+        <tr>
+          <td style="padding: 6px 12px; color: #1f2937;">`)
+		b.WriteString(htmlEscape(s.ShopName))
+		b.WriteString(`</td>
+          <td style="padding: 6px 12px; text-align: right; font-weight: 600;">`)
+		b.WriteString(strconv.Itoa(s.TotalAppointments))
+		b.WriteString(`</td>
+          <td style="padding: 6px 12px; text-align: right;">`)
+		b.WriteString(strconv.Itoa(s.CompletedAppointments))
+		b.WriteString(`</td>
+          <td style="padding: 6px 12px; text-align: right; color: `)
+		if s.NoShowAppointments > 0 {
+			b.WriteString("#dc2626")
+		} else {
+			b.WriteString("#6b7280")
+		}
+		b.WriteString(`;">`)
+		b.WriteString(strconv.Itoa(s.NoShowAppointments))
+		b.WriteString(`</td>
+        </tr>`)
+	}
+	b.WriteString(`
+      </table>
+    </td>
+  </tr>`)
+	return b.String()
+}

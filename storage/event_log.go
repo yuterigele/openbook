@@ -31,6 +31,11 @@ const (
 	EventAppointmentRescheduled = "appointment_rescheduled" // P4 改派
 	// EventIdleSlotPush 是前缀（拼 date+customerID），便于幂等
 	EventIdleSlotPush = "idle_slot_push"
+	// EventWeeklyReport 周报触发埋点（v4.3 PRD §11.12）
+	//   - 每周一 9:00 触发，给每家店写一条
+	//   - 同一 shop 同一天只写一次（cron 频率 = 每周 1 次，本身就幂等）
+	//   - ref_id = shopID；meta = {week_start, week_end, total_appointments, recipients}
+	EventWeeklyReport = "weekly_report"
 	// EventHandoffToHuman Agent 主动把顾客转给人工客服（MVP 兜底）
 	//   - ref_id = 顾客标识（wechat_open_id 或 customer name）
 	//   - meta.reason = Agent 给出的转人工原因（"无法识别意图" / "顾客明确要求" / "业务超出 Agent 能力"）

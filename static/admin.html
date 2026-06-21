@@ -1,983 +1,2632 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>美发预约助手 · 商户后台</title>
-<style>
-  :root {
-    --bg: #f5f6f8;
-    --card: #ffffff;
-    --border: #e5e7eb;
-    --text: #1f2937;
-    --text-muted: #6b7280;
-    --primary: #2563eb;
-    --primary-hover: #1d4ed8;
-    --success: #10b981;
-    --warning: #f59e0b;
-    --danger: #ef4444;
-    --info: #3b82f6;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.6;
-  }
-  header {
-    background: var(--card);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: sticky; top: 0; z-index: 10;
-  }
-  header h1 { margin: 0; font-size: 18px; }
-  header .meta { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; gap: 12px; }
-  .live-dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    background: var(--success);
-    border-radius: 50%;
-    margin-right: 4px;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>美发预约助手 · 商户后台</title>
+  <style>
+    /* ============================================================
+       Design tokens — warm salon palette
+       ============================================================ */
+    :root {
+      --canvas: #faf9f5;
+      --surface: #ffffff;
+      --surface-2: #f5f3eb;
+      --line: #e8e6dc;
+      --line-strong: #d4d0c0;
+      --ink: #1c1917;
+      --ink-2: #44403c;
+      --ink-muted: #78716c;
+      --ink-subtle: #a8a29e;
+      --brand: #c26044;
+      --brand-hover: #a8512f;
+      --brand-soft: #faece2;
+      --olive: #788c5d;
+      --teal: #0f766e;
+      --amber: #d97706;
+      --red: #dc2626;
+      --rose: #f43f5e;
 
-  main {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 20px;
-  }
-  .toolbar {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-  }
-  .toolbar label { font-size: 13px; color: var(--text-muted); }
-  .toolbar input, .toolbar select {
-    padding: 7px 11px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 13px;
-    background: white;
-  }
-  .toolbar button {
-    padding: 7px 14px;
-    background: var(--primary);
-    color: white;
-    border: 0;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .toolbar button:hover { background: var(--primary-hover); }
-  .toolbar button.secondary {
-    background: white;
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
+      --shadow-xs: 0 1px 2px rgba(28, 25, 23, 0.04);
+      --shadow-sm: 0 2px 4px rgba(28, 25, 23, 0.04), 0 1px 2px rgba(28, 25, 23, 0.03);
+      --shadow-md: 0 4px 12px rgba(28, 25, 23, 0.06), 0 2px 4px rgba(28, 25, 23, 0.04);
+      --shadow-lg: 0 12px 32px rgba(28, 25, 23, 0.10), 0 4px 8px rgba(28, 25, 23, 0.04);
 
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 14px;
-    margin-bottom: 20px;
-  }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 18px;
-    transition: transform 0.15s;
-  }
-  .card:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-  .card .label { color: var(--text-muted); font-size: 12px; margin-bottom: 6px; }
-  .card .value { font-size: 26px; font-weight: 600; }
-  .card .value.success { color: var(--success); }
-  .card .value.warning { color: var(--warning); }
-  .card .value.danger  { color: var(--danger); }
-  .card .value.info    { color: var(--info); }
-  .card .sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+      --radius-sm: 6px;
+      --radius: 10px;
+      --radius-lg: 16px;
+      --radius-xl: 24px;
 
-  section {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 18px;
-    margin-bottom: 14px;
-  }
-  section h2 {
-    margin-top: 0;
-    font-size: 15px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  section h2 .refresh-ts { font-size: 12px; color: var(--text-muted); font-weight: normal; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  th, td {
-    text-align: left;
-    padding: 7px 10px;
-    border-bottom: 1px solid var(--border);
-  }
-  th { color: var(--text-muted); font-weight: 500; background: #fafbfc; font-size: 12px; }
-  tr.upcoming td { background: #fffbeb; }
-  tr.soon td { background: #fef2f2; font-weight: 500; }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    background: #e5e7eb;
-    color: var(--text);
-  }
-  .badge.active { background: #dbeafe; color: #1d4ed8; }
-  .badge.completed { background: #d1fae5; color: #047857; }
-  .badge.noshow { background: #fee2e2; color: #b91c1c; }
-  .badge.cancelled { background: #f3f4f6; color: #6b7280; }
-  .btn-link {
-    background: none;
-    border: 0;
-    color: var(--primary);
-    cursor: pointer;
-    padding: 0 4px;
-    font-size: 13px;
-  }
-  .btn-link:hover { text-decoration: underline; }
-  .btn-link.danger { color: var(--danger); }
-  .empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+    }
 
-  .login-overlay {
-    position: fixed; inset: 0;
-    background: rgba(15, 23, 42, 0.55);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 99;
-    backdrop-filter: blur(2px);
-  }
-  .login-box {
-    background: var(--card);
-    padding: 32px;
-    border-radius: 12px;
-    width: 360px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-  }
-  .login-box h2 { margin-top: 0; font-size: 18px; }
-  .login-box .hint { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
-  .login-box input {
-    width: 100%;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    margin: 6px 0 10px;
-    font-size: 14px;
-  }
-  .login-box button {
-    width: 100%;
-    padding: 11px;
-    background: var(--primary);
-    color: white;
-    border: 0;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 14px;
-    margin-top: 8px;
-  }
-  .login-box button:hover { background: var(--primary-hover); }
-  .login-box .err { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 4px; }
-</style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--canvas);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    button { font-family: inherit; cursor: pointer; }
+    input, select, textarea { font-family: inherit; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ============================================================
+       Utility classes
+       ============================================================ */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px; font-weight: 500;
+      transition: all .15s ease;
+      box-shadow: var(--shadow-xs);
+    }
+    .btn:hover { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn-primary { background: var(--brand); color: white; border-color: var(--brand); }
+    .btn-primary:hover { background: var(--brand-hover); border-color: var(--brand-hover); }
+    .btn-ghost { background: transparent; border-color: transparent; box-shadow: none; }
+    .btn-ghost:hover { background: var(--surface-2); }
+    .btn-danger { color: var(--red); border-color: var(--line); }
+    .btn-danger:hover { background: #fef2f2; border-color: #fecaca; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-xs);
+    }
+    .card-pad { padding: 20px; }
+    .card-pad-sm { padding: 14px 18px; }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--ink-muted); font-weight: 500; }
+    .input, .select, .textarea {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .input:focus, .select:focus, .textarea:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(194, 96, 68, 0.12);
+    }
+    .textarea { min-height: 80px; resize: vertical; font-family: inherit; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px; font-weight: 500;
+      background: var(--surface-2);
+      color: var(--ink-2);
+      white-space: nowrap;
+    }
+    .badge::before {
+      content: ''; display: inline-block;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: currentColor; opacity: .55;
+    }
+    .badge::before { display: none; } /* strip the dot, cleaner */
+    .badge-active { background: #ecfdf5; color: #047857; }
+    .badge-completed { background: #f0fdf4; color: #166534; }
+    .badge-noshow { background: #fef2f2; color: var(--red); }
+    .badge-cancelled { background: var(--surface-2); color: var(--ink-muted); }
+    .badge-warning { background: #fffbeb; color: var(--amber); }
+    .badge-info { background: #f0fdfa; color: var(--teal); }
+
+    .table {
+      width: 100%; border-collapse: separate; border-spacing: 0;
+      font-size: 13px;
+    }
+    .table thead th {
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+    }
+    .table tbody td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--ink-2);
+    }
+    .table tbody tr:last-child td { border-bottom: 0; }
+    .table tbody tr { transition: background .12s; }
+    .table tbody tr:hover { background: #fafaf5; }
+    .table .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table .mono { font-family: var(--font-mono); font-size: 12px; }
+
+    /* ============================================================
+       Layout
+       ============================================================ */
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 100dvh;
+    }
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      display: flex; flex-direction: column;
+      position: sticky; top: 0;
+      height: 100dvh;
+    }
+    .sidebar-brand {
+      display: flex; align-items: center; gap: 10px;
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand-mark {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--brand) 0%, var(--brand-hover) 100%);
+      display: grid; place-items: center;
+      color: white;
+      box-shadow: var(--shadow-sm);
+    }
+    .brand-mark svg { width: 18px; height: 18px; }
+    .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+    .brand-text .t1 { font-size: 14px; font-weight: 600; color: var(--ink); }
+    .brand-text .t2 { font-size: 11px; color: var(--ink-muted); }
+
+    .nav { padding: 12px 8px; flex: 1; overflow-y: auto; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      border-radius: var(--radius);
+      color: var(--ink-2);
+      font-size: 13px; font-weight: 500;
+      cursor: pointer;
+      transition: all .12s;
+      user-select: none;
+    }
+    .nav-item:hover { background: var(--surface-2); color: var(--ink); }
+    .nav-item.active { background: var(--brand-soft); color: var(--brand); }
+    .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .nav-item .badge { margin-left: auto; padding: 0 6px; font-size: 10px; min-width: 18px; text-align: center; }
+
+    .sidebar-foot {
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .avatar {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      color: var(--ink-2);
+      display: grid; place-items: center;
+      font-size: 13px; font-weight: 600;
+      flex-shrink: 0;
+    }
+    .user-info { flex: 1; min-width: 0; }
+    .user-info .name { font-size: 13px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .user-info .role { font-size: 11px; color: var(--ink-muted); }
+    .icon-btn {
+      width: 28px; height: 28px;
+      border: 0; background: transparent;
+      border-radius: 6px;
+      color: var(--ink-muted);
+      display: grid; place-items: center;
+      transition: all .12s;
+    }
+    .icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+
+    .main { display: flex; flex-direction: column; min-width: 0; }
+
+    .topbar {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; gap: 16px;
+      padding: 14px 24px;
+      background: rgba(250, 249, 245, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--line);
+    }
+    .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-muted); }
+    .crumbs .sep { color: var(--ink-subtle); }
+    .crumbs .current { color: var(--ink); font-weight: 500; }
+    .topbar .spacer { flex: 1; }
+    .live-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: 11px; color: var(--ink-muted);
+    }
+    .live-pill .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--olive);
+      animation: breathe 2.4s ease-in-out infinite;
+    }
+    @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    .content { padding: 24px; flex: 1; }
+    .view-head { margin-bottom: 20px; }
+    .view-head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+    .view-head p { margin: 4px 0 0; color: var(--ink-muted); font-size: 13px; }
+
+    /* ============================================================
+       KPI grid
+       ============================================================ */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .kpi {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      box-shadow: var(--shadow-xs);
+      transition: all .15s;
+    }
+    .kpi:hover { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+    .kpi .label { font-size: 12px; color: var(--ink-muted); font-weight: 500; }
+    .kpi .value { margin-top: 4px; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .kpi .sub { margin-top: 6px; font-size: 12px; color: var(--ink-muted); }
+    .kpi.alert { border-color: rgba(220, 38, 38, 0.2); background: linear-gradient(180deg, #fffaf9 0%, var(--surface) 60%); }
+    .kpi.success { border-color: rgba(120, 140, 93, 0.25); }
+
+    .section { margin-top: 24px; }
+    .section-head {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 12px;
+    }
+    .section-head h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+    .section-head .sub { font-size: 12px; color: var(--ink-muted); }
+    .section-head .spacer { flex: 1; }
+
+    /* ============================================================
+       Bar chart (top hours / barbers)
+       ============================================================ */
+    .bar-list { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+    .bar-row {
+      display: grid; grid-template-columns: 90px 1fr 50px;
+      align-items: center; gap: 12px;
+      font-size: 13px;
+    }
+    .bar-row .name { color: var(--ink-2); font-weight: 500; }
+    .bar-row .bar {
+      height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden;
+    }
+    .bar-row .fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--brand) 0%, #e89175 100%);
+      border-radius: 999px;
+      transition: width .4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .bar-row .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-muted); }
+
+    /* ============================================================
+       Upcoming list
+       ============================================================ */
+    .upcoming-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 10px;
+    }
+    .upcoming-card {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      transition: all .15s;
+    }
+    .upcoming-card:hover { box-shadow: var(--shadow-sm); border-color: var(--line-strong); }
+    .upcoming-card.urgent {
+      border-color: rgba(220, 38, 38, 0.25);
+      background: linear-gradient(135deg, #fff8f6 0%, var(--surface) 50%);
+    }
+    .upcoming-card.soon {
+      border-color: rgba(217, 119, 6, 0.25);
+      background: linear-gradient(135deg, #fffaf0 0%, var(--surface) 50%);
+    }
+    .upcoming-card .time-block {
+      flex-shrink: 0;
+      text-align: center;
+      padding: 4px 10px;
+      background: var(--surface-2);
+      border-radius: 8px;
+    }
+    .upcoming-card.urgent .time-block { background: #fee2e2; color: var(--red); }
+    .upcoming-card.soon .time-block { background: #fef3c7; color: var(--amber); }
+    .upcoming-card .time-block .t { font-size: 18px; font-weight: 600; line-height: 1; }
+    .upcoming-card .time-block .m { font-size: 10px; color: inherit; opacity: 0.7; margin-top: 2px; }
+    .upcoming-card .body { flex: 1; min-width: 0; }
+    .upcoming-card .body .name { font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .upcoming-card .body .meta { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+    .upcoming-card .dist { font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
+
+    /* ============================================================
+       Modals
+       ============================================================ */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 50;
+      background: rgba(28, 25, 23, 0.45);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: grid; place-items: center;
+      padding: 20px;
+      animation: fadeIn .15s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .modal {
+      background: var(--surface);
+      border-radius: var(--radius-lg);
+      width: 100%; max-width: 440px;
+      box-shadow: var(--shadow-lg);
+      animation: scaleIn .18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .modal.lg { max-width: 560px; }
+    @keyframes scaleIn {
+      from { transform: scale(0.96); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .modal-head {
+      display: flex; align-items: center; gap: 10px;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+    }
+    .modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    .modal-head .spacer { flex: 1; }
+    .modal-body { padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+    .modal-foot {
+      padding: 14px 22px;
+      border-top: 1px solid var(--line);
+      display: flex; justify-content: flex-end; gap: 8px;
+      background: var(--canvas);
+      border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    }
+
+    /* ============================================================
+       Login
+       ============================================================ */
+    .login-page {
+      min-height: 100dvh;
+      display: grid;
+      grid-template-columns: 1fr;
+      place-items: center;
+      padding: 20px;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(194, 96, 68, 0.06) 0%, transparent 40%),
+        radial-gradient(circle at 80% 100%, rgba(120, 140, 93, 0.06) 0%, transparent 40%),
+        var(--canvas);
+    }
+    .login-card {
+      width: 100%; max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      padding: 32px;
+      box-shadow: var(--shadow-md);
+    }
+    .login-card .brand {
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+      margin-bottom: 24px;
+    }
+    .login-card .brand .mark {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--brand) 0%, var(--brand-hover) 100%);
+      display: grid; place-items: center;
+      color: white;
+      box-shadow: var(--shadow-md);
+    }
+    .login-card .brand .mark svg { width: 26px; height: 26px; }
+    .login-card h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .login-card .sub { font-size: 12px; color: var(--ink-muted); }
+
+    .err-banner {
+      padding: 10px 12px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: var(--red);
+      border-radius: var(--radius);
+      font-size: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    /* ============================================================
+       Empty / loading
+       ============================================================ */
+    .empty {
+      padding: 36px 20px;
+      text-align: center;
+      color: var(--ink-muted);
+    }
+    .empty .icon { width: 40px; height: 40px; margin: 0 auto 12px; color: var(--ink-subtle); }
+    .empty .title { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+    .empty .hint { font-size: 12px; margin-top: 4px; }
+
+    .skel {
+      background: linear-gradient(90deg, var(--surface-2) 0%, #ede9dc 50%, var(--surface-2) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+      border-radius: var(--radius-sm);
+    }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+    /* ============================================================
+       Filter bar
+       ============================================================ */
+    .filterbar {
+      display: flex; align-items: flex-end; gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .filterbar .field { min-width: 140px; }
+
+    /* ============================================================
+       Responsive
+       ============================================================ */
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar {
+        position: relative;
+        height: auto;
+        flex-direction: row;
+        align-items: center;
+        padding: 0;
+        overflow-x: auto;
+      }
+      .sidebar-brand { border-bottom: 0; border-right: 1px solid var(--line); padding: 12px 16px; flex-shrink: 0; }
+      .nav { display: flex; padding: 8px; gap: 4px; flex: 1; overflow-x: auto; }
+      .nav-item { white-space: nowrap; padding: 7px 10px; font-size: 12px; }
+      .nav-item .badge { display: none; }
+      .sidebar-foot { display: none; }
+      .content { padding: 16px; }
+    }
+
+    /* Scrollbar — make it warm */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 10px; border: 2px solid var(--canvas); }
+    ::-webkit-scrollbar-thumb:hover { background: var(--ink-subtle); }
+
+    .hidden { display: none !important; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    .grow { flex: 1; }
+    .text-muted { color: var(--ink-muted); }
+    .text-subtle { color: var(--ink-subtle); }
+    .text-mono { font-family: var(--font-mono); font-size: 12px; }
+    .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; } .mt-4 { margin-top: 16px; }
+
+    /* ============================================================
+       v4.4 新增：表单 / 标签 / handoff / service / plan pill
+       ============================================================ */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    .kv-list {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      row-gap: 10px;
+      column-gap: 16px;
+      font-size: 13px;
+    }
+    .kv-list .k { color: var(--ink-muted); }
+    .kv-list .v { color: var(--ink); }
+    .kv-list .v.mono { font-family: var(--font-mono); }
+
+    .tag-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px; font-weight: 500;
+      background: var(--surface-2);
+      color: var(--ink-2);
+      border: 1px solid var(--line);
+      line-height: 1.5;
+    }
+    .tag-chip.tag-vip { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+    .tag-chip.tag-frequent { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+    .tag-chip.tag-blacklist { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+    .tag-chip.tag-new { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+    .tag-chip.removable { cursor: pointer; }
+    .tag-chip.removable:hover { background: #fafaf5; }
+    .tag-chip .x { color: var(--ink-muted); font-weight: 600; }
+
+    .handoff-list { display: flex; flex-direction: column; gap: 10px; }
+    .handoff-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--amber);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 16px;
+      align-items: start;
+    }
+    .handoff-card .reason { font-weight: 500; color: var(--ink); }
+    .handoff-card .meta { font-size: 12px; color: var(--ink-muted); }
+    .handoff-card .ts { font-family: var(--font-mono); font-size: 11px; color: var(--ink-subtle); }
+    .handoff-card .msg {
+      grid-column: 1 / -1;
+      margin-top: 6px;
+      padding: 8px 10px;
+      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      color: var(--ink-2);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .plan-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px; font-weight: 600;
+      background: var(--brand-soft);
+      color: var(--brand);
+    }
+    .plan-pill.plan-pro { background: #eff6ff; color: #1d4ed8; }
+    .plan-pill.plan-flagship { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; }
+    .plan-pill.plan-expired { background: #fef2f2; color: var(--red); }
+
+    .service-row {
+      display: grid;
+      grid-template-columns: 1fr 90px 100px 110px;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .service-row:last-child { border-bottom: 0; }
+    .service-row.inactive { opacity: 0.5; }
+    .service-row .name { font-weight: 500; color: var(--ink); }
+    .service-row .price { color: var(--ink-muted); font-family: var(--font-mono); font-size: 12px; }
+
+    /* v4.4 轻打磨：empty + skel 更柔和 */
+    .empty {
+      padding: 48px 20px;
+      text-align: center;
+      color: var(--ink-muted);
+    }
+    .empty .icon { width: 40px; height: 40px; margin: 0 auto 12px; color: var(--ink-subtle); opacity: 0.7; }
+    .empty .title { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-top: 8px; }
+    .empty .hint { font-size: 12px; margin-top: 4px; color: var(--ink-muted); }
+
+    /* v4.4 轻打磨：filter bar 在小屏不折行 */
+    .filterbar .field { min-width: 120px; }
+  </style>
 </head>
 <body>
 
-<!-- ====== 登录层 ====== -->
-<div class="login-overlay" id="loginOverlay" style="display:none;">
-  <div class="login-box">
-    <h2>💈 商户后台登录</h2>
-    <div class="hint">首次部署默认账号：admin / admin123（登录后请立即修改密码）</div>
-    <input id="usernameInput" placeholder="用户名" autocomplete="username" />
-    <input id="passwordInput" type="password" placeholder="密码" autocomplete="current-password" />
-    <div class="err" id="loginErr"></div>
-    <button onclick="doLogin()">登 录</button>
+<!-- ============================================================
+     LOGIN SCREEN
+     ============================================================ -->
+<div id="loginView" class="login-page">
+  <form class="login-card" onsubmit="event.preventDefault(); App.doLogin();">
+    <div class="brand">
+      <div class="mark">
+        <!-- scissor icon -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+          <line x1="20" y1="4" x2="8.12" y2="15.88"/>
+          <line x1="14.47" y1="14.48" x2="20" y2="20"/>
+          <line x1="8.12" y1="8.12" x2="12" y2="12"/>
+        </svg>
+      </div>
+      <h1>商户后台</h1>
+      <span class="sub">登录查看今日预约、爽约率与续费漏斗</span>
+    </div>
+
+    <div class="field" style="margin-bottom: 12px;">
+      <label for="li_user">用户名</label>
+      <input id="li_user" class="input" type="text" autocomplete="username" placeholder="admin" required />
+    </div>
+    <div class="field" style="margin-bottom: 16px;">
+      <label for="li_pass">密码</label>
+      <input id="li_pass" class="input" type="password" autocomplete="current-password" placeholder="••••••" required />
+    </div>
+
+    <div id="loginErr" class="err-banner hidden" style="margin-bottom: 12px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span id="loginErrText"></span>
+    </div>
+
+    <button class="btn btn-primary" type="submit" id="loginBtn" style="width: 100%; justify-content: center;">
+      <span id="loginBtnText">登 录</span>
+    </button>
+
+    <p class="text-subtle" style="font-size: 11px; text-align: center; margin: 16px 0 0;">
+      首次部署默认账号 <code>admin / admin123</code>，登录后请立即改密
+    </p>
+  </form>
+</div>
+
+<!-- ============================================================
+     MAIN APP
+     ============================================================ -->
+<div id="appView" class="app hidden">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+          <line x1="20" y1="4" x2="8.12" y2="15.88"/>
+          <line x1="14.47" y1="14.48" x2="20" y2="20"/>
+          <line x1="8.12" y1="8.12" x2="12" y2="12"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <span class="t1">美发预约助手</span>
+        <span class="t2">商户工作台</span>
+      </div>
+    </div>
+
+    <nav class="nav" id="navList">
+      <a class="nav-item" data-view="dashboard" href="#dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/>
+          <rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>
+        </svg>
+        <span>实时看板</span>
+      </a>
+      <a class="nav-item" data-view="appointments" href="#appointments">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        <span>预约管理</span>
+      </a>
+      <a class="nav-item" data-view="barbers" href="#barbers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+          <circle cx="12" cy="7" r="4"/>
+        </svg>
+        <span>理发师</span>
+      </a>
+      <a class="nav-item" data-view="leaves" href="#leaves">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/>
+          <path d="M8 2v4M16 2v4"/>
+        </svg>
+        <span>请假管理</span>
+        <span class="badge badge-warning" id="activeLeavesBadge" style="display:none;">0</span>
+      </a>
+      <a class="nav-item" data-view="events" href="#events">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        <span>事件日志</span>
+      </a>
+      <a class="nav-item" data-view="handoffs" href="#handoffs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="8.5" cy="7" r="4"/>
+          <polyline points="17 11 19 13 23 9"/>
+        </svg>
+        <span>转人工</span>
+        <span class="badge badge-warning" id="handoffsBadge" style="display:none;">0</span>
+      </a>
+      <a class="nav-item" data-view="customers" href="#customers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span>顾客</span>
+      </a>
+      <a class="nav-item" data-view="services" href="#services">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="9" y1="13" x2="15" y2="13"/>
+          <line x1="9" y1="17" x2="13" y2="17"/>
+        </svg>
+        <span>服务目录</span>
+      </a>
+      <a class="nav-item" data-view="subscription" href="#subscription">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="5" width="20" height="14" rx="2"/>
+          <line x1="2" y1="10" x2="22" y2="10"/>
+        </svg>
+        <span>订阅</span>
+      </a>
+      <a class="nav-item" data-view="chain" href="#chain">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/>
+        </svg>
+        <span>多店看板</span>
+      </a>
+      <a class="nav-item" data-view="shop" href="#shop">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.13.32.21.66.21 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>店铺设置</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="avatar" id="userAvatar">A</div>
+      <div class="user-info">
+        <div class="name" id="userName">—</div>
+        <div class="role" id="userRole">—</div>
+      </div>
+      <button class="icon-btn" title="修改密码" onclick="App.openModal('password')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.13.32.21.66.21 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+      <button class="icon-btn" title="退出" onclick="App.logout()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="main">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="crumbs">
+        <span id="crumbShop">未登录</span>
+        <span class="sep">/</span>
+        <span class="current" id="crumbView">实时看板</span>
+      </div>
+      <div class="spacer"></div>
+      <span class="live-pill" id="livePill" style="display:none;">
+        <span class="dot"></span>
+        <span>看板 30s 自动刷新</span>
+      </span>
+      <button class="btn btn-ghost btn-sm" onclick="App.refreshCurrent()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        刷新
+      </button>
+    </div>
+
+    <div class="content" id="content">
+      <!-- views rendered here -->
+    </div>
   </div>
 </div>
 
-<header>
-  <h1>💈 美发预约助手 · 商户后台</h1>
-  <div class="meta">
-    <span class="live-dot"></span><span id="shopMeta">未登录</span>
-    <button class="btn-link" onclick="showChangePassword()">改密</button>
-    <button class="btn-link" onclick="logout()">退出</button>
-  </div>
-</header>
-
-<main>
-  <div class="toolbar">
-    <label>日期：<input id="dateFilter" type="date" /></label>
-    <label>状态：
-      <select id="statusFilter">
-        <option value="">全部</option>
-        <option value="active">待到店</option>
-        <option value="completed">已完成</option>
-        <option value="noshow">爽约</option>
-        <option value="cancelled">已取消</option>
-      </select>
-    </label>
-    <button onclick="loadAppointments()">查询预约</button>
-    <button class="secondary" onclick="loadDashboard()">刷新看板</button>
-    <span style="margin-left:auto;font-size:12px;color:var(--text-muted);">
-      看板 30s 自动刷新 · 即将到店 30s 自动刷新
-    </span>
-  </div>
-
-  <div class="cards" id="cards"></div>
-
-  <!-- #7: 即将到店实时区块 -->
-  <section>
-    <h2>
-      <span>🔥 即将到店（接下来 2 小时）</span>
-      <span class="refresh-ts" id="upcomingTs"></span>
-    </h2>
-    <div id="upcomingList"><div class="empty">加载中...</div></div>
-  </section>
-
-  <section>
-    <h2>
-      <span>📅 预约列表</span>
-      <span class="refresh-ts" id="apptTs"></span>
-    </h2>
-    <div id="apptList"><div class="empty">加载中...</div></div>
-  </section>
-
-  <section>
-    <h2>⏰ 热门时段 TOP 5（近 30 天）</h2>
-    <div id="topHours"></div>
-  </section>
-
-  <section>
-    <h2>👨‍💼 热门理发师（近 30 天）</h2>
-    <div id="topBarbers"></div>
-  </section>
-
-  <section id="eventsSection">
-    <h2>
-      <span>📊 续费漏斗埋点（最近 100 条）</span>
-      <select id="eventTypeFilter" style="font-size:12px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);">
-        <option value="">全部类型</option>
-        <option value="first_appointment">first_appointment</option>
-        <option value="d3_active">d3_active</option>
-        <option value="d15_active">d15_active</option>
-        <option value="d25_renew_reminder">d25_renew_reminder</option>
-        <option value="renewed">renewed</option>
-        <option value="appointment_created">appointment_created</option>
-        <option value="appointment_noshow">appointment_noshow</option>
-        <option value="appointment_cancelled">appointment_cancelled</option>
-        <option value="appointment_completed">appointment_completed</option>
-        <option value="handoff_to_human">handoff_to_human（待人工）</option>
-      </select>
-    </h2>
-    <div id="events"><div class="empty">加载中...</div></div>
-  </section>
-
-  <!-- P5 理发师管理 -->
-  <section>
-    <h2>💈 理发师管理 <button class="secondary" onclick="openAddBarberModal()" style="float:right;padding:4px 14px;font-size:13px;">+ 新增理发师</button></h2>
-    <div id="barbers"><div class="empty">加载中...</div></div>
-  </section>
-
-  <!-- P4 理发师请假 -->
-  <section>
-    <h2>🏖️ 理发师请假管理</h2>
-    <div id="leaveBarbers"><div class="empty">加载中...</div></div>
-  </section>
-</main>
-
-<!-- ====== 新增理发师弹窗（P5） ====== -->
-<div class="login-overlay" id="addBarberOverlay" style="display:none;">
-  <div class="login-box" style="max-width:480px;">
-    <h2>新增理发师</h2>
-    <label style="font-size:13px;color:var(--muted);">姓名（必填，1-32 字）</label>
-    <input id="newBarberName" type="text" placeholder="例如：Tony、Kevin" maxlength="32" />
-    <label style="font-size:13px;color:var(--muted);">技能标签（可选，逗号分隔）</label>
-    <input id="newBarberSkills" type="text" placeholder="例如：剪发,染发,烫发" maxlength="256" />
-    <div class="err" id="newBarberErr"></div>
-    <button onclick="submitNewBarber()">确认新增</button>
-    <button class="secondary" style="background:#f3f4f6;margin-top:8px;" onclick="document.getElementById('addBarberOverlay').style.display='none'">取消</button>
-  </div>
-</div>
-
-<!-- ====== 请假弹窗（P4） ====== -->
-<div class="login-overlay" id="leaveOverlay" style="display:none;">
-  <div class="login-box" style="max-width:520px;">
-    <h2>给 <span id="leaveBarberName"></span> 请假</h2>
-    <label style="font-size:13px;color:var(--muted);">开始时间（起）</label>
-    <input id="leaveStartAt" type="datetime-local" />
-    <label style="font-size:13px;color:var(--muted);">结束时间（止）</label>
-    <input id="leaveEndAt" type="datetime-local" />
-    <label style="font-size:13px;color:var(--muted);">原因</label>
-    <input id="leaveReason" type="text" placeholder="例如：生病、家中有事" />
-    <label style="font-size:13px;color:var(--muted);">处理方式</label>
-    <select id="leaveAction" style="padding:8px;border:1px solid var(--border);border-radius:4px;">
-      <option value="reschedule">改派到其他理发师（改派失败的自动取消）</option>
-      <option value="cancel">全部取消 + 通知顾客</option>
-    </select>
-    <div class="err" id="leaveErr"></div>
-    <button onclick="submitLeave()">提交</button>
-    <button class="secondary" style="background:#f3f4f6;margin-top:8px;" onclick="document.getElementById('leaveOverlay').style.display='none'">取消</button>
-  </div>
-</div>
-
-<!-- ====== 改密弹窗 ====== -->
-<div class="login-overlay" id="pwdOverlay" style="display:none;">
-  <div class="login-box">
-    <h2>修改密码</h2>
-    <input id="oldPwd" type="password" placeholder="旧密码" />
-    <input id="newPwd" type="password" placeholder="新密码（≥6 位）" />
-    <input id="newPwd2" type="password" placeholder="再次输入新密码" />
-    <div class="err" id="pwdErr"></div>
-    <button onclick="doChangePassword()">确认修改</button>
-    <button class="secondary" style="background:#f3f4f6;margin-top:8px;" onclick="document.getElementById('pwdOverlay').style.display='none'">取消</button>
-  </div>
-</div>
+<!-- ============================================================
+     MODALS
+     ============================================================ -->
+<div id="modalRoot"></div>
 
 <script>
-let TOKEN = localStorage.getItem('jwt_token') || '';
-let SHOP_ID = localStorage.getItem('shop_id') || '';
-let SHOP_NAME = localStorage.getItem('shop_name') || '';
-let DASHBOARD_TIMER = null;
-let UPCOMING_TIMER = null;
+/* ================================================================
+   App state + API client + views
+   ================================================================ */
+const App = (() => {
+  // ---------- State ----------
+  const state = {
+    token: localStorage.getItem('jwt_token') || '',
+    shopId: localStorage.getItem('shop_id') || '',
+    user: null,            // { admin_id, shop_id, role, shop }
+    view: 'dashboard',
+    loading: false,
 
-// 启动时校验 token 是否还有效
-async function bootstrap() {
-  if (!TOKEN) {
-    showLogin();
-    return;
-  }
-  try {
-    const me = await fetchJSON('/api/admin/me');
-    if (!me) { showLogin(); return; }
-    SHOP_ID = me.shop_id;
-    SHOP_NAME = me.shop && me.shop.name || SHOP_ID;
-    localStorage.setItem('shop_id', SHOP_ID);
-    localStorage.setItem('shop_name', SHOP_NAME);
-    updateMeta();
-    hideLogin();
-    loadAll();
-    startAutoRefresh();
-  } catch (e) {
-    showLogin();
-  }
-}
+    // Data caches
+    dashboard: null,
+    upcoming: [],
+    appointments: [],
+    events: [],
+    barbers: [],
+    leaves: [],
+    leavesByBarber: {},
+    chainData: null,
+    shop: null,           // v4.4 店铺信息
+    handoffs: [],         // v4.4 转人工列表
+    customers: [],        // v4.4 顾客列表
+    services: [],         // v4.4 服务目录
+    subscription: [],     // v4.4 订阅历史
 
-function showLogin() {
-  document.getElementById('loginOverlay').style.display = 'flex';
-  document.getElementById('usernameInput').focus();
-}
-function hideLogin() {
-  document.getElementById('loginOverlay').style.display = 'none';
-}
-function updateMeta() {
-  document.getElementById('shopMeta').textContent = `店铺：${SHOP_NAME}（${SHOP_ID}）`;
-}
+    // Filters
+    apptDate: todayStr(),
+    apptStatus: '',
+    eventType: '',
 
-async function doLogin() {
-  const u = document.getElementById('usernameInput').value.trim();
-  const p = document.getElementById('passwordInput').value;
-  if (!u || !p) {
-    document.getElementById('loginErr').textContent = '请填写用户名和密码';
-    return;
-  }
-  try {
-    const r = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: u, password: p })
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      document.getElementById('loginErr').textContent = err.error || ('登录失败：HTTP ' + r.status);
-      return;
+    // Modals
+    modal: null,           // { kind, data? }
+  };
+
+  // ---------- API client ----------
+  async function api(path, opts = {}) {
+    const headers = { 'Accept': 'application/json' };
+    if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+    if (opts.body && typeof opts.body !== 'string') {
+      headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(opts.body);
     }
-    const data = await r.json();
-    TOKEN = data.token;
-    SHOP_ID = data.shop_id;
-    SHOP_NAME = '';
-    localStorage.setItem('jwt_token', TOKEN);
-    localStorage.setItem('shop_id', SHOP_ID);
-    document.getElementById('passwordInput').value = '';
-
-    // 先关登录窗，再用 token 拉一次 /me 校准 store + 加载看板
-    // 失败就退回到登录窗（兜底）
-    hideLogin();
-    try {
-      await bootstrapAfterLogin();
-    } catch (e) {
-      console.error('bootstrap after login failed:', e);
+    const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+    if (r.status === 401) {
       logout();
+      throw new Error('登录已过期');
     }
-  } catch (e) {
-    document.getElementById('loginErr').textContent = '网络错误：' + e.message;
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      try { const j = JSON.parse(t); throw new Error(j.error || ('HTTP ' + r.status)); }
+      catch (e) { if (e instanceof Error) throw e; throw new Error('HTTP ' + r.status + ': ' + t.slice(0, 100)); }
+    }
+    if (r.status === 204) return null;
+    return await r.json();
   }
-}
 
-// 登录后专用的 bootstrap：一定会 hideLogin，由 doLogin 统一决定失败回退
-async function bootstrapAfterLogin() {
-  const me = await fetchJSON('/api/admin/me');
-  if (!me) throw new Error('me failed');
-  SHOP_ID = me.shop_id;
-  SHOP_NAME = (me.shop && me.shop.name) || SHOP_ID;
-  localStorage.setItem('shop_id', SHOP_ID);
-  localStorage.setItem('shop_name', SHOP_NAME);
-  updateMeta();
-  loadAll();
-  startAutoRefresh();
-}
-
-function logout() {
-  localStorage.removeItem('jwt_token');
-  localStorage.removeItem('shop_id');
-  localStorage.removeItem('shop_name');
-  TOKEN = '';
-  SHOP_ID = '';
-  SHOP_NAME = '';
-  stopAutoRefresh();
-  showLogin();
-}
-
-async function fetchJSON(url, opts = {}) {
-  if (!opts.headers) opts.headers = {};
-  opts.headers['Authorization'] = 'Bearer ' + TOKEN;
-  if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
-  if (opts.body) opts.headers['Content-Type'] = 'application/json';
-  const r = await fetch(url, opts);
-  if (r.status === 401) {
-    logout();
-    return null;
+  // ---------- Helpers ----------
+  function $(s, root = document) { return root.querySelector(s); }
+  function $$(s, root = document) { return Array.from(root.querySelectorAll(s)); }
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
   }
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error('HTTP ' + r.status + ': ' + t.slice(0, 100));
+  function todayStr() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
-  return await r.json();
-}
-
-function todayStr() {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
-}
-
-function loadAll() {
-  loadDashboard();
-  loadUpcoming();
-  loadAppointments();
-  loadEvents();
-  loadBarbers();       // P5 理发师管理
-  loadLeaveBarbers();  // P4
-}
-
-function startAutoRefresh() {
-  stopAutoRefresh();
-  // 看板 30s
-  DASHBOARD_TIMER = setInterval(() => { loadDashboard(); }, 30 * 1000);
-  // 即将到店 30s
-  UPCOMING_TIMER = setInterval(() => { loadUpcoming(); }, 30 * 1000);
-}
-function stopAutoRefresh() {
-  if (DASHBOARD_TIMER) clearInterval(DASHBOARD_TIMER);
-  if (UPCOMING_TIMER) clearInterval(UPCOMING_TIMER);
-}
-
-// ====== Dashboard ======
-async function loadDashboard() {
-  const data = await fetchJSON('/api/shop/' + encodeURIComponent(SHOP_ID) + '/dashboard');
-  if (!data) return;
-  renderCards(data);
-  renderTopHours(data.top_hours);
-  renderTopBarbers(data.top_barbers);
-}
-
-function renderCards(d) {
-  const pct = (x) => (x * 100).toFixed(1) + '%';
-  const handoffN = d.handoff_pending_today || 0;
-  // 待人工 = 0 时显示绿色"无待办"，> 0 时显示红色提示商户尽快处理
-  const handoffClass = handoffN > 0 ? 'danger' : 'success';
-  const handoffCursor = handoffN > 0 ? 'pointer' : 'default';
-  document.getElementById('cards').innerHTML = `
-    <div class="card">
-      <div class="label">今日预约</div>
-      <div class="value info">${d.today.total}</div>
-      <div class="sub">接下来 2h 还有 <strong>${d.today.upcoming || 0}</strong> 单</div>
-    </div>
-    <div class="card">
-      <div class="label">今日完成率</div>
-      <div class="value success">${pct(d.today.complete_rate)}</div>
-      <div class="sub">已完成 ${d.today.completed} / 爽约 ${d.today.noshow}</div>
-    </div>
-    <div class="card">
-      <div class="label">今日爽约率</div>
-      <div class="value danger">${pct(d.today.no_show_rate)}</div>
-      <div class="sub">cron 每 5min 自动标记</div>
-    </div>
-    <div class="card" style="cursor:${handoffCursor};" onclick="jumpToHandoffEvents()">
-      <div class="label">🤝 待人工</div>
-      <div class="value ${handoffClass}">${handoffN}</div>
-      <div class="sub">${handoffN > 0 ? '点击查看详情 ↓' : '今日无待办'}</div>
-    </div>
-    <div class="card">
-      <div class="label">本周预约</div>
-      <div class="value">${d.week.total}</div>
-      <div class="sub">完成 ${d.week.completed} / 取消 ${d.week.cancelled}</div>
-    </div>
-    <div class="card">
-      <div class="label">本月预约</div>
-      <div class="value">${d.month.total}</div>
-      <div class="sub">完成 ${d.month.completed} / 爽约 ${d.month.noshow}</div>
-    </div>
-    <div class="card">
-      <div class="label">总埋点事件</div>
-      <div class="value">${d.lifecycle_count}</div>
-      <div class="sub">续费漏斗 D+N 等</div>
-    </div>
-  `;
-}
-
-function renderTopHours(rows) {
-  const el = document.getElementById('topHours');
-  if (!rows || rows.length === 0) {
-    el.innerHTML = '<div class="empty">暂无数据</div>';
-    return;
+  function toLocalInput(d) {
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+      + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
-  const max = Math.max(...rows.map(r => r.count));
-  el.innerHTML = rows.map(r => `
-    <div style="display:flex;align-items:center;gap:12px;margin:5px 0;">
-      <div style="width:60px;color:var(--text-muted);">${r.hour}</div>
-      <div style="flex:1;background:#f3f4f6;border-radius:4px;overflow:hidden;height:16px;">
-        <div style="width:${(r.count/max*100).toFixed(1)}%;background:var(--primary);height:100%;"></div>
+  function fmtPct(x) { return (x * 100).toFixed(1) + '%'; }
+  function fmtDate(s) { return s ? esc(s) : '—'; }
+  function fmtTime(s) { return s ? esc(s.slice(0, 5)) : '—'; }
+  function fmtRelative(min) {
+    if (min < 0) return '已超时';
+    if (min < 60) return min + ' 分钟后';
+    const h = Math.floor(min / 60), m = min % 60;
+    return h + ' 小时' + (m > 0 ? ' ' + m + ' 分' : '');
+  }
+  function showToast(msg, kind = 'info') {
+    // minimal toast (top-right pill, auto-dismiss)
+    let host = document.getElementById('toastHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'toastHost';
+      host.style.cssText = 'position:fixed;top:20px;right:20px;z-index:100;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+      document.body.appendChild(host);
+    }
+    const t = document.createElement('div');
+    const color = kind === 'error' ? 'var(--red)' : kind === 'success' ? 'var(--olive)' : 'var(--ink)';
+    t.style.cssText = `background:var(--surface);border:1px solid var(--line);border-left:3px solid ${color};padding:10px 14px;border-radius:8px;box-shadow:var(--shadow-md);font-size:13px;min-width:240px;max-width:380px;animation:scaleIn .18s ease;pointer-events:auto;`;
+    t.textContent = msg;
+    host.appendChild(t);
+    setTimeout(() => { t.style.transition = 'opacity .2s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 220); }, 2800);
+  }
+
+  // ---------- View rendering ----------
+  function setView(v) {
+    state.view = v;
+    $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === v));
+    const labels = {
+      dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
+      leaves: '请假管理', events: '事件日志', chain: '多店看板',
+      handoffs: '转人工', customers: '顾客', services: '服务目录',
+      subscription: '订阅', shop: '店铺设置'
+    };
+    $('#crumbView').textContent = labels[v] || v;
+    render();
+  }
+
+  function render() {
+    const c = $('#content');
+    if (state.view === 'dashboard') c.innerHTML = renderDashboard();
+    else if (state.view === 'appointments') c.innerHTML = renderAppointments();
+    else if (state.view === 'barbers') c.innerHTML = renderBarbers();
+    else if (state.view === 'leaves') c.innerHTML = renderLeaves();
+    else if (state.view === 'events') c.innerHTML = renderEvents();
+    else if (state.view === 'chain') c.innerHTML = renderChain();
+    else if (state.view === 'handoffs') c.innerHTML = renderHandoffs();
+    else if (state.view === 'customers') c.innerHTML = renderCustomers();
+    else if (state.view === 'services') c.innerHTML = renderServices();
+    else if (state.view === 'subscription') c.innerHTML = renderSubscription();
+    else if (state.view === 'shop') c.innerHTML = renderShop();
+  }
+
+  function renderEmpty(title, hint, iconName = 'inbox') {
+    return `<div class="empty">
+      ${icon(iconName, 40)}
+      <div class="title">${esc(title)}</div>
+      ${hint ? `<div class="hint">${esc(hint)}</div>` : ''}
+    </div>`;
+  }
+
+  function renderSkeleton(rows = 4) {
+    return Array(rows).fill(0).map(() =>
+      '<div class="skel" style="height:36px;margin-bottom:8px;"></div>'
+    ).join('');
+  }
+
+  // ---------- Dashboard view ----------
+  function renderDashboard() {
+    const d = state.dashboard;
+    if (!d) {
+      return `<div class="kpi-grid">${renderSkeleton(4)}</div>
+        <div class="card card-pad section">${renderSkeleton(6)}</div>`;
+    }
+    const today = d.today || {};
+    const week = d.week || {};
+    const month = d.month || {};
+    const handoffN = d.handoff_pending_today || 0;
+    const handoffClass = handoffN > 0 ? 'alert' : 'success';
+
+    return `
+      <div class="view-head">
+        <h1>实时看板</h1>
+        <p>今天 · 本周 · 本月经营快照，30 秒自动刷新</p>
       </div>
-      <div style="width:50px;text-align:right;">${r.count}</div>
-    </div>
-  `).join('');
-}
 
-function renderTopBarbers(rows) {
-  const el = document.getElementById('topBarbers');
-  if (!rows || rows.length === 0) {
-    el.innerHTML = '<div class="empty">暂无数据</div>';
-    return;
+      <div class="kpi-grid">
+        ${kpiCard('今日预约', today.total || 0, 'info', `${today.upcoming || 0} 单将在 2 小时内到店`)}
+        ${kpiCard('今日完成率', fmtPct(today.complete_rate || 0), 'success',
+          `已完成 ${today.completed || 0} · 爽约 ${today.noshow || 0}`)}
+        ${kpiCard('今日爽约率', fmtPct(today.no_show_rate || 0),
+          (today.no_show_rate || 0) > 0.15 ? 'alert' : 'normal',
+          '每 5 分钟由 cron 自动标记')}
+        ${kpiCard('待人工处理', handoffN, handoffClass,
+          handoffN > 0 ? '点击下方"待人工"卡片查看' : '今日无待办')}
+        ${kpiCard('本周预约', week.total || 0, 'normal',
+          `完成 ${week.completed || 0} · 取消 ${week.cancelled || 0}`)}
+        ${kpiCard('本月预约', month.total || 0, 'normal',
+          `完成 ${month.completed || 0} · 爽约 ${month.noshow || 0}`)}
+        ${kpiCard('总事件数', d.lifecycle_count || 0, 'normal', '埋点事件累计')}
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <h2>即将到店（接下来 2 小时）</h2>
+          <span class="sub" id="upcomingTs"></span>
+          <span class="spacer"></span>
+        </div>
+        <div id="upcomingList">
+          ${state.upcoming.length === 0
+            ? renderEmpty('接下来 2 小时暂无预约', null, 'calendar')
+            : '<div class="upcoming-grid">' + state.upcoming.map(renderUpcomingCard).join('') + '</div>'}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>热门时段 TOP 5（近 30 天）</h2>
+            <span class="sub">按完成 + 爽约 + 待到店聚合</span>
+          </div>
+          ${renderBarList((d.top_hours || []).map(r => ({ name: r.hour, count: r.count })))}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>热门理发师（近 30 天）</h2>
+            <span class="sub">预约量降序</span>
+          </div>
+          ${renderBarList((d.top_barbers || []).map(r => ({ name: r.barber_name, count: r.count })))}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>续费漏斗 · 本月事件分布</h2>
+            <span class="sub">top 20</span>
+          </div>
+          ${renderEventFunnel(d.event_funnel_month || [])}
+        </div>
+      </div>
+    `;
   }
-  el.innerHTML = '<table><thead><tr><th>理发师</th><th>预约数</th></tr></thead><tbody>' +
-    rows.map(r => `<tr><td>${r.barber_name}</td><td>${r.count}</td></tr>`).join('') +
-    '</tbody></table>';
-}
 
-// ====== 即将到店 ======
-async function loadUpcoming() {
-  // 复用 appointments 接口查"今天 + active"，然后前端按 time 筛接下来 2h
-  const today = todayStr();
-  const data = await fetchJSON('/api/shop/' + encodeURIComponent(SHOP_ID) +
-    '/appointments?date=' + today + '&status=active');
-  if (!data) return;
-  const now = new Date();
-  const cutoff = new Date(now.getTime() + 2 * 3600 * 1000);
-  const rows = data
-    .map(a => ({ ...a, _dt: new Date(`${a.date}T${a.time}:00`) }))
-    .filter(a => a._dt >= now && a._dt <= cutoff)
-    .sort((a, b) => a._dt - b._dt);
-
-  const ts = new Date().toLocaleTimeString();
-  document.getElementById('upcomingTs').textContent = '最近刷新：' + ts;
-
-  const el = document.getElementById('upcomingList');
-  if (rows.length === 0) {
-    el.innerHTML = '<div class="empty">接下来 2 小时暂无预约</div>';
-    return;
+  function kpiCard(label, value, variant = 'normal', sub) {
+    const cls = variant === 'alert' ? 'alert' : variant === 'success' ? 'success' : '';
+    return `<div class="kpi ${cls}">
+      <div class="label">${esc(label)}</div>
+      <div class="value">${esc(value)}</div>
+      <div class="sub">${esc(sub || '')}</div>
+    </div>`;
   }
-  el.innerHTML = '<table><thead><tr><th>到店时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>距现在</th><th>操作</th></tr></thead><tbody>' +
-    rows.map(a => {
-      const mins = Math.round((a._dt - now) / 60000);
-      const cls = mins <= 15 ? 'soon' : 'upcoming';
-      const dist = mins < 60 ? mins + ' 分钟' : Math.floor(mins / 60) + 'h' + (mins % 60) + 'm';
-      return `
-        <tr class="${cls}">
-          <td><strong>${a.time}</strong></td>
-          <td>${a.barber_name}</td>
-          <td>${a.customer || ''}</td>
-          <td>${a.service}</td>
-          <td>${dist}</td>
-          <td>
-            <button class="btn-link" onclick="markCompleted('${a.id}')">完成</button>
+
+  function renderBarList(rows) {
+    if (!rows || rows.length === 0) return renderEmpty('暂无数据', null, 'chart');
+    const max = Math.max(...rows.map(r => r.count), 1);
+    return '<div class="bar-list">' + rows.map(r => `
+      <div class="bar-row">
+        <div class="name">${esc(r.name)}</div>
+        <div class="bar"><div class="fill" style="width:${(r.count / max * 100).toFixed(1)}%;"></div></div>
+        <div class="num">${r.count}</div>
+      </div>
+    `).join('') + '</div>';
+  }
+
+  function renderUpcomingCard(a) {
+    const dist = a._minutes;
+    const cls = dist <= 15 ? 'urgent' : dist <= 60 ? 'soon' : '';
+    const [h, m] = a.time.split(':');
+    return `<div class="upcoming-card ${cls}">
+      <div class="time-block">
+        <div class="t">${h}:${m}</div>
+        <div class="m">${fmtRelative(dist)}</div>
+      </div>
+      <div class="body">
+        <div class="name">${esc(a.barber_name)} · ${esc(a.customer || '匿名顾客')}</div>
+        <div class="meta">${esc(a.service || '')}</div>
+      </div>
+      <button class="btn btn-sm" onclick="App.markCompleted('${a.id}')">完成</button>
+    </div>`;
+  }
+
+  function renderEventFunnel(rows) {
+    if (!rows.length) return renderEmpty('本月暂无埋点', '续费漏斗事件会在用户预约、爽约、续费等节点写入', 'activity');
+    const max = Math.max(...rows.map(r => r.count), 1);
+    return '<div class="bar-list">' + rows.map(r => `
+      <div class="bar-row">
+        <div class="name text-mono">${esc(r.event_type)}</div>
+        <div class="bar"><div class="fill" style="width:${(r.count / max * 100).toFixed(1)}%;"></div></div>
+        <div class="num">${r.count}</div>
+      </div>
+    `).join('') + '</div>';
+  }
+
+  // ---------- Appointments view ----------
+  function renderAppointments() {
+    return `
+      <div class="view-head">
+        <h1>预约管理</h1>
+        <p>按日期 / 状态筛选预约，可标记完成或取消</p>
+      </div>
+      <div class="filterbar">
+        <div class="field">
+          <label>日期</label>
+          <input class="input" type="date" id="apptDate" value="${esc(state.apptDate)}" />
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <select class="select" id="apptStatus">
+            <option value="">全部</option>
+            <option value="active">待到店</option>
+            <option value="completed">已完成</option>
+            <option value="noshow">爽约</option>
+            <option value="cancelled">已取消</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="App.loadAppointments()">查询</button>
+        <button class="btn btn-ghost" onclick="App.resetApptFilters()">重置</button>
+        <span class="spacer"></span>
+        <span class="text-muted" id="apptTs" style="font-size:12px;"></span>
+      </div>
+
+      <div class="card">
+        <div id="apptTable" style="overflow-x:auto;">
+          ${state.appointments.length === 0
+            ? renderEmpty('点击「查询」加载预约', null, 'search')
+            : renderApptTable(state.appointments)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderApptTable(rows) {
+    return `<table class="table">
+      <thead><tr>
+        <th>日期</th><th>时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>状态</th><th class="num">操作</th>
+      </tr></thead>
+      <tbody>${rows.map(a => `
+        <tr>
+          <td>${fmtDate(a.date)}</td>
+          <td class="text-mono">${fmtTime(a.time)}</td>
+          <td>${esc(a.barber_name)}</td>
+          <td>${esc(a.customer || '—')}</td>
+          <td>${esc(a.service || '—')}</td>
+          <td><span class="badge badge-${esc(a.status)}">${statusLabel(a.status)}</span></td>
+          <td class="num">
+            ${a.status === 'active' ? `
+              <button class="btn btn-sm" onclick="App.markCompleted('${a.id}')">完成</button>
+              <button class="btn btn-sm btn-danger" onclick="App.markCancelled('${a.id}')">取消</button>
+            ` : '—'}
           </td>
         </tr>
-      `;
-    }).join('') + '</tbody></table>';
-}
-
-// ====== 预约列表 ======
-async function loadAppointments() {
-  const date = document.getElementById('dateFilter').value || todayStr();
-  const status = document.getElementById('statusFilter').value;
-  let url = '/api/shop/' + encodeURIComponent(SHOP_ID) + '/appointments?date=' + date;
-  if (status) url += '&status=' + encodeURIComponent(status);
-  const data = await fetchJSON(url);
-  document.getElementById('apptTs').textContent = '最近刷新：' + new Date().toLocaleTimeString();
-  const el = document.getElementById('apptList');
-  if (!data) return;
-  if (!data.length) {
-    el.innerHTML = '<div class="empty">该条件下暂无预约</div>';
-    return;
+      `).join('')}</tbody>
+    </table>`;
   }
-  el.innerHTML = '<table><thead><tr><th>日期</th><th>时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
-    data.map(a => `
-      <tr>
-        <td>${a.date}</td>
-        <td>${a.time}</td>
-        <td>${a.barber_name}</td>
-        <td>${a.customer || ''}</td>
-        <td>${a.service}</td>
-        <td><span class="badge ${a.status}">${a.status}</span></td>
-        <td>
-          ${a.status === 'active' ? `
-            <button class="btn-link" onclick="markCompleted('${a.id}')">完成</button>
-            <button class="btn-link danger" onclick="markCancelled('${a.id}')">取消</button>
-          ` : '—'}
-        </td>
-      </tr>
-    `).join('') + '</tbody></table>';
-}
 
-async function markCompleted(id) {
-  if (!confirm('标记为已完成？')) return;
-  await fetchJSON('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: id } });
-  loadAll();
-}
-
-async function markCancelled(id) {
-  if (!confirm('确认取消？')) return;
-  await fetchJSON('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: id, reason: 'admin manual' } });
-  loadAll();
-}
-
-// ====== 事件 ======
-async function loadEvents() {
-  const t = document.getElementById('eventTypeFilter').value;
-  let url = '/api/admin/events?limit=100';
-  if (t) url += '&event_type=' + encodeURIComponent(t);
-  const data = await fetchJSON(url);
-  const el = document.getElementById('events');
-  if (!data) return;
-  if (!data.length) {
-    el.innerHTML = '<div class="empty">暂无事件</div>';
-    return;
+  function statusLabel(s) {
+    return ({ active: '待到店', completed: '已完成', noshow: '爽约', cancelled: '已取消' })[s] || s || '—';
   }
-  el.innerHTML = '<table><thead><tr><th>时间</th><th>事件</th><th>关联 ID</th><th>备注</th></tr></thead><tbody>' +
-    data.map(e => `
-      <tr>
-        <td>${new Date(e.created_at).toLocaleString()}</td>
-        <td><span class="badge">${e.event_type}</span></td>
-        <td><code>${e.ref_id || ''}</code></td>
-        <td><code style="font-size:11px;">${(e.meta || '').slice(0, 80)}</code></td>
-      </tr>
-    `).join('') + '</tbody></table>';
-}
 
-// jumpToHandoffEvents 从 dashboard 的"待人工"卡片点击调过来
-//   - 把下拉框切到 handoff_to_human
-//   - 滚到事件区
-//   - 重载事件列表
-function jumpToHandoffEvents() {
-  const filter = document.getElementById('eventTypeFilter');
-  if (!filter) return;
-  filter.value = 'handoff_to_human';
-  const section = document.getElementById('eventsSection');
-  if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  loadEvents();
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('dateFilter').value = todayStr();
-  document.getElementById('eventTypeFilter').addEventListener('change', loadEvents);
-  document.getElementById('usernameInput').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('passwordInput').focus(); });
-  document.getElementById('passwordInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-  bootstrap();
-});
-
-// ====== 改密 ======
-function showChangePassword() {
-  document.getElementById('pwdOverlay').style.display = 'flex';
-  document.getElementById('oldPwd').value = '';
-  document.getElementById('newPwd').value = '';
-  document.getElementById('newPwd2').value = '';
-  document.getElementById('pwdErr').textContent = '';
-}
-async function doChangePassword() {
-  const old = document.getElementById('oldPwd').value;
-  const n1 = document.getElementById('newPwd').value;
-  const n2 = document.getElementById('newPwd2').value;
-  if (!old || !n1 || !n2) { document.getElementById('pwdErr').textContent = '请填写完整'; return; }
-  if (n1 !== n2) { document.getElementById('pwdErr').textContent = '两次新密码不一致'; return; }
-  if (n1.length < 6) { document.getElementById('pwdErr').textContent = '新密码至少 6 位'; return; }
-  const r = await fetch('/api/admin/change-password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
-    body: JSON.stringify({ old_password: old, new_password: n1 })
-  });
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({}));
-    document.getElementById('pwdErr').textContent = e.error || '修改失败';
-    return;
+  // ---------- Barbers view ----------
+  function renderBarbers() {
+    return `
+      <div class="view-head">
+        <h1>理发师</h1>
+        <p>管理本店在职理发师，新增加入即可用于预约分配</p>
+      </div>
+      <div class="row" style="margin-bottom:14px;">
+        <button class="btn btn-primary" onclick="App.openModal('newBarber')">
+          ${icon('plus', 14)} 新增理发师
+        </button>
+        <span class="spacer"></span>
+        <label class="row" style="font-size:12px;color:var(--ink-muted);gap:6px;">
+          <input type="checkbox" id="showInactive" onchange="App.loadBarbers()" /> 显示已停用
+        </label>
+      </div>
+      <div class="card" id="barbersCard">
+        <div style="padding:20px;">${renderSkeleton(4)}</div>
+      </div>
+    `;
   }
-  alert('密码已修改，请用新密码重新登录');
-  logout();
-}
 
-// ========== P5 理发师管理 ==========
+  function renderBarberRows() {
+    const rows = state.barbers;
+    if (!rows.length) return renderEmpty('还没有理发师', '点击右上角"新增理发师"开始', 'user-plus');
+    return `<table class="table">
+      <thead><tr><th>姓名</th><th>技能</th><th>状态</th><th>创建时间</th><th class="num">操作</th></tr></thead>
+      <tbody>${rows.map(b => `
+        <tr ${b.active ? '' : 'style="opacity:.6;"'}>
+          <td><strong>${esc(b.name)}</strong></td>
+          <td class="text-muted">${esc(b.skills || '—')}</td>
+          <td>${b.active
+              ? '<span class="badge badge-active">在职</span>'
+              : '<span class="badge badge-cancelled">已停用</span>'}</td>
+          <td class="text-muted text-mono">${esc((b.created_at || '').slice(0, 16).replace('T', ' '))}</td>
+          <td class="num">
+            ${b.active ? `
+              <button class="btn btn-sm" onclick="App.openLeaveModal('${b.id}','${esc(b.name)}')">请假</button>
+              <button class="btn btn-sm btn-danger" onclick="App.deleteBarber('${b.id}','${esc(b.name)}')">停用</button>
+            ` : `
+              <button class="btn btn-sm" onclick="App.activateBarber('${b.id}','${esc(b.name)}')">恢复</button>
+            `}
+          </td>
+        </tr>
+      `).join('')}</tbody>
+    </table>`;
+  }
 
-let BARBERS_CACHE = [];
+  // ---------- Leaves view ----------
+  function renderLeaves() {
+    return `
+      <div class="view-head">
+        <h1>请假管理</h1>
+        <p>理发师请假会自动通知受影响的顾客，可在开始时间前撤销</p>
+      </div>
+      <div class="card" id="leavesCard">
+        <div style="padding:20px;">${renderSkeleton(4)}</div>
+      </div>
+    `;
+  }
 
-// 加载本店所有理发师（含 inactive）
-async function loadBarbers() {
-  const el = document.getElementById('barbers');
-  if (!el) return;
-  try {
-    const r = await fetch('/api/admin/barbers?include_inactive=true', {
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    if (!r.ok) {
-      el.innerHTML = '<div class="empty">加载失败（HTTP ' + r.status + '）</div>';
-      return;
+  function renderLeaveRows() {
+    const barbers = state.barbers.filter(b => b.active);
+    if (!barbers.length) {
+      return '<div style="padding:20px;">' + renderEmpty('还没有在职理发师', '请先到「理发师」页添加', 'user') + '</div>';
     }
-    const list = await r.json();
-    BARBERS_CACHE = Array.isArray(list) ? list : [];
-    if (BARBERS_CACHE.length === 0) {
-      el.innerHTML = '<div class="empty">还没有理发师，点右上角"+ 新增理发师"开始</div>';
-      return;
-    }
-    el.innerHTML = '<table><thead><tr><th>姓名</th><th>技能</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>' +
-      BARBERS_CACHE.map(b => {
-        const statusBadge = b.active
-          ? '<span style="color:#16a34a;">🟢 在职</span>'
-          : '<span style="color:#9ca3af;">⚪ 已停用</span>';
-        const skills = b.skills || '<span style="color:var(--muted);">—</span>';
-        const createdAt = b.created_at ? formatDT(b.created_at) : '—';
-        const actions = b.active
-          ? `<button onclick="openLeaveModal('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 10px;font-size:12px;">请假</button>
-             <button onclick="deleteBarber('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 10px;font-size:12px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;">删除</button>`
-          : `<button onclick="activateBarber('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 10px;font-size:12px;background:#dcfce7;color:#166534;border:1px solid #bbf7d0;">恢复</button>`;
-        const rowStyle = b.active ? '' : ' style="opacity:0.7;"';
-        return `<tr${rowStyle}>
-          <td><strong>${escapeHtml(b.name)}</strong></td>
-          <td style="font-size:12px;color:var(--muted);">${escapeHtml(skills)}</td>
-          <td>${statusBadge}</td>
-          <td style="font-size:12px;color:var(--muted);">${escapeHtml(createdAt)}</td>
-          <td>${actions}</td>
-        </tr>`;
-      }).join('') + '</tbody></table>';
-  } catch (e) {
-    el.innerHTML = '<div class="empty">加载异常: ' + escapeHtml(e.message) + '</div>';
-  }
-}
-
-function openAddBarberModal() {
-  document.getElementById('newBarberName').value = '';
-  document.getElementById('newBarberSkills').value = '';
-  document.getElementById('newBarberErr').textContent = '';
-  document.getElementById('addBarberOverlay').style.display = 'flex';
-  setTimeout(() => document.getElementById('newBarberName').focus(), 50);
-}
-
-async function submitNewBarber() {
-  const name = document.getElementById('newBarberName').value.trim();
-  const skills = document.getElementById('newBarberSkills').value.trim();
-  const errEl = document.getElementById('newBarberErr');
-  errEl.textContent = '';
-  if (!name) {
-    errEl.textContent = '请填写姓名';
-    return;
-  }
-  try {
-    const r = await fetch('/api/admin/barbers', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, skills })
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      errEl.textContent = body.error || '创建失败';
-      return;
-    }
-    document.getElementById('addBarberOverlay').style.display = 'none';
-    loadBarbers();
-  } catch (e) {
-    errEl.textContent = '网络异常: ' + e.message;
-  }
-}
-
-async function deleteBarber(barberId, barberName) {
-  if (!confirm('确定删除理发师「' + barberName + '」吗？\n（有未来预约会被拒绝，请先取消或请假）')) return;
-  try {
-    const r = await fetch('/api/admin/barbers/' + encodeURIComponent(barberId), {
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      alert(body.error || '删除失败');
-      return;
-    }
-    loadBarbers();
-  } catch (e) {
-    alert('网络异常: ' + e.message);
-  }
-}
-
-async function activateBarber(barberId, barberName) {
-  if (!confirm('确定恢复理发师「' + barberName + '」吗？')) return;
-  try {
-    const r = await fetch('/api/admin/barbers/' + encodeURIComponent(barberId) + '/activate', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      alert(body.error || '恢复失败');
-      return;
-    }
-    loadBarbers();
-  } catch (e) {
-    alert('网络异常: ' + e.message);
-  }
-}
-
-// ========== P4 理发师请假 ==========
-
-let CURRENT_LEAVE_BARBER_ID = null;
-
-// 加载本店 active 理发师 + 每个的请假历史（取最近 5 条）
-//   P5 改造：直接调 /api/admin/barbers 拿 active barber，不再 workaround 聚合 appointments。
-async function loadLeaveBarbers() {
-  const el = document.getElementById('leaveBarbers');
-  if (!el) return;
-  try {
-    // 1) 拉所有 active 理发师
-    const resp = await fetch('/api/admin/barbers?include_inactive=false', {
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    if (!resp.ok) {
-      el.innerHTML = '<div class="empty">加载失败</div>';
-      return;
-    }
-    const barbers = await resp.json();
-    if (!Array.isArray(barbers) || barbers.length === 0) {
-      el.innerHTML = '<div class="empty">还没有理发师，请先到「理发师管理」里添加</div>';
-      return;
-    }
-    // 2) 并发查每个理发师的最近 5 条 leave
-    const leavesByBarber = {};
-    await Promise.all(barbers.map(async (b) => {
-      const r = await fetch('/api/admin/barber/' + b.id + '/leaves?limit=5', {
-        headers: { 'Authorization': 'Bearer ' + TOKEN }
-      });
-      if (r.ok) {
-        leavesByBarber[b.id] = await r.json();
-      }
-    }));
-    el.innerHTML = '<table><thead><tr><th>理发师</th><th>请假历史（近 5 条）</th><th>操作</th></tr></thead><tbody>' +
-      barbers.map(b => {
-        const leaves = leavesByBarber[b.id] || [];
+    return `<table class="table">
+      <thead><tr><th>理发师</th><th>最近请假</th><th class="num">操作</th></tr></thead>
+      <tbody>${barbers.map(b => {
+        const leaves = (state.leavesByBarber || {})[b.id] || [];
         const hist = leaves.length === 0
-          ? '<span style="color:var(--muted);">无</span>'
-          : '<ul style="margin:0;padding-left:18px;">' + leaves.map(l => {
-              const s = l.status === 'active' ? '🟢' : (l.status === 'cancelled' ? '⚪' : '⚫');
-              const action = l.action === 'cancel' ? '取消' : '改派';
-              return `<li>${s} ${formatDT(l.start_at)} → ${formatDT(l.end_at)}（${action}，影响 ${l.affected_count} 单）</li>`;
-            }).join('') + '</ul>';
+          ? '<span class="text-muted">无请假记录</span>'
+          : '<div class="text-mono" style="font-size:12px;line-height:1.7;">' + leaves.map(l => {
+              const st = l.status === 'active' ? '<span class="badge badge-warning">进行中</span>'
+                       : l.status === 'cancelled' ? '<span class="badge badge-cancelled">已撤销</span>'
+                       : '<span class="badge badge-cancelled">已过期</span>';
+              const act = l.action === 'cancel' ? '取消' : '改派';
+              return `${st} ${(l.start_at || '').slice(0, 16).replace('T', ' ')} → ${(l.end_at || '').slice(11, 16)}（${act} · 影响 ${l.affected_count || 0}）`;
+            }).join('<br/>') + '</div>';
         return `<tr>
-          <td><strong>${escapeHtml(b.name)}</strong></td>
-          <td style="font-size:12px;">${hist}</td>
-          <td><button onclick="openLeaveModal('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 12px;font-size:13px;">请假</button></td>
+          <td><strong>${esc(b.name)}</strong></td>
+          <td>${hist}</td>
+          <td class="num">
+            <button class="btn btn-sm btn-primary" onclick="App.openLeaveModal('${b.id}','${esc(b.name)}')">请假</button>
+          </td>
         </tr>`;
-      }).join('') + '</tbody></table>';
-  } catch (e) {
-    el.innerHTML = '<div class="empty">加载异常: ' + escapeHtml(e.message) + '</div>';
+      }).join('')}</tbody>
+    </table>`;
   }
-}
 
-function openLeaveModal(barberId, barberName) {
-  CURRENT_LEAVE_BARBER_ID = barberId;
-  document.getElementById('leaveBarberName').textContent = barberName;
-  // 默认值：今天 14:00 起，到明天 18:00 止
-  const now = new Date();
-  const tomorrow = new Date(now.getTime() + 24*3600*1000);
-  document.getElementById('leaveStartAt').value = toLocalInput(now);
-  document.getElementById('leaveEndAt').value = toLocalInput(tomorrow);
-  document.getElementById('leaveReason').value = '';
-  document.getElementById('leaveAction').value = 'reschedule';
-  document.getElementById('leaveErr').textContent = '';
-  document.getElementById('leaveOverlay').style.display = 'flex';
-}
-
-async function submitLeave() {
-  if (!CURRENT_LEAVE_BARBER_ID) return;
-  const startAt = document.getElementById('leaveStartAt').value;
-  const endAt = document.getElementById('leaveEndAt').value;
-  const reason = document.getElementById('leaveReason').value.trim();
-  const action = document.getElementById('leaveAction').value;
-  if (!startAt || !endAt) {
-    document.getElementById('leaveErr').textContent = '请填写开始/结束时间';
-    return;
+  // ---------- Events view ----------
+  function renderEvents() {
+    return `
+      <div class="view-head">
+        <h1>事件日志</h1>
+        <p>续费漏斗、爽约、转人工等埋点事件</p>
+      </div>
+      <div class="filterbar">
+        <div class="field">
+          <label>事件类型</label>
+          <select class="select" id="eventType" onchange="App.loadEvents()">
+            <option value="">全部</option>
+            <option value="first_appointment">first_appointment</option>
+            <option value="d3_active">d3_active</option>
+            <option value="d15_active">d15_active</option>
+            <option value="d25_renew_reminder">d25_renew_reminder</option>
+            <option value="renewed">renewed</option>
+            <option value="appointment_created">appointment_created</option>
+            <option value="appointment_noshow">appointment_noshow</option>
+            <option value="appointment_cancelled">appointment_cancelled</option>
+            <option value="appointment_completed">appointment_completed</option>
+            <option value="handoff_to_human">handoff_to_human（待人工）</option>
+            <option value="barber_leave_created">barber_leave_created</option>
+            <option value="barber_leave_expired">barber_leave_expired</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="App.loadEvents()">查询</button>
+        <span class="spacer"></span>
+        <span class="text-muted" id="eventsTs" style="font-size:12px;"></span>
+      </div>
+      <div class="card">
+        <div style="overflow-x:auto;">
+          ${state.events.length === 0
+            ? '<div style="padding:20px;">' + renderEmpty('点击「查询」加载事件', null, 'activity') + '</div>'
+            : renderEventTable(state.events)}
+        </div>
+      </div>
+    `;
   }
-  if (new Date(startAt) >= new Date(endAt)) {
-    document.getElementById('leaveErr').textContent = '开始时间必须早于结束时间';
-    return;
+
+  function renderEventTable(rows) {
+    return `<table class="table">
+      <thead><tr><th>时间</th><th>事件</th><th>关联 ID</th><th>备注</th></tr></thead>
+      <tbody>${rows.map(e => `
+        <tr>
+          <td class="text-mono">${esc((e.created_at || '').slice(0, 19).replace('T', ' '))}</td>
+          <td><span class="badge">${esc(e.event_type)}</span></td>
+          <td class="text-mono">${esc(e.ref_id || '—')}</td>
+          <td class="text-mono text-muted" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc((e.meta || '').slice(0, 120))}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table>`;
   }
-  // datetime-local 没时区后缀，按本地时区构造 Date 后 toISOString
-  const r = await fetch('/api/admin/barber/' + CURRENT_LEAVE_BARBER_ID + '/leave', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
-    body: JSON.stringify({
-      start_at: new Date(startAt).toISOString(),
-      end_at: new Date(endAt).toISOString(),
-      reason, action
-    })
-  });
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({}));
-    document.getElementById('leaveErr').textContent = e.error || '提交失败';
-    return;
+
+  // ---------- Chain view ----------
+  function renderChain() {
+    const c = state.chainData;
+    if (!c) {
+      return `<div class="view-head">
+        <h1>多店看板</h1>
+        <p>连锁品牌 owner 一次性看所有门店</p>
+      </div>
+      <div class="card card-pad">${renderSkeleton(5)}</div>`;
+    }
+    const shops = c.shops || [];
+    return `
+      <div class="view-head">
+        <h1>多店看板</h1>
+        <p>${c.window || 'month'} 窗口 · 跨店聚合</p>
+      </div>
+      <div class="kpi-grid">
+        ${kpiCard('门店总数', c.total_shops || 0, 'normal', `营业中 ${c.active_shops || 0}`)}
+        ${kpiCard('总预约', c.total_appointments || 0, 'info',
+          `完成 ${c.total_completed || 0} · 爽约 ${c.total_noshow || 0}`)}
+        ${kpiCard('平均爽约率', fmtPct(c.avg_no_show_rate || 0),
+          (c.avg_no_show_rate || 0) > 0.15 ? 'alert' : 'success', '所有门店加权')}
+      </div>
+      <div class="section">
+        <div class="card card-pad">
+          <div class="section-head"><h2>各店明细</h2></div>
+          ${shops.length === 0
+            ? renderEmpty('暂无门店数据', null, 'building')
+            : `<table class="table">
+              <thead><tr><th>门店</th><th class="num">预约</th><th class="num">完成</th><th class="num">爽约</th><th class="num">爽约率</th><th class="num">完成率</th></tr></thead>
+              <tbody>${shops.map(s => `
+                <tr>
+                  <td><strong>${esc(s.name || s.id)}</strong><div class="text-muted text-mono" style="font-size:11px;">${esc(s.id)}</div></td>
+                  <td class="num">${s.total || 0}</td>
+                  <td class="num">${s.completed || 0}</td>
+                  <td class="num">${s.noshow || 0}</td>
+                  <td class="num">${fmtPct(s.no_show_rate || 0)}</td>
+                  <td class="num">${fmtPct(s.complete_rate || 0)}</td>
+                </tr>
+              `).join('')}</tbody>
+            </table>`}
+        </div>
+      </div>
+    `;
   }
-  const data = await r.json();
-  document.getElementById('leaveOverlay').style.display = 'none';
-  const msg = `请假已创建：影响 ${data.affected_count} 单预约（改派 ${data.rescheduled_count} / 取消 ${data.cancelled_count}，已通知 ${data.notified_count} 位顾客）`;
-  alert(msg);
-  loadLeaveBarbers();
-}
 
-function toLocalInput(d) {
-  // d = Date → 'YYYY-MM-DDTHH:MM' 本地时区（datetime-local 格式）
-  const pad = n => String(n).padStart(2, '0');
-  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
-    + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-}
+  // ---------- Handoffs view (v4.4 PRD §9.2) ----------
+  function renderHandoffs() {
+    const list = state.handoffs || [];
+    if (!list.length) {
+      return `<div class="view-head">
+        <h1>转人工待处理</h1>
+        <p>Agent 主动转给人工的请求，便于你直接跟进</p>
+      </div>
+      <div class="card card-pad">${renderEmpty('今天暂无转人工', '当 Agent 识别不了顾客意图或顾客明确要求时，会在这里留一条', 'inbox')}</div>`;
+    }
+    return `<div class="view-head">
+      <h1>转人工待处理</h1>
+      <p>共 ${list.length} 条，按时间倒序</p>
+    </div>
+    <div class="handoff-list">
+      ${list.map(renderHandoffCard).join('')}
+    </div>`;
+  }
 
-function formatDT(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const pad = n => String(n).padStart(2, '0');
-  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
-    + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-}
+  function renderHandoffCard(h) {
+    const ts = (h.created_at || '').slice(0, 19).replace('T', ' ');
+    const name = h.customer_name ? h.customer_name : '匿名顾客';
+    const reason = h.reason || '未填写原因';
+    return `<div class="handoff-card">
+      <div>
+        <div class="reason">${esc(name)} · ${esc(reason)}</div>
+        <div class="meta">顾客 ID：<span class="text-mono">${esc(h.customer_id || '—')}</span></div>
+      </div>
+      <div class="ts">${esc(ts)}</div>
+      ${h.last_user_message ? `<div class="msg">"${esc(h.last_user_message)}"</div>` : ''}
+    </div>`;
+  }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
-}
+  // ---------- Customers view (v4.4) ----------
+  function renderCustomers() {
+    return `<div class="view-head">
+      <h1>顾客</h1>
+      <p>本店活跃顾客（曾有过预约的）。可打 VIP / FREQUENT / BLACKLIST / NEW 标签</p>
+    </div>
+    <div class="filterbar">
+      <div class="field grow">
+        <label>搜索</label>
+        <input class="input" id="custQuery" placeholder="按姓名 / 手机号 / openid 搜索" />
+      </div>
+      <div class="field">
+        <label>标签</label>
+        <select class="select" id="custTag">
+          <option value="">全部</option>
+          <option value="VIP">VIP</option>
+          <option value="FREQUENT">FREQUENT</option>
+          <option value="BLACKLIST">BLACKLIST</option>
+          <option value="NEW">NEW</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="App.loadCustomers()">查询</button>
+      <button class="btn btn-ghost" onclick="App.resetCustFilters()">重置</button>
+      <span class="spacer"></span>
+      <span class="text-muted" id="custTs" style="font-size:12px;"></span>
+    </div>
+    <div class="card">
+      <div id="custTable" style="overflow-x:auto;">
+        <div style="padding:20px;">${renderSkeleton(4)}</div>
+      </div>
+    </div>`;
+  }
+
+  function renderCustomerRows() {
+    const rows = state.customers || [];
+    if (!rows.length) {
+      return '<div style="padding:20px;">' + renderEmpty('暂无顾客', '让 Agent 先跑起来收到预约，就会有顾客数据', 'user') + '</div>';
+    }
+    return `<table class="table">
+      <thead><tr>
+        <th>姓名</th><th>手机号</th><th>标签</th>
+        <th class="num">到店</th><th class="num">爽约</th><th class="num">晚退订</th>
+        <th>最近到店</th><th class="num">操作</th>
+      </tr></thead>
+      <tbody>${rows.map(renderCustomerRow).join('')}</tbody>
+    </table>`;
+  }
+
+  function renderCustomerRow(c) {
+    const tags = (c.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+    const tagHtml = tags.length === 0
+      ? '<span class="text-muted">—</span>'
+      : tags.map(t => `<span class="tag-chip tag-${esc(t.toLowerCase())} removable" onclick="App.removeCustTag('${esc(c.id)}','${esc(t)}')" title="点击移除">${esc(t)} <span class="x">×</span></span>`).join(' ');
+    const lastVisit = c.last_visit_at ? (c.last_visit_at || '').slice(0, 10) : '—';
+    return `<tr>
+      <td><strong>${esc(c.name || '匿名')}</strong></td>
+      <td class="text-mono">${esc(c.phone || '—')}</td>
+      <td>${tagHtml}</td>
+      <td class="num">${c.total_visits || 0}</td>
+      <td class="num">${c.no_show_count || 0}</td>
+      <td class="num">${c.late_cancel_count || 0}</td>
+      <td class="text-muted text-mono">${esc(lastVisit)}</td>
+      <td class="num">
+        <button class="btn btn-sm" onclick="App.openCustTagModal('${esc(c.id)}','${esc(c.name || '')}')">+ 标签</button>
+      </td>
+    </tr>`;
+  }
+
+  // ---------- Services view (v4.4) ----------
+  function renderServices() {
+    return `<div class="view-head">
+      <h1>服务目录</h1>
+      <p>本店可提供的服务，Agent 用它回答"你们有哪些项目"。停用后历史预约不受影响</p>
+    </div>
+    <div class="row" style="margin-bottom:14px;">
+      <button class="btn btn-primary" onclick="App.openServiceModal()">
+        ${icon('plus', 14)} 新增服务
+      </button>
+      <span class="spacer"></span>
+      <label class="row" style="font-size:12px;color:var(--ink-muted);gap:6px;">
+        <input type="checkbox" id="showInactiveService" onchange="App.loadServices()" /> 显示已下架
+      </label>
+    </div>
+    <div class="card" id="servicesCard">
+      <div style="padding:20px;">${renderSkeleton(4)}</div>
+    </div>`;
+  }
+
+  function renderServiceRows() {
+    const rows = state.services || [];
+    if (!rows.length) {
+      return '<div style="padding:20px;">' + renderEmpty('还没有服务', '点击右上角"新增服务"开始', 'plus') + '</div>';
+    }
+    const header = `<div class="service-row" style="background:var(--surface-2);font-size:11px;font-weight:600;text-transform:uppercase;color:var(--ink-muted);letter-spacing:.04em;">
+      <div>服务名</div><div>预估时长</div><div>价格区间</div><div class="num">操作</div>
+    </div>`;
+    return header + rows.map(renderServiceRow).join('');
+  }
+
+  function renderServiceRow(s) {
+    return `<div class="service-row ${s.is_active ? '' : 'inactive'}">
+      <div class="name">${esc(s.name)} ${s.is_active ? '' : '<span class="text-muted" style="font-weight:400;font-size:11px;">· 已下架</span>'}</div>
+      <div class="text-muted text-mono">${s.estimated_min || 0} 分钟</div>
+      <div class="price">${esc(s.price_range || '—')}</div>
+      <div class="num">
+        <button class="btn btn-sm" onclick="App.openServiceModal('${esc(s.id)}')">编辑</button>
+        ${s.is_active
+          ? `<button class="btn btn-sm btn-danger" onclick="App.deactivateService('${esc(s.id)}','${esc(s.name)}')">下架</button>`
+          : `<button class="btn btn-sm" onclick="App.activateService('${esc(s.id)}','${esc(s.name)}')">上架</button>`}
+      </div>
+    </div>`;
+  }
+
+  // ---------- Subscription view (v4.4) ----------
+  function renderSubscription() {
+    const list = state.subscription || [];
+    const current = list.find(s => s.is_current);
+    return `<div class="view-head">
+      <h1>订阅</h1>
+      <p>当前订阅 + 历次续费记录</p>
+    </div>
+
+    ${current ? `<div class="card card-pad section">
+      <div class="section-head">
+        <h2>当前订阅</h2>
+        <span class="spacer"></span>
+        <button class="btn btn-primary" onclick="App.openRenewModal()">${icon('plus', 14)} 续费</button>
+      </div>
+      <div class="kv-list">
+        <div class="k">套餐</div><div class="v">${planPill(current.plan)}</div>
+        <div class="k">开始</div><div class="v mono">${esc(current.started_at.slice(0, 10))}</div>
+        <div class="k">到期</div><div class="v mono">${esc(current.expires_at.slice(0, 10))}</div>
+        <div class="k">剩余天数</div><div class="v">${daysLeft(current.expires_at)} 天</div>
+        <div class="k">自动续费</div><div class="v">${current.auto_renew ? '已开启' : '未开启'}</div>
+      </div>
+    </div>` : `<div class="card card-pad section">
+      <div class="section-head">
+        <h2>当前无有效订阅</h2>
+        <span class="spacer"></span>
+        <button class="btn btn-primary" onclick="App.openRenewModal()">${icon('plus', 14)} 续费</button>
+      </div>
+      ${renderEmpty('尚未订阅或已过期', '点右上角"续费"开通', 'inbox')}
+    </div>`}
+
+    <div class="section">
+      <div class="card">
+        <div class="section-head card-pad-sm" style="border-bottom:1px solid var(--line);">
+          <h2 style="font-size:14px;">续费历史</h2>
+          <span class="sub">${list.length} 条</span>
+        </div>
+        ${list.length === 0
+          ? '<div style="padding:20px;">' + renderEmpty('还没有续费记录', null, 'calendar') + '</div>'
+          : `<table class="table">
+            <thead><tr><th>套餐</th><th>开始</th><th>到期</th><th>状态</th><th>自动续费</th></tr></thead>
+            <tbody>${list.map(s => `<tr>
+              <td>${planPill(s.plan)}</td>
+              <td class="text-mono">${esc(s.started_at.slice(0,10))}</td>
+              <td class="text-mono">${esc(s.expires_at.slice(0,10))}</td>
+              <td>${s.is_current ? '<span class="badge badge-active">生效中</span>' : (s.cancelled_at ? '<span class="badge badge-cancelled">已取消</span>' : '<span class="badge badge-warning">已过期</span>')}</td>
+              <td>${s.auto_renew ? '是' : '否'}</td>
+            </tr>`).join('')}</tbody>
+          </table>`}
+      </div>
+    </div>`;
+  }
+
+  function planPill(plan) {
+    const cls = plan === 'flagship' ? 'plan-flagship' : plan === 'pro' ? 'plan-pro' : '';
+    const label = plan === 'flagship' ? '旗舰' : plan === 'pro' ? '专业' : plan === 'basic' ? '基础' : (plan || '—');
+    return `<span class="plan-pill ${cls}">${esc(label)}</span>`;
+  }
+
+  function daysLeft(expiresAt) {
+    if (!expiresAt) return 0;
+    const ms = new Date(expiresAt) - new Date();
+    return Math.max(0, Math.ceil(ms / (24 * 3600 * 1000)));
+  }
+
+  // ---------- Shop view (v4.4) ----------
+  function renderShop() {
+    const s = state.shop;
+    if (!s) {
+      return `<div class="view-head">
+        <h1>店铺设置</h1>
+        <p>营业时间、午休、节假日、地址等</p>
+      </div>
+      <div class="card card-pad">${renderSkeleton(4)}</div>`;
+    }
+    return `<div class="view-head">
+      <h1>店铺设置</h1>
+      <p>仅影响本店；wecom / plan / expires_at 走专门入口</p>
+    </div>
+    <div class="card card-pad">
+      <div class="section-head">
+        <h2>基本信息</h2>
+        <span class="spacer"></span>
+        <button class="btn" onclick="App.openShopEditModal()">${icon('plus', 14)} 编辑</button>
+      </div>
+      <div class="kv-list">
+        <div class="k">店铺名</div><div class="v">${esc(s.name || '—')}</div>
+        <div class="k">地址</div><div class="v">${esc(s.address || '—')}</div>
+        <div class="k">时区</div><div class="v mono">${esc(s.timezone || 'Asia/Shanghai')}</div>
+        <div class="k">营业时间</div><div class="v mono">${pad(s.open_hour)}:00 - ${pad(s.close_hour)}:00</div>
+        <div class="k">午休</div><div class="v mono">${pad(s.lunch_start)}:00 - ${pad(s.lunch_end)}:${pad(s.lunch_end_min || 0)}</div>
+        <div class="k">节假日</div><div class="v">${renderHolidays(s.holidays)}</div>
+        <div class="k">订阅套餐</div><div class="v">${planPill(s.plan)}</div>
+        <div class="k">到期日</div><div class="v mono">${esc((s.expires_at || '').slice(0,10) || '—')}</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="card card-pad text-muted" style="font-size:12px;">
+        <strong>企业微信配置</strong>不在此处修改（多店版本按店独立，走 env 注入；如需变更请改 <span class="text-mono">.env</span> 后重启服务）
+      </div>
+    </div>`;
+  }
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  function renderHolidays(s) {
+    if (!s) return '<span class="text-muted">未设置</span>';
+    const arr = s.split(',').map(x => x.trim()).filter(Boolean);
+    if (!arr.length) return '<span class="text-muted">未设置</span>';
+    return arr.map(d => `<span class="tag-chip">${esc(d)}</span>`).join(' ');
+  }
+
+  // ---------- Icons ----------
+  function icon(name, size = 18) {
+    const s = size;
+    const c = `width:${s};height:${s};`;
+    const paths = {
+      plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+      x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+      inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+      calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+      chart: '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+      search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+      'user-plus': '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>',
+      user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+      building: '<path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/><line x1="9" y1="9" x2="9" y2="9"/><line x1="9" y1="12" x2="9" y2="12"/><line x1="9" y1="15" x2="9" y2="15"/><line x1="9" y1="18" x2="9" y2="18"/>',
+      activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+    };
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="${c}">${paths[name] || ''}</svg>`;
+  }
+
+  // ---------- Modals ----------
+  function openModal(kind, data) {
+    state.modal = { kind, data };
+    const root = $('#modalRoot');
+    let body = '';
+    if (kind === 'newBarber') body = newBarberModal();
+    else if (kind === 'leave') body = leaveModal(data);
+    else if (kind === 'password') body = passwordModal();
+    else if (kind === 'confirm') body = confirmModal(data);
+    else if (kind === 'custTag') body = custTagModal(data);
+    else if (kind === 'service') body = serviceModal(data);
+    else if (kind === 'renew') body = renewModal();
+    else if (kind === 'shopEdit') body = shopEditModal();
+    else return;
+    root.innerHTML = body;
+    // wire submit buttons by id
+    if (kind === 'newBarber') {
+      $('#newBarberName')?.focus();
+      $('#newBarberName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#newBarberSkills').focus(); });
+    } else if (kind === 'leave') {
+      $('#leaveStartAt')?.focus();
+    } else if (kind === 'password') {
+      $('#oldPwd')?.focus();
+    } else if (kind === 'service') {
+      $('#svcName')?.focus();
+    } else if (kind === 'shopEdit') {
+      $('#shopName')?.focus();
+    }
+  }
+  function closeModal() {
+    state.modal = null;
+    $('#modalRoot').innerHTML = '';
+  }
+
+  function newBarberModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>新增理发师</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>姓名 <span class="text-muted" style="font-weight:400;">(必填, 1-32 字)</span></label>
+            <input class="input" id="newBarberName" maxlength="32" placeholder="例如：Tony、Kevin" />
+          </div>
+          <div class="field">
+            <label>技能标签 <span class="text-muted" style="font-weight:400;">(可选, 逗号分隔)</span></label>
+            <input class="input" id="newBarberSkills" maxlength="256" placeholder="例如：剪发,染发,烫发" />
+          </div>
+          <div id="newBarberErr" class="err-banner hidden"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitNewBarber()">确认新增</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function leaveModal(data) {
+    const now = new Date();
+    const tomorrow = new Date(now.getTime() + 24*3600*1000);
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h2>给 <span style="color:var(--brand);">${esc(data.barberName)}</span> 请假</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="row" style="gap:12px;">
+            <div class="field grow">
+              <label>开始时间</label>
+              <input class="input" type="datetime-local" id="leaveStartAt" value="${toLocalInput(now)}" />
+            </div>
+            <div class="field grow">
+              <label>结束时间</label>
+              <input class="input" type="datetime-local" id="leaveEndAt" value="${toLocalInput(tomorrow)}" />
+            </div>
+          </div>
+          <div class="field">
+            <label>原因 <span class="text-muted" style="font-weight:400;">(可选)</span></label>
+            <input class="input" id="leaveReason" placeholder="例如：生病、家中有事" />
+          </div>
+          <div class="field">
+            <label>处理方式</label>
+            <select class="select" id="leaveAction">
+              <option value="reschedule">改派到其他理发师（改派失败的自动取消）</option>
+              <option value="cancel">全部取消 + 通知顾客</option>
+            </select>
+          </div>
+          <div id="leaveErr" class="err-banner hidden"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitLeave()">提交请假</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function passwordModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>修改密码</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>旧密码</label>
+            <input class="input" type="password" id="oldPwd" autocomplete="current-password" />
+          </div>
+          <div class="field">
+            <label>新密码 <span class="text-muted" style="font-weight:400;">(≥ 6 位)</span></label>
+            <input class="input" type="password" id="newPwd" autocomplete="new-password" />
+          </div>
+          <div class="field">
+            <label>再次输入新密码</label>
+            <input class="input" type="password" id="newPwd2" autocomplete="new-password" />
+          </div>
+          <div id="pwdErr" class="err-banner hidden"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitChangePassword()">确认修改</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function confirmModal(data) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width:380px;">
+        <div class="modal-head">
+          <h2>${esc(data.title || '确认')}</h2>
+        </div>
+        <div class="modal-body">
+          <p style="margin:0;color:var(--ink-2);">${esc(data.message || '')}</p>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn ${data.danger ? 'btn-primary' : 'btn-primary'}" onclick="(${data.onConfirm.toString()})(); App.closeModal();">${esc(data.confirmText || '确定')}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.4 顾客标签 modal
+  function custTagModal(data) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width:380px;">
+        <div class="modal-head">
+          <h2>给 <span style="color:var(--brand);">${esc(data.customerName || '顾客')}</span> 加标签</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>选择标签</label>
+            <select class="select" id="custTagSelect">
+              <option value="VIP">VIP（重要客户）</option>
+              <option value="FREQUENT">FREQUENT（常客，≥5 次）</option>
+              <option value="BLACKLIST">BLACKLIST（黑名单）</option>
+              <option value="NEW">NEW（新客户）</option>
+            </select>
+          </div>
+          <div id="custTagErr" class="err-banner hidden"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitCustTag()">添加</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.4 服务 modal
+  function serviceModal(data) {
+    const s = data.service || {};
+    const isEdit = !!s.id;
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>${isEdit ? '编辑服务' : '新增服务'}</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="field">
+              <label>服务名 <span class="text-muted" style="font-weight:400;">(必填)</span></label>
+              <input class="input" id="svcName" maxlength="32" value="${esc(s.name || '')}" placeholder="例如：剪发、烫发、染发" />
+            </div>
+            <div class="field">
+              <label>预估时长（分钟） <span class="text-muted" style="font-weight:400;">(1-480)</span></label>
+              <input class="input" type="number" id="svcMin" min="1" max="480" value="${s.estimated_min || 30}" />
+            </div>
+            <div class="field">
+              <label>价格区间 <span class="text-muted" style="font-weight:400;">(可选)</span></label>
+              <input class="input" id="svcPrice" maxlength="64" value="${esc(s.price_range || '')}" placeholder="例如：80-120" />
+            </div>
+            <div class="field">
+              <label>排序 <span class="text-muted" style="font-weight:400;">(数字小排前)</span></label>
+              <input class="input" type="number" id="svcOrder" value="${s.sort_order || 0}" />
+            </div>
+          </div>
+          <div id="svcErr" class="err-banner hidden" style="margin-top:12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitService()">${isEdit ? '保存修改' : '确认新增'}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.4 续费 modal
+  function renewModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>续费</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="field">
+              <label>套餐</label>
+              <select class="select" id="renewPlan">
+                <option value="basic">基础版</option>
+                <option value="pro">专业版</option>
+                <option value="flagship" selected>旗舰版</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>月数 <span class="text-muted" style="font-weight:400;">(1-36)</span></label>
+              <input class="input" type="number" id="renewMonths" min="1" max="36" value="12" />
+            </div>
+            <div class="field">
+              <label>实收金额（分）<span class="text-muted" style="font-weight:400;">(可选)</span></label>
+              <input class="input" type="number" id="renewAmount" min="0" value="0" />
+            </div>
+            <div class="field">
+              <label>备注 <span class="text-muted" style="font-weight:400;">(可选)</span></label>
+              <input class="input" id="renewNote" maxlength="128" placeholder="例如：微信转账" />
+            </div>
+          </div>
+          <div id="renewErr" class="err-banner hidden" style="margin-top:12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitRenew()">确认续费</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.4 店铺编辑 modal
+  function shopEditModal() {
+    const s = state.shop || {};
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h2>编辑店铺信息</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="field">
+              <label>店铺名</label>
+              <input class="input" id="shopName" maxlength="128" value="${esc(s.name || '')}" />
+            </div>
+            <div class="field">
+              <label>地址</label>
+              <input class="input" id="shopAddress" maxlength="256" value="${esc(s.address || '')}" />
+            </div>
+            <div class="field">
+              <label>营业开始（0-23）</label>
+              <input class="input" type="number" id="shopOpen" min="0" max="23" value="${s.open_hour ?? 9}" />
+            </div>
+            <div class="field">
+              <label>营业结束（1-24）</label>
+              <input class="input" type="number" id="shopClose" min="1" max="24" value="${s.close_hour ?? 18}" />
+            </div>
+            <div class="field">
+              <label>午休开始（0-23）</label>
+              <input class="input" type="number" id="shopLunchStart" min="0" max="23" value="${s.lunch_start ?? 12}" />
+            </div>
+            <div class="field">
+              <label>午休结束（0-24）</label>
+              <input class="input" type="number" id="shopLunchEnd" min="0" max="24" value="${s.lunch_end ?? 13}" />
+            </div>
+            <div class="field">
+              <label>午休结束分钟（0-59）</label>
+              <input class="input" type="number" id="shopLunchEndMin" min="0" max="59" value="${s.lunch_end_min ?? 30}" />
+            </div>
+            <div class="field">
+              <label>时区（IANA）</label>
+              <input class="input" id="shopTimezone" value="${esc(s.timezone || 'Asia/Shanghai')}" placeholder="Asia/Shanghai" />
+            </div>
+          </div>
+          <div class="field" style="margin-top:14px;">
+            <label>节假日 <span class="text-muted" style="font-weight:400;">(逗号分隔 YYYY-MM-DD)</span></label>
+            <input class="input" id="shopHolidays" value="${esc(s.holidays || '')}" placeholder="例如：2026-10-01,2026-10-02,2026-10-03" />
+          </div>
+          <div id="shopEditErr" class="err-banner hidden" style="margin-top:12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitShopEdit()">保存</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ---------- Data loading ----------
+  let refreshTimer = null;
+  let upcomingTimer = null;
+
+  async function bootstrap() {
+    if (state.token) {
+      try {
+        const me = await api('/api/admin/me');
+        state.user = me;
+        state.shopId = me.shop_id;
+        localStorage.setItem('shop_id', state.shopId);
+        showApp();
+        return;
+      } catch (e) {
+        // token bad, fall through to login
+        logout(false);
+      }
+    }
+    showLogin();
+  }
+
+  function showLogin() {
+    $('#loginView').classList.remove('hidden');
+    $('#appView').classList.add('hidden');
+    setTimeout(() => $('#li_user')?.focus(), 50);
+  }
+
+  function showApp() {
+    $('#loginView').classList.add('hidden');
+    $('#appView').classList.remove('hidden');
+    const u = state.user || {};
+    const shop = u.shop || {};
+    $('#userName').textContent = shop.name || u.shop_id || '店主';
+    $('#userRole').textContent = (u.role || 'owner') + ' · ' + (u.shop_id || '');
+    $('#userAvatar').textContent = (shop.name || u.shop_id || 'A').slice(0, 1).toUpperCase();
+    $('#crumbShop').textContent = shop.name || u.shop_id || '';
+    $('#livePill').style.display = '';
+    setView('dashboard');
+    refreshAll();
+    startAutoRefresh();
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    refreshTimer = setInterval(() => {
+      if (state.view === 'dashboard') refreshAll(true);
+      else if (state.view === 'handoffs') loadHandoffs();
+    }, 30 * 1000);
+    upcomingTimer = setInterval(() => {
+      if (state.view === 'dashboard') loadUpcoming(true);
+    }, 30 * 1000);
+  }
+  function stopAutoRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    if (upcomingTimer) clearInterval(upcomingTimer);
+    refreshTimer = upcomingTimer = null;
+  }
+
+  async function refreshAll(silent = false) {
+    if (!silent) state.loading = true;
+    try {
+      await Promise.all([
+        loadDashboard(silent),
+        loadUpcoming(silent),
+        loadLeavesBadge(),
+        loadHandoffsBadge(),
+      ]);
+    } finally { state.loading = false; }
+  }
+
+  async function loadDashboard(silent = false) {
+    if (!silent) state.dashboard = null;
+    if (state.view === 'dashboard') render();
+    try {
+      const d = await api(`/api/shop/${encodeURIComponent(state.shopId)}/dashboard`);
+      state.dashboard = d;
+      if (state.view === 'dashboard') render();
+    } catch (e) {
+      if (!silent) showToast('看板加载失败：' + e.message, 'error');
+    }
+  }
+
+  async function loadUpcoming(silent = false) {
+    try {
+      const today = todayStr();
+      const data = await api(`/api/shop/${encodeURIComponent(state.shopId)}/appointments?date=${today}&status=active`);
+      const now = new Date();
+      const cutoff = new Date(now.getTime() + 2 * 3600 * 1000);
+      state.upcoming = (Array.isArray(data) ? data : [])
+        .map(a => {
+          const dt = new Date(`${a.date}T${a.time}:00`);
+          return { ...a, _dt: dt, _minutes: Math.round((dt - now) / 60000) };
+        })
+        .filter(a => a._dt >= now && a._dt <= cutoff)
+        .sort((a, b) => a._dt - b._dt);
+      if (state.view === 'dashboard') {
+        const ts = new Date().toLocaleTimeString();
+        const tsEl = $('#upcomingTs'); if (tsEl) tsEl.textContent = '最近刷新：' + ts;
+        const host = $('#upcomingList');
+        if (host) {
+          host.innerHTML = state.upcoming.length === 0
+            ? renderEmpty('接下来 2 小时暂无预约', null, 'calendar')
+            : '<div class="upcoming-grid">' + state.upcoming.map(renderUpcomingCard).join('') + '</div>';
+        }
+      }
+    } catch (e) { if (!silent) console.error('upcoming:', e); }
+  }
+
+  async function loadAppointments() {
+    const date = $('#apptDate')?.value || todayStr();
+    const status = $('#apptStatus')?.value || '';
+    state.apptDate = date; state.apptStatus = status;
+    const host = $('#apptTable');
+    if (host) host.innerHTML = renderSkeleton(5);
+    try {
+      let url = `/api/shop/${encodeURIComponent(state.shopId)}/appointments?date=${date}`;
+      if (status) url += '&status=' + encodeURIComponent(status);
+      const data = await api(url);
+      state.appointments = Array.isArray(data) ? data : [];
+      $('#apptTs').textContent = '最近刷新：' + new Date().toLocaleTimeString();
+      if (host) {
+        host.innerHTML = state.appointments.length === 0
+          ? renderEmpty('该条件下暂无预约', '试试切换日期或重置筛选', 'calendar')
+          : renderApptTable(state.appointments);
+      }
+    } catch (e) {
+      if (host) host.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function resetApptFilters() {
+    state.apptDate = todayStr(); state.apptStatus = '';
+    render();
+    loadAppointments();
+  }
+
+  async function loadEvents() {
+    const t = $('#eventType')?.value || '';
+    state.eventType = t;
+    const card = $('#content .card');
+    try {
+      let url = '/api/admin/events?limit=100';
+      if (t) url += '&event_type=' + encodeURIComponent(t);
+      const data = await api(url);
+      state.events = Array.isArray(data) ? data : [];
+      $('#eventsTs').textContent = '最近刷新：' + new Date().toLocaleTimeString();
+      render();
+    } catch (e) { showToast('事件加载失败：' + e.message, 'error'); }
+  }
+
+  async function loadBarbers() {
+    const includeInactive = $('#showInactive')?.checked ? 'true' : 'false';
+    const card = $('#barbersCard');
+    try {
+      const data = await api(`/api/admin/barbers?include_inactive=${includeInactive}`);
+      state.barbers = Array.isArray(data) ? data : [];
+      if (state.view === 'barbers' && card) {
+        card.innerHTML = '<div style="overflow-x:auto;">' + renderBarberRows() + '</div>';
+      }
+    } catch (e) {
+      if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  async function loadLeaves() {
+    const card = $('#leavesCard');
+    try {
+      // 1) active barbers
+      const barbers = await api('/api/admin/barbers?include_inactive=false');
+      const activeBarbers = Array.isArray(barbers) ? barbers : [];
+      // 2) leaves for each (parallel)
+      const leavesByBarber = {};
+      await Promise.all(activeBarbers.map(async b => {
+        try {
+          const ls = await api(`/api/admin/barber/${b.id}/leaves?limit=5`);
+          leavesByBarber[b.id] = Array.isArray(ls) ? ls : [];
+        } catch (_) { leavesByBarber[b.id] = []; }
+      }));
+      state.barbers = activeBarbers;
+      state.leavesByBarber = leavesByBarber;
+      if (state.view === 'leaves' && card) {
+        card.innerHTML = '<div style="overflow-x:auto;">' + renderLeaveRows() + '</div>';
+      }
+    } catch (e) {
+      if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  async function loadLeavesBadge() {
+    try {
+      const data = await api('/api/admin/leave/list?status=active&limit=200');
+      const n = Array.isArray(data) ? data.length : 0;
+      const b = $('#activeLeavesBadge');
+      if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+    } catch (_) { /* silent */ }
+  }
+
+  async function loadChain() {
+    state.chainData = null;
+    if (state.view === 'chain') render();
+    try {
+      const data = await api('/api/admin/chain/dashboard?window=month');
+      state.chainData = data;
+      if (state.view === 'chain') render();
+    } catch (e) {
+      if (state.view === 'chain') {
+        $('#content').innerHTML = renderEmpty('多店看板加载失败：' + e.message, null, 'building');
+      }
+    }
+  }
+
+  // v4.4 新增 loader
+  async function loadHandoffs() {
+    if (state.view === 'handoffs') render();
+    try {
+      const data = await api('/api/admin/handoffs?limit=100');
+      state.handoffs = Array.isArray(data) ? data : [];
+      if (state.view === 'handoffs') render();
+    } catch (e) {
+      if (state.view === 'handoffs') showToast('加载转人工失败：' + e.message, 'error');
+    }
+  }
+
+  async function loadHandoffsBadge() {
+    try {
+      const data = await api('/api/admin/handoffs?limit=200');
+      const n = Array.isArray(data) ? data.length : 0;
+      const b = $('#handoffsBadge');
+      if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+    } catch (_) { /* silent */ }
+  }
+
+  async function loadCustomers() {
+    const query = $('#custQuery')?.value.trim() || '';
+    const tag = $('#custTag')?.value || '';
+    const host = $('#custTable');
+    if (host) host.innerHTML = '<div style="padding:20px;">' + renderSkeleton(5) + '</div>';
+    try {
+      let url = '/api/admin/customers?limit=200';
+      if (query) url += '&query=' + encodeURIComponent(query);
+      if (tag) url += '&tag=' + encodeURIComponent(tag);
+      const data = await api(url);
+      state.customers = Array.isArray(data) ? data : [];
+      const ts = $('#custTs'); if (ts) ts.textContent = '最近刷新：' + new Date().toLocaleTimeString();
+      if (host) host.innerHTML = renderCustomerRows();
+    } catch (e) {
+      if (host) host.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function resetCustFilters() {
+    if ($('#custQuery')) $('#custQuery').value = '';
+    if ($('#custTag')) $('#custTag').value = '';
+    loadCustomers();
+  }
+
+  async function loadServices() {
+    const includeInactive = $('#showInactiveService')?.checked ? 'true' : 'false';
+    const card = $('#servicesCard');
+    try {
+      const data = await api(`/api/admin/services?include_inactive=${includeInactive}`);
+      state.services = Array.isArray(data) ? data : [];
+      if (state.view === 'services' && card) {
+        card.innerHTML = renderServiceRows();
+      }
+    } catch (e) {
+      if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  async function loadSubscription() {
+    if (state.view === 'subscription') render();
+    try {
+      const data = await api('/api/admin/subscription');
+      state.subscription = Array.isArray(data) ? data : [];
+      if (state.view === 'subscription') render();
+    } catch (e) {
+      if (state.view === 'subscription') showToast('加载订阅失败：' + e.message, 'error');
+    }
+  }
+
+  async function loadShop() {
+    if (state.view === 'shop') render();
+    try {
+      const data = await api('/api/admin/shop');
+      state.shop = data;
+      if (state.view === 'shop') render();
+    } catch (e) {
+      if (state.view === 'shop') showToast('加载店铺信息失败：' + e.message, 'error');
+    }
+  }
+
+  // ---------- Actions ----------
+  async function doLogin() {
+    const u = $('#li_user').value.trim();
+    const p = $('#li_pass').value;
+    const err = $('#loginErr'), errText = $('#loginErrText');
+    err.classList.add('hidden');
+    if (!u || !p) { errText.textContent = '请填写用户名和密码'; err.classList.remove('hidden'); return; }
+    const btn = $('#loginBtn'), btnText = $('#loginBtnText');
+    btn.disabled = true; btnText.textContent = '登录中…';
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        errText.textContent = j.error || '登录失败（HTTP ' + r.status + '）';
+        err.classList.remove('hidden');
+        return;
+      }
+      const data = await r.json();
+      state.token = data.token;
+      state.shopId = data.shop_id;
+      localStorage.setItem('jwt_token', state.token);
+      localStorage.setItem('shop_id', state.shopId);
+      $('#li_pass').value = '';
+      // 拉一次 /me 校准 user
+      const me = await api('/api/admin/me');
+      state.user = me;
+      state.shopId = me.shop_id;
+      localStorage.setItem('shop_id', state.shopId);
+      showApp();
+    } catch (e) {
+      errText.textContent = '网络错误：' + e.message;
+      err.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btnText.textContent = '登 录';
+    }
+  }
+
+  function logout(redirect = true) {
+    stopAutoRefresh();
+    state.token = ''; state.shopId = ''; state.user = null;
+    state.dashboard = null; state.upcoming = []; state.appointments = [];
+    state.events = []; state.barbers = []; state.leavesByBarber = {};
+    localStorage.removeItem('jwt_token'); localStorage.removeItem('shop_id');
+    if (redirect) showLogin();
+  }
+
+  function markCompleted(id) {
+    openModal('confirm', {
+      title: '标记为已完成？',
+      message: '该预约会被记录为「已完成」，用于统计完成率。',
+      confirmText: '标记完成',
+      onConfirm: async () => {
+        try {
+          await api('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: id } });
+          showToast('已标记为完成', 'success');
+          refreshAll(); loadAppointments();
+        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
+      }
+    });
+  }
+  function markCancelled(id) {
+    openModal('confirm', {
+      title: '确认取消预约？',
+      message: '取消后顾客会收到通知，且不会计入爽约。',
+      confirmText: '确认取消',
+      onConfirm: async () => {
+        try {
+          await api('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: id, reason: 'admin manual' } });
+          showToast('已取消', 'success');
+          refreshAll(); loadAppointments();
+        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
+      }
+    });
+  }
+
+  function openLeaveModal(barberId, barberName) {
+    openModal('leave', { barberId, barberName });
+  }
+
+  // v4.4 顾客标签
+  function openCustTagModal(customerId, customerName) {
+    openModal('custTag', { customerId, customerName });
+  }
+  async function submitCustTag() {
+    const m = state.modal.data;
+    const tag = $('#custTagSelect')?.value;
+    const errEl = $('#custTagErr');
+    if (errEl) errEl.classList.add('hidden');
+    if (!tag) { if (errEl) { errEl.textContent = '请选择标签'; errEl.classList.remove('hidden'); } return; }
+    try {
+      await api('/api/admin/customers/tag', { method: 'POST', body: { customer_id: m.customerId, tag } });
+      closeModal();
+      showToast('标签已添加', 'success');
+      loadCustomers();
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    }
+  }
+  function removeCustTag(customerId, tag) {
+    openModal('confirm', {
+      title: '移除标签？',
+      message: `确认把 "${tag}" 从该顾客身上移除？`,
+      confirmText: '移除',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api('/api/admin/customers/tag', { method: 'DELETE', body: { customer_id: customerId, tag } });
+          showToast('标签已移除', 'success');
+          loadCustomers();
+        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
+      }
+    });
+  }
+
+  // v4.4 服务 CRUD
+  function openServiceModal(serviceId) {
+    const s = serviceId ? (state.services || []).find(x => x.id === serviceId) : null;
+    openModal('service', { service: s });
+  }
+  async function submitService() {
+    const m = state.modal.data;
+    const name = $('#svcName').value.trim();
+    const min = parseInt($('#svcMin').value, 10);
+    const price = $('#svcPrice').value.trim();
+    const order = parseInt($('#svcOrder').value, 10) || 0;
+    const errEl = $('#svcErr');
+    if (errEl) errEl.classList.add('hidden');
+    if (!name) { if (errEl) { errEl.textContent = '请填写服务名'; errEl.classList.remove('hidden'); } return; }
+    if (!min || min < 1 || min > 480) { if (errEl) { errEl.textContent = '预估时长必须在 1-480 分钟'; errEl.classList.remove('hidden'); } return; }
+    try {
+      const url = m.service ? `/api/admin/services/${encodeURIComponent(m.service.id)}` : '/api/admin/services';
+      const method = m.service ? 'PUT' : 'POST';
+      await api(url, { method, body: { name, estimated_min: min, price_range: price, sort_order: order } });
+      closeModal();
+      showToast(m.service ? '已更新' : '已新增', 'success');
+      loadServices();
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    }
+  }
+  function deactivateService(id, name) {
+    openModal('confirm', {
+      title: '下架服务？',
+      message: `「${name}」将下架（不再用于新预约）。历史预约不受影响。`,
+      confirmText: '下架',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api(`/api/admin/services/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          showToast('已下架：' + name, 'success');
+          loadServices();
+        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
+      }
+    });
+  }
+  function activateService(id, name) {
+    api(`/api/admin/services/${encodeURIComponent(id)}/activate`, { method: 'POST' })
+      .then(() => { showToast('已上架：' + name, 'success'); loadServices(); })
+      .catch(e => showToast('操作失败：' + e.message, 'error'));
+  }
+
+  // v4.4 续费
+  function openRenewModal() {
+    openModal('renew');
+  }
+  async function submitRenew() {
+    const plan = $('#renewPlan').value;
+    const months = parseInt($('#renewMonths').value, 10);
+    const amount = parseInt($('#renewAmount').value, 10) || 0;
+    const note = $('#renewNote').value.trim();
+    const errEl = $('#renewErr');
+    if (errEl) errEl.classList.add('hidden');
+    if (!months || months < 1 || months > 36) { if (errEl) { errEl.textContent = '月数必须在 1-36'; errEl.classList.remove('hidden'); } return; }
+    try {
+      await api('/api/admin/subscription/renew', { method: 'POST', body: { plan, months, amount, note } });
+      closeModal();
+      showToast('续费已记录', 'success');
+      loadSubscription();
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    }
+  }
+
+  // v4.4 店铺设置
+  function openShopEditModal() {
+    openModal('shopEdit');
+  }
+  async function submitShopEdit() {
+    const body = {};
+    const fields = [
+      ['shopName', 'name', 'string'],
+      ['shopAddress', 'address', 'string'],
+      ['shopOpen', 'open_hour', 'int'],
+      ['shopClose', 'close_hour', 'int'],
+      ['shopLunchStart', 'lunch_start', 'int'],
+      ['shopLunchEnd', 'lunch_end', 'int'],
+      ['shopLunchEndMin', 'lunch_end_min', 'int'],
+      ['shopTimezone', 'timezone', 'string'],
+      ['shopHolidays', 'holidays', 'string'],
+    ];
+    for (const [id, key, kind] of fields) {
+      const el = $('#' + id);
+      if (!el) continue;
+      const v = el.value.trim();
+      if (v === '') continue; // skip empty
+      if (kind === 'int') body[key] = parseInt(v, 10);
+      else body[key] = v;
+    }
+    const errEl = $('#shopEditErr');
+    if (errEl) errEl.classList.add('hidden');
+    try {
+      await api('/api/admin/shop', { method: 'PUT', body });
+      closeModal();
+      showToast('店铺信息已更新', 'success');
+      loadShop();
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    }
+  }
+
+  async function submitNewBarber() {
+    const name = $('#newBarberName').value.trim();
+    const skills = $('#newBarberSkills').value.trim();
+    const errEl = $('#newBarberErr');
+    errEl.classList.add('hidden');
+    if (!name) { errEl.textContent = '请填写姓名'; errEl.classList.remove('hidden'); return; }
+    try {
+      await api('/api/admin/barbers', { method: 'POST', body: { name, skills } });
+      closeModal();
+      showToast('已新增：' + name, 'success');
+      loadBarbers();
+    } catch (e) {
+      errEl.textContent = e.message; errEl.classList.remove('hidden');
+    }
+  }
+
+  function deleteBarber(id, name) {
+    openModal('confirm', {
+      title: '停用理发师？',
+      message: `「${name}」将被停用。如有未来预约会被拒绝，请先取消或请假。`,
+      confirmText: '停用',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api(`/api/admin/barbers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          showToast('已停用：' + name, 'success');
+          loadBarbers();
+        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
+      }
+    });
+  }
+  function activateBarber(id, name) {
+    openModal('confirm', {
+      title: '恢复理发师？',
+      message: `「${name}」将重新可用于预约分配。`,
+      confirmText: '恢复',
+      onConfirm: async () => {
+        try {
+          await api(`/api/admin/barbers/${encodeURIComponent(id)}/activate`, { method: 'POST' });
+          showToast('已恢复：' + name, 'success');
+          loadBarbers();
+        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
+      }
+    });
+  }
+
+  async function submitLeave() {
+    const m = state.modal.data;
+    const startAt = $('#leaveStartAt').value;
+    const endAt = $('#leaveEndAt').value;
+    const reason = $('#leaveReason').value.trim();
+    const action = $('#leaveAction').value;
+    const errEl = $('#leaveErr');
+    errEl.classList.add('hidden');
+    if (!startAt || !endAt) { errEl.textContent = '请填写开始 / 结束时间'; errEl.classList.remove('hidden'); return; }
+    if (new Date(startAt) >= new Date(endAt)) {
+      errEl.textContent = '开始时间必须早于结束时间'; errEl.classList.remove('hidden'); return;
+    }
+    try {
+      const r = await api(`/api/admin/barber/${encodeURIComponent(m.barberId)}/leave`, {
+        method: 'POST',
+        body: { start_at: new Date(startAt).toISOString(), end_at: new Date(endAt).toISOString(), reason, action }
+      });
+      closeModal();
+      showToast(`请假已创建：影响 ${r.affected_count} 单（改派 ${r.rescheduled_count} · 取消 ${r.cancelled_count} · 通知 ${r.notified_count}）`, 'success');
+      loadLeaves();
+      loadLeavesBadge();
+    } catch (e) {
+      errEl.textContent = e.message; errEl.classList.remove('hidden');
+    }
+  }
+
+  async function submitChangePassword() {
+    const old = $('#oldPwd').value;
+    const n1 = $('#newPwd').value;
+    const n2 = $('#newPwd2').value;
+    const errEl = $('#pwdErr');
+    errEl.classList.add('hidden');
+    if (!old || !n1 || !n2) { errEl.textContent = '请填写完整'; errEl.classList.remove('hidden'); return; }
+    if (n1 !== n2) { errEl.textContent = '两次新密码不一致'; errEl.classList.remove('hidden'); return; }
+    if (n1.length < 6) { errEl.textContent = '新密码至少 6 位'; errEl.classList.remove('hidden'); return; }
+    try {
+      await api('/api/admin/change-password', { method: 'POST', body: { old_password: old, new_password: n1 } });
+      closeModal();
+      showToast('密码已修改，请用新密码重新登录', 'success');
+      setTimeout(() => logout(), 1200);
+    } catch (e) {
+      errEl.textContent = e.message; errEl.classList.remove('hidden');
+    }
+  }
+
+  function refreshCurrent() {
+    if (state.view === 'dashboard') refreshAll();
+    else if (state.view === 'appointments') loadAppointments();
+    else if (state.view === 'barbers') loadBarbers();
+    else if (state.view === 'leaves') loadLeaves();
+    else if (state.view === 'events') loadEvents();
+    else if (state.view === 'chain') loadChain();
+    else if (state.view === 'handoffs') loadHandoffs();
+    else if (state.view === 'customers') loadCustomers();
+    else if (state.view === 'services') loadServices();
+    else if (state.view === 'subscription') loadSubscription();
+    else if (state.view === 'shop') loadShop();
+  }
+
+  // ---------- Init ----------
+  function init() {
+    // nav clicks
+    $$('.nav-item').forEach(n => n.addEventListener('click', e => {
+      e.preventDefault();
+      const v = n.dataset.view;
+      if (!v) return;
+      setView(v);
+      if (v === 'appointments') loadAppointments();
+      else if (v === 'barbers') loadBarbers();
+      else if (v === 'leaves') loadLeaves();
+      else if (v === 'events') loadEvents();
+      else if (v === 'chain') loadChain();
+      else if (v === 'handoffs') loadHandoffs();
+      else if (v === 'customers') loadCustomers();
+      else if (v === 'services') loadServices();
+      else if (v === 'subscription') loadSubscription();
+      else if (v === 'shop') loadShop();
+    }));
+    // 顾客搜索回车支持（v4.4 轻打磨）
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && state.view === 'customers') {
+        if ($('#custQuery') && document.activeElement === $('#custQuery')) {
+          loadCustomers();
+        }
+      }
+    });
+    // initial load
+    bootstrap();
+  }
+
+  // expose public API
+  return {
+    init, doLogin, logout,
+    openModal, closeModal,
+    openLeaveModal,
+    openCustTagModal, openServiceModal, openRenewModal, openShopEditModal,
+    submitNewBarber, submitLeave, submitChangePassword,
+    submitCustTag, removeCustTag,
+    submitService, deactivateService, activateService,
+    submitRenew, submitShopEdit,
+    deleteBarber, activateBarber,
+    markCompleted, markCancelled,
+    loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain,
+    loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop,
+    resetCustFilters,
+    refreshCurrent,
+  };
+})();
+
+document.addEventListener('DOMContentLoaded', App.init);
 </script>
 
 </body>

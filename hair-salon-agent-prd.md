@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.2）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.4）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v4.2（PRD §8.2 D+15 真正升级 — 使用报告邮件 / SMTP 发送 / 阶段对比）
+> **作者**：Mavis（M3）| **日期**：2026-06-22 | **版本**：v4.4（v4.3 周报 cron + v4.4 服务目录 + 后台 5 个新模块 — 完整体检 / 周报 / 续费 / 转人工）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -16,6 +16,8 @@
 > **v4.0 变更**：新增 §11.10 P2 多店数据汇总 —— `/api/admin/chain/dashboard` 跨店看板 endpoint，连锁品牌 owner 一次性看所有门店的 total / noshow rate / 各店明细 + Top 5 忙店 + 跨店事件漏斗；`storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper（口径与单店 `summarizeRange` 一致：date+time 解析后按时间戳精确过滤，22:00 算今天）；+ 16 个新单测（api 16）。
 > **v4.1 变更**：新增 §11.10.8 P2 跨店看板时间窗口切换 —— `?window=today|week|month` query 参数化；`parseWindow` / `resolveWindowBounds` / `ValidChainDashboardWindows` 配套 helpers；老客户端不传默认 `month`（向后兼容）；+ 13 个新单测（api 13）。
 > **v4.2 变更**：新增 §11.11 PRD §8.2 D+15 真正升级为「使用报告邮件」—— 之前 D+15 只发一行微信短文，本轮渲染完整 HTML 报告（总览 + 阶段对比 + 服务排行 TOP 5 + 熟客排行 TOP 5）+ 通过 SMTP 发送给店铺 owner；`storage.BuildD15UsageReport` 数据组装（按"冷启动期 vs 增长期"两段对比）+ `notify/email.go` 邮件层（`Sender` 接口 + `SMTPSender` + `NoopSender` 兜底 + `RenderD15ReportHTML` 模板 + `net/smtp` 走 465 SSL / 587）；SMTP 未配置时自动退化到 NoopSender，D+15 只发微信不报错；`cron/lifecycle.go` D+15 路径集成 `SetSender` / `SetReportTo`（向后兼容默认 Noop）；+ 25 个新单测（storage 8 + notify 16 + cron 9 增量 + chain 2 不变）。
+> **v4.3 变更**：新增 §11.12 P2 每周一周报 cron —— 每周一 9:00 自动给所有店发"上周经营数据"邮件，覆盖任意时长的店铺（不依赖 first_appointment）；`storage.WeeklyReport` / `ChainWeeklyReport` 数据结构 + `BuildWeeklyUsageReport` / `BuildChainWeeklyUsageReport` 跨店聚合 + `ListAllShopIDs` helper；`notify.RenderWeeklyReportHTML` / `RenderChainWeeklyReportHTML` HTML 模板（总览 + 周环比 + 服务/熟客排行 + 7 天日趋势条形图）；`cron/weekly_report.go` `WeeklyReporter` 每分钟一次 cron 检查（标准 6 段 `"0 0 9 * * 1"`）+ `SetSender` / `SetReportTo` 注入（与 D+15 共用 SMTP + REPORT_TO，复用 v4.2 基建）；+ 23 个新单测（storage 8 + notify 5 新增）。
+> **v4.4 变更**：新增 §11.13 P2 服务目录管理 + §11.14 后台 5 个新模块 —— 商户后台 11 个新 endpoint：1) 服务目录 CRUD (`GET/POST/PUT/DELETE/activate /services`，新建 `services` 表 + `Service` 模型 + 7 个默认服务自动种子 + 多店隔离 + 软下架)；2) 店铺设置 (`GET/PUT /shop` 营业时间/午休/节假日/时区)；3) 转人工待处理列表 (`GET /handoffs` 从 event_logs 筛 handoff_to_human)；4) 顾客管理 (`GET /customers` + 加减标签)；5) 续费管理 (`GET /subscription` 当前 + 历史订阅)。`storage/service_crud.go` 7 个核心函数 + 11 个新单测 + `api/admin_features.go` 11 个 handler（656 行）+ `static/admin.html` 重构（984 → 2633 行，集成 5 个新 tab）。
 
 ---
 
@@ -1339,6 +1341,272 @@ SMTP_FROM_NAME=美发店 AI Agent
 
 ---
 
+### 11.12 P2 — 每周一周报 cron（v4.3 新增，2026-06-22）
+
+#### 11.12.1 业务背景
+
+D+15 报告是「一次性」（开店半个月才发一次），但 1 个月、3 个月、6 个月以后店主还想看经营数据怎么办？
+- 续费前的「复购」动机：续费前 1 周看到「这周比上周好」，续费意愿 ×2
+- 高频反馈：每周 1 次的「看得到」反馈比半月 1 次更让店主有掌控感
+- 跨店连锁：连锁 owner 需要看 N 家店的汇总
+
+本轮新增周报 cron：每周一 9:00 自动给所有店发邮件，覆盖任意时长的店铺（不依赖 first_appointment）。
+
+#### 11.12.2 数据结构
+
+```go
+// 单店周报（v4.3）
+type WeeklyReport struct {
+    // 基础信息
+    ShopID, ShopName                string
+    GeneratedAt                     time.Time
+    WindowStart, WindowEnd          time.Time  // [now-7d, now)
+    WindowDays                      int        // 恒为 7
+
+    // 总览（覆盖 7 天）
+    TotalAppointments, CompletedAppointments,
+    NoShowAppointments, CancelledAppointments,
+    ActiveAppointments              int
+    CompletionRate, NoShowRate      float64
+
+    // 服务 / 顾客维度（与 D+15 同字段，复用 render）
+    ServiceRank   []ServiceStat
+    TopCustomers  []CustomerStat
+
+    // 7 天日趋势（缺失补 0）
+    DailyTrend   []DailyStat
+
+    // 周环比（v4.3 增量：上周 vs 本周，让店主看到"这周比上周好/差"）
+    LastWeekTotal, LastWeekCompleted, LastWeekNoShow  int
+    TotalGrowthRate, CompletedGrowthRate             float64  // (this-last)/last；0 不崩
+    NoShowDelta                                       int       // 本周 - 上周绝对值
+}
+
+// 跨店周报（v4.3 连锁版；本轮只做 helper，cron 触发留给 v4.4 增量）
+type ChainWeeklyReport struct {
+    GeneratedAt, WindowStart, WindowEnd   time.Time
+    WeekLabel                             string  // "2026-06-15 ~ 2026-06-22"
+    ShopCount                             int
+    Total                                 ChainWeeklyTotals
+    PerShop                               []WeeklyReport
+    TopServices, TopCustomers             []ServiceStat / []CustomerStat  // 跨店 TOP 5
+}
+```
+
+#### 11.12.3 周环比口径（关键设计决策）
+
+为什么加「周环比」？
+- 单纯看本周数据没动力 — 20 单算多还是少？得有参照
+- 上周是最自然的参照（同一家店、同一批师傅、同一批顾客，季节/天气/活动因素差异最小）
+- 增长率 = (本周 - 上周) / 上周；上周为 0 时 = 0（不除零）
+
+字段：
+- `TotalGrowthRate`：本周总预约 / 上周总预约 - 1
+- `CompletedGrowthRate`：本周完成数 / 上周完成数 - 1
+- `NoShowDelta`：本周爽约数 - 上周爽约数（绝对值，正=变差，负=变好）
+- 颜色编码：绿（↑变好）/ 红（↓变差）/ 灰（持平），与 D+15 报告保持一致
+
+#### 11.12.4 邮件层（notify/email.go）
+
+新增 `RenderWeeklyReportHTML(rep)` / `RenderChainWeeklyReportHTML(rep)`：
+- 单店版：总览卡片 + 周环比表（颜色编码）+ 服务/熟客排行 + 7 天日趋势条形图
+- 跨店版：跨店总览 + 跨店服务/熟客排行 + 各店明细表
+- 复用 v4.2 基建（`Sender` 接口 / `SMTPSender` / `NoopSender` / `htmlEscape` / XSS 防护）
+- 设计：内联 CSS + 表格布局（邮件客户端兼容性）
+
+#### 11.12.5 关键代码
+
+- `storage.BuildWeeklyUsageReport(ctx, shopID, now)` — 单店周报
+- `storage.BuildChainWeeklyUsageReport(ctx, now)` — 跨店周报（union services/customers + top 5）
+- `storage.ListAllShopIDs(ctx)` — 列所有店铺
+- `storage.WeeklyReportWindowDays = 7` / `WeeklyReportRankLimit = 5` — 常量
+- `storage.EventWeeklyReport = "weekly_report"` — 埋点常量
+- `notify.RenderWeeklyReportHTML(rep)` / `RenderChainWeeklyReportHTML(rep)` — HTML 模板
+- `cron.WeeklyReporter` — 触发器（标准 cron 6 段 `"0 0 9 * * 1"`，每周一 9:00:00）
+- `cron.WeeklyReporter.SetSender(s)` / `SetReportTo(to)` — 注入（与 D+15 共用 SMTP + REPORT_TO）
+- `main.go` — 接入（`leaveExpirer` 之后单独 if 一层，不依赖 wecom）
+
+#### 11.12.6 失败语义
+
+| 场景 | 行为 |
+|------|------|
+| SMTP 未配置 | `NoopSender` 兜底，只 log 不发 |
+| 收件人为空 | 跳过发邮件，只写埋点 |
+| 单店组装失败 | log + continue，不阻塞其他店 |
+| 邮件发送失败 | log + continue，不阻塞下一店 |
+| DB 未初始化 | scan 直接 return（首行判断） |
+
+#### 11.12.7 测试覆盖（+23 用例）
+
+- **storage（8 增量）** `usage_report_test.go`：
+  - BasicAggregates（7 笔 → total/completed/noshow/cancelled/active + 率）
+  - ServiceAndCustomerRanking（剪发 x4 / 染发 x2 / 烫发 x1 + Alice 4 / Bob 2 / Cara 1）
+  - DailyTrend_FillsGaps（缺失 5 天补 0 + 长度恒为 7）
+  - EmptyShop（空店，rates=0, daily_trend=7 全 0）
+  - ShopNotFound（报错）
+  - DBNotInitialized（DB=nil 报错）
+  - OutOfWindowExcluded（窗口外预约不计入）
+  - ServiceRankLimitApplied（6 种服务 → 截断 TOP 5）
+  - ListAllShopIDs（3 店 / DB nil 返回 nil）
+- **notify（5 增量）** `email_test.go`：
+  - RenderWeeklyReportHTML 含关键字段（标题/总预约/周环比/排行/日趋势）
+  - EmptyReport 不崩
+  - HTMLEscapesShopName（防 XSS）
+  - DailyBarsRender（7 个条形图 + MM-DD 格式）
+  - RenderChainWeeklyReportHTML 基本形状（店家数/标题/各店名/跨店总数）
+
+#### 11.12.8 后续可继续做（P2 增量）
+
+1. ⏳ 真实环境 SMTP 测试（用 Gmail 应用密码跑一封出来）
+2. ⏳ 跨店周报 cron 触发（v4.3 只做 helper，cron 触发留给运营侧按需启用）
+3. ⏳ 周环比颜色根据阈值变色（增长率 > 50% 才绿，否则灰）
+4. ⏳ 同比上周同一天（周一 vs 上周一）作为更精细的对比
+5. ⏳ 业务事件埋点（每周 1 复购率 / 每周新增顾客数）
+
+---
+
+### 11.13 P2 — 服务目录管理（v4.4 新增，2026-06-22）
+
+#### 11.13.1 业务背景
+
+之前理发师在 Agent 端提供的服务是「写死在 PRD 里的枚举」（剪发/烫发/染发/护理/造型/洗吹/其他），不同店定价/时长不同，没法调整。
+- 真实场景：A 店剪发 ¥30/30 分钟，B 店剪发 ¥80/45 分钟 — 价格表必须可配
+- 「Agent 不知道有这项服务」= 顾客问"做不做美甲"Agent 答"不支持"= 商机流失
+
+本轮新增服务目录管理：商户在后台 CRUD 本店可提供的服务。
+
+#### 11.13.2 数据模型
+
+```go
+type Service struct {
+    ID            string    `gorm:"primaryKey;size:64"`
+    ShopID        string    `gorm:"size:64;index;not null"`  // 多店隔离
+    Name          string    `gorm:"size:64;not null"`        // 剪发/烫发/染发/洗吹/护理/造型/其他
+    EstimatedMin  int       `gorm:"default:30"`              // 预估时长（分钟）
+    PriceRange    string    `gorm:"size:64"`                 // 价格区间描述，如 "80-120"
+    IsActive      bool      `gorm:"default:true;index"`      // false = 已下架（保留历史）
+    SortOrder     int       `gorm:"default:0"`               // 列表展示顺序，asc
+    CreatedAt, UpdatedAt time.Time
+}
+```
+
+#### 11.13.3 关键设计决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 多店隔离 | `Service.ShopID` 必填 + 索引 | 跨店不混数据 |
+| 删除 | 软下架（`IsActive=false`） | 保留历史预约的 service 名可追溯 |
+| 排序 | `SortOrder ASC, ID ASC` | 列表按 sort_order 排，平手按 ID |
+| 名称校验 | trim + 1-32 字 + 非空 | 避免乱填 + XSS |
+| 时长校验 | 1-480 分钟 | 排除 0 / 负数 / 异常长 |
+| 默认服务 | InitDB 后自动 seed 7 项 | 新店零配置可用，sort_order 10/20/30... |
+| 改名检测 | 同店其他同名 → `ErrServiceNameTaken` | 避免重复 |
+| 表名 | `services` | 避开 reserved keyword |
+
+#### 11.13.4 7 个默认服务（seedDefaultServices）
+
+每个新店首次启动自动种子（仅当 `CountServices(shop) == 0`）：
+
+| Name | EstimatedMin | PriceRange | SortOrder |
+|------|------|------|------|
+| 剪发 | 30 | 30-50 | 10 |
+| 烫发 | 90 | 180-380 | 20 |
+| 染发 | 90 | 180-480 | 30 |
+| 洗吹 | 30 | 20-40 | 40 |
+| 护理 | 60 | 80-150 | 50 |
+| 造型 | 45 | 60-120 | 60 |
+| 其他 | 30 | 0-0 | 70 |
+
+#### 11.13.5 7 个核心函数（storage/service_crud.go）
+
+- `CreateService(ctx, shopID, name, estimatedMin, priceRange)` — 重名检测 + 自动算 sort_order（max+10）
+- `GetServiceInShop(ctx, shopID, serviceID)` — 按 ID 查 + 校验属于指定 shop
+- `ListServicesByShop(ctx, shopID, includeInactive)` — 列表（默认只 active，includeInactive=true 返全部）
+- `UpdateService(ctx, shopID, serviceID, name, estimatedMin, priceRange, sortOrder)` — 改名 + 改时长 + 改价格 + 改顺序
+- `DeactivateService(ctx, shopID, serviceID)` — 软下架（幂等）
+- `ActivateService(ctx, shopID, serviceID)` — 重新上架（幂等）
+- `CountServices(ctx, shopID)` — 计数（用于"是否需要 seed"判断）
+
+#### 11.13.6 测试覆盖（+11 用例）
+
+- CreateService_Success（建服务，验证所有字段）
+- CreateService_DuplicateName（同店同名 → `ErrServiceNameTaken`）
+- CreateService_ValidationErrors（empty name / name too long / min 0 / min 999 / price too long / empty shop）
+- ListServicesByShop_OrderAndFilter（includeInactive=true/false + sort_order asc）
+- GetServiceInShop_ShopIsolation（跨店 → `ErrServiceNotFoundInShop`）
+- UpdateService_Success（改名 + 改时长 + 改价格 + 改顺序）
+- UpdateService_DuplicateName（改名为已存在 → `ErrServiceNameTaken`）
+- DeactivateActivate_Idempotent（重复 deactivate 幂等 + activate）
+- DeactivateService_NotFound（不存在的 service 报错）
+- CountServices（空店 0 / 建 2 个变 2）
+
+---
+
+### 11.14 P2 — 商户后台 5 个新模块（v4.4 新增，2026-06-22）
+
+#### 11.14.1 业务背景
+
+之前后台只有 4 个功能：登录 / barber 管理 / dashboard / 链看板。MVP 完成后还差 5 个核心模块：
+1. 店铺设置（修改营业时间/午休/节假日/时区）
+2. 转人工待处理列表（v3.9 加了埋点但没 UI）
+3. 顾客管理（看本店顾客 + 加减标签）
+4. 续费管理（看当前订阅 + 历史）
+5. 服务目录（v4.4 第 13 节 — 已完成）
+
+11 个新 endpoint 一次性补完。
+
+#### 11.14.2 11 个新 endpoint
+
+| 模块 | Method | Path | 说明 |
+|------|------|------|------|
+| 店铺设置 | GET | `/api/admin/shop` | 查店铺配置 |
+| 店铺设置 | PUT | `/api/admin/shop` | 改店铺配置（部分字段） |
+| 转人工 | GET | `/api/admin/handoffs?limit=50` | 查 handoff_to_human 埋点 |
+| 顾客管理 | GET | `/api/admin/customers?query=&tag=&limit=200` | 模糊查本店顾客 |
+| 顾客管理 | POST | `/api/admin/customers/tag` | 加标签（VIP/FREQUENT/BLACKLIST/NEW） |
+| 顾客管理 | DELETE | `/api/admin/customers/tag` | 减标签 |
+| 续费管理 | GET | `/api/admin/subscription` | 查当前 + 历史订阅 |
+| 服务目录 | GET | `/api/admin/services?include_inactive=true` | 列服务（含/不含 inactive） |
+| 服务目录 | POST | `/api/admin/services` | 建服务 |
+| 服务目录 | PUT | `/api/admin/services/:id` | 改服务 |
+| 服务目录 | DELETE | `/api/admin/services/:id` | 软下架 |
+| 服务目录 | POST | `/api/admin/services/:id/activate` | 重新上架 |
+
+#### 11.14.3 关键设计决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| shopID 来源 | JWT claims（`shopFromClaims(c)`） | 多店隔离；前端不传 shopID 避免越权 |
+| 错误响应 | `{"error": "..."}` 统一 map | 与 v4.0+ 风格一致 |
+| 输入校验 | 字段必填 + 长度上限 + 枚举值 | 422/400 错误立即返回 |
+| 跨店保护 | `customerInShop()` helper | 顾客必须在本店有预约才允许加标签 |
+| 状态码 | 400/401/403/404/409/500 | RESTful 标准 |
+| 续费展示 | `IsCurrent` 字段计算 | 不存 `is_current`，按 `cancelled_at IS NULL AND expires_at > now` 实时算 |
+
+#### 11.14.4 顾客管理的跨店难题
+
+- `Customer` 模型**没有** `shop_id` 字段（v3.5 故意这样设计 — 黑名单跨店共享）
+- 但 UI 只看本店顾客
+- 解决方案：先用 `appointments WHERE shop_id=? AND customer_id<>''` 拿到「本店有预约的顾客 ID 列表」，再展开 customer 详情
+
+#### 11.14.5 关键代码
+
+- `api/admin_features.go` — 11 个新 handler（656 行）
+- `static/admin.html` — 984 → 2633 行（重构 + 5 个新 tab + 兼容旧版）
+- `api/api.go` — `RegisterRoutes` 加 11 个新路由
+- `storage/db.go` — AutoMigrate `&Service{}` + `seedDefaultServices` 自动种子
+- `storage/models.go` — `Service` 模型 + `TableName()`
+
+#### 11.14.6 后续可继续做
+
+1. ⏳ 批量导入服务（CSV / Excel）
+2. ⏳ 顾客详情页（v4.4 只列名单 + 加减标签，不展开单顾客的预约历史）
+3. ⏳ 续费管理加"提前续费"按钮（直接调 `/subscription/renew` 已有接口）
+4. ⏳ 店铺设置加 `wecom_*` 字段（v4.4 故意不暴露，避免一致性风险）
+5. ⏳ 转人工列表加「已处理」勾选（写新事件类型 `handoff_resolved`）
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -1362,7 +1630,7 @@ SMTP_FROM_NAME=美发店 AI Agent
 
 ---
 
-*文档版本：v4.2 | 更新日期：2026-06-21*
+*文档版本：v4.4 | 更新日期：2026-06-22*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
@@ -1376,3 +1644,7 @@ SMTP_FROM_NAME=美发店 AI Agent
 **v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + today/week/month 三窗口 + 9 个 api 单测）+ 修 pre-existing `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在 `shop_id` 列的 SQL warning（5 个 storage 单测）。
 **v3.9 增量**：新增 §11.9 MVP 第 5 项「转人工兜底」（`HandoffToHumanTool` 写埋点 + 3 类允许场景约束 + `EventHandoffToHuman` 事件类型 + 5 个 tools 单测）+ `DashboardResponse.HandoffPendingToday` 卡片（复用 `EventFunnelToday` 零额外 SQL + 5 个 api 单测），共 +10 个新单测。
 **v4.0 增量**：新增 §11.10 P2 多店数据汇总（`/api/admin/chain/dashboard` 跨店看板 endpoint + `storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper + `chainEventFunnel` 跨店事件漏斗 + 16 个 api 单测）。
+**v4.1 增量**：新增 §11.10.8 P2 跨店看板时间窗口切换（`?window=today|week|month` query 参数 + `parseWindow` / `resolveWindowBounds` / `ValidChainDashboardWindows` helpers + 13 个 api 单测）。
+**v4.2 增量**：新增 §11.11 PRD §8.2 D+15 使用报告邮件（`storage.BuildD15UsageReport` 数据组装 + 冷启动 vs 增长期两段对比 + `notify/email.go` SMTP 发送层 + `Sender` 接口 + `SMTPSender` / `NoopSender` + `RenderD15ReportHTML` HTML 模板 + `cron/lifecycle.go` D+15 集成 + .env SMTP_* 配置 + 25 个新单测：storage 8 + notify 16 + cron 9 增量，cron 总数 14）。
+**v4.3 增量**：新增 §11.12 P2 每周一周报 cron（`storage.WeeklyReport` / `ChainWeeklyReport` 数据结构 + `BuildWeeklyUsageReport` / `BuildChainWeeklyUsageReport` 跨店聚合 + `ListAllShopIDs` + `notify.RenderWeeklyReportHTML` / `RenderChainWeeklyReportHTML` HTML 模板（总览/周环比/排行/7 天日趋势条形图）+ `cron/weekly_report.go` `WeeklyReporter` 标准 cron 6 段 `"0 0 9 * * 1"` + 23 个新单测（storage 8 周报 + notify 5 周报模板））。
+**v4.4 增量**：新增 §11.13 P2 服务目录管理（`storage.Service` 模型 + `services` 表 + 7 个默认服务自动种子 + `storage/service_crud.go` 7 个核心函数（CreateService / GetServiceInShop / ListServicesByShop / UpdateService / DeactivateService / ActivateService / CountServices）+ 11 个新单测）+ §11.14 后台 5 个新模块（店铺设置 / 转人工列表 / 顾客管理 / 续费管理 / 服务目录，11 个新 endpoint，`api/admin_features.go` 656 行 + `static/admin.html` 984 → 2633 行重构集成 5 个新 tab）。

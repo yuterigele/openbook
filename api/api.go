@@ -85,6 +85,25 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	//   - 后续要做细粒度控制：role="platform_admin" 限定（待产品定义）
 	protected.GET("/chain/dashboard", chainDashboardHandler)
 
+	// v4.4 补全：5 个新模块（PRD §5 §9.2 + 服务目录管理）
+	//   - 店铺设置   /shop        GET/PUT
+	//   - 转人工列表 /handoffs    GET
+	//   - 顾客管理   /customers   GET + /customers/tag POST/DELETE
+	//   - 续费管理   /subscription GET
+	//   - 服务目录   /services    GET/POST/PUT/DELETE/activate
+	protected.GET("/shop", getShopHandler)
+	protected.PUT("/shop", updateShopHandler)
+	protected.GET("/handoffs", listHandoffsHandler)
+	protected.GET("/customers", listCustomersHandler)
+	protected.POST("/customers/tag", addCustomerTagHandler)
+	protected.DELETE("/customers/tag", removeCustomerTagHandler)
+	protected.GET("/subscription", listSubscriptionsHandler)
+	protected.GET("/services", listServicesHandler)
+	protected.POST("/services", createServiceHandler)
+	protected.PUT("/services/:id", updateServiceHandler)
+	protected.DELETE("/services/:id", deactivateServiceHandler)
+	protected.POST("/services/:id/activate", activateServiceHandler)
+
 	// 静态：商户后台页面
 	h.GET("/admin", func(ctx context.Context, c *app.RequestContext) {
 		data, err := staticAdmin()

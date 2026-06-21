@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -68,6 +69,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&EventLog{},
 		&ShopAdmin{},
 		&BarberLeave{}, // P4 理发师请假（2026-06-21）
+		&Service{},     // v4.4 服务目录（2026-06-22）
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
@@ -88,6 +90,11 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 	// 老数据兜底：barber.shop_id 为空的，统一填到第一家店
 	if err := ensureBarberShopIDs(ctx); err != nil {
 		log.Printf("[storage] ensureBarberShopIDs 警告: %v", err)
+	}
+
+	// v4.4 服务目录默认种子：每个店没有 service 时建一组通用项
+	if err := seedDefaultServices(ctx, db); err != nil {
+		log.Printf("[storage] seedDefaultServices 警告: %v", err)
 	}
 
 	DB = db
@@ -214,4 +221,63 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// uuidGenerate 实际调用 uuid.NewString（避免在多个文件里重复 import）
+func uuidGenerate() string {
+	return uuid.Must(uuid.NewRandom()).String()
+}
+
+// seedDefaultServices 给所有"还没有任何 service"的店铺建一组通用服务
+//
+// 默认 7 项：剪发 30min、烫发 90min、染发 90min、洗吹 30min、护理 60min、造型 45min、其他 30min
+// 用 sort_order 10/20/30... 递增，便于后台手动调整顺序
+func seedDefaultServices(ctx context.Context, db *gorm.DB) error {
+	var shops []Shop
+	if err := db.WithContext(ctx).Find(&shops).Error; err != nil {
+		return err
+	}
+	defaults := []struct {
+		Name         string
+		EstimatedMin int
+		PriceRange   string
+		SortOrder    int
+	}{
+		{"剪发", 30, "30-50", 10},
+		{"烫发", 90, "180-380", 20},
+		{"染发", 90, "180-480", 30},
+		{"洗吹", 30, "20-40", 40},
+		{"护理", 60, "80-150", 50},
+		{"造型", 45, "60-120", 60},
+		{"其他", 30, "0-0", 70},
+	}
+	for _, shop := range shops {
+		if CountServices(ctx, shop.ID) > 0 {
+			continue
+		}
+		now := time.Now()
+		for _, d := range defaults {
+			s := Service{
+				ID:           uuidNewString(),
+				ShopID:       shop.ID,
+				Name:         d.Name,
+				EstimatedMin: d.EstimatedMin,
+				PriceRange:   d.PriceRange,
+				IsActive:     true,
+				SortOrder:    d.SortOrder,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			if err := db.WithContext(ctx).Create(&s).Error; err != nil {
+				log.Printf("[storage] 种子 service %q 失败 (shop=%s): %v", d.Name, shop.ID, err)
+			}
+		}
+		log.Printf("[storage] 种子 service: shop=%s 建了 %d 项", shop.ID, len(defaults))
+	}
+	return nil
+}
+
+// uuidNewString 包内统一的 ID 生成器（uuid v4）
+func uuidNewString() string {
+	return uuidGenerate()
 }
