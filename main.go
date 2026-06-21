@@ -277,17 +277,25 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 			}()
 		}
 
-		// 周报触发器（PRD §8.2 / §11.12 v4.3 — 每周一 9:00 给所有店发周报邮件）
+		// 周报触发器（PRD §8.2 / §11.12 v4.3 + v4.5 跨店增量 — 每周一 9:00）
 		//   - 复用同一份 SMTP 配（与 D+15 共用 sender）
-		//   - 复用 REPORT_TO 配（与 D+15 共用收件人）
+		//   - 收件人两路独立：
+		//     - REPORT_TO：单店逐店周报（与 D+15 共用）
+		//     - CHAIN_REPORT_TO：跨店汇总周报（连锁 owner 视角，v4.5 增量）
 		//   - 不依赖 wecom 客户端，单独 if 一层
 		weeklyReporter := cronpkg.NewWeeklyReporter()
 		weeklyReporter.SetSender(notify.NewSender(emailCfg))
 		if len(reportTo) > 0 {
 			weeklyReporter.SetReportTo(reportTo)
-			log.Printf("[weekly] 周报邮件已启用，收件人 %d 人：%v", len(reportTo), reportTo)
+			log.Printf("[weekly] 单店周报邮件已启用，收件人 %d 人：%v", len(reportTo), reportTo)
 		} else {
-			log.Printf("[weekly] REPORT_TO 未配置，周报邮件跳过（仅写埋点）")
+			log.Printf("[weekly] REPORT_TO 未配置，单店周报邮件跳过（仅写埋点）")
+		}
+		if chainReportTo := parseRecipients(os.Getenv("CHAIN_REPORT_TO")); len(chainReportTo) > 0 {
+			weeklyReporter.SetChainReportTo(chainReportTo)
+			log.Printf("[weekly] 跨店汇总周报邮件已启用，收件人 %d 人：%v", len(chainReportTo), chainReportTo)
+		} else {
+			log.Printf("[weekly] CHAIN_REPORT_TO 未配置，跨店周报邮件跳过（仅写埋点）")
 		}
 		if err := weeklyReporter.Start(ctx); err != nil {
 			log.Printf("⚠️  启动 weekly reporter cron 失败: %v", err)

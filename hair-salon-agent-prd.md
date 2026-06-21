@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.4）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.5）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-22 | **版本**：v4.4（v4.3 周报 cron + v4.4 服务目录 + 后台 5 个新模块 — 完整体检 / 周报 / 续费 / 转人工）
+> **作者**：Mavis（M3）| **日期**：2026-06-22 | **版本**：v4.5（v4.4 服务目录 + 后台 5 个新模块 + v4.5 跨店周报 cron 触发 — 完整体检 / 周报 / 续费 / 转人工 / 跨店汇总邮件）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -18,6 +18,7 @@
 > **v4.2 变更**：新增 §11.11 PRD §8.2 D+15 真正升级为「使用报告邮件」—— 之前 D+15 只发一行微信短文，本轮渲染完整 HTML 报告（总览 + 阶段对比 + 服务排行 TOP 5 + 熟客排行 TOP 5）+ 通过 SMTP 发送给店铺 owner；`storage.BuildD15UsageReport` 数据组装（按"冷启动期 vs 增长期"两段对比）+ `notify/email.go` 邮件层（`Sender` 接口 + `SMTPSender` + `NoopSender` 兜底 + `RenderD15ReportHTML` 模板 + `net/smtp` 走 465 SSL / 587）；SMTP 未配置时自动退化到 NoopSender，D+15 只发微信不报错；`cron/lifecycle.go` D+15 路径集成 `SetSender` / `SetReportTo`（向后兼容默认 Noop）；+ 25 个新单测（storage 8 + notify 16 + cron 9 增量 + chain 2 不变）。
 > **v4.3 变更**：新增 §11.12 P2 每周一周报 cron —— 每周一 9:00 自动给所有店发"上周经营数据"邮件，覆盖任意时长的店铺（不依赖 first_appointment）；`storage.WeeklyReport` / `ChainWeeklyReport` 数据结构 + `BuildWeeklyUsageReport` / `BuildChainWeeklyUsageReport` 跨店聚合 + `ListAllShopIDs` helper；`notify.RenderWeeklyReportHTML` / `RenderChainWeeklyReportHTML` HTML 模板（总览 + 周环比 + 服务/熟客排行 + 7 天日趋势条形图）；`cron/weekly_report.go` `WeeklyReporter` 每分钟一次 cron 检查（标准 6 段 `"0 0 9 * * 1"`）+ `SetSender` / `SetReportTo` 注入（与 D+15 共用 SMTP + REPORT_TO，复用 v4.2 基建）；+ 23 个新单测（storage 8 + notify 5 新增）。
 > **v4.4 变更**：新增 §11.13 P2 服务目录管理 + §11.14 后台 5 个新模块 —— 商户后台 11 个新 endpoint：1) 服务目录 CRUD (`GET/POST/PUT/DELETE/activate /services`，新建 `services` 表 + `Service` 模型 + 7 个默认服务自动种子 + 多店隔离 + 软下架)；2) 店铺设置 (`GET/PUT /shop` 营业时间/午休/节假日/时区)；3) 转人工待处理列表 (`GET /handoffs` 从 event_logs 筛 handoff_to_human)；4) 顾客管理 (`GET /customers` + 加减标签)；5) 续费管理 (`GET /subscription` 当前 + 历史订阅)。`storage/service_crud.go` 7 个核心函数 + 11 个新单测 + `api/admin_features.go` 11 个 handler（656 行）+ `static/admin.html` 重构（984 → 2633 行，集成 5 个新 tab）。
+> **v4.5 变更**：新增 §11.15 P2 跨店周报 cron 触发 —— v4.3 的 `BuildChainWeeklyUsageReport` + `RenderChainWeeklyReportHTML` 之前只是 helper，本轮把连锁 owner 视角的跨店汇总邮件真正接入 `WeeklyReporter`：`cron/weekly_report.go` 新增 `SetChainReportTo` setter + `triggerChain` 方法（埋点 + 聚合 + 渲染 + 发邮件，与 `triggerOne` 完全独立），`scan` 在 chainReportTo 非空时额外调一次；`main.go` 新增 `CHAIN_REPORT_TO` 环境变量（与 `REPORT_TO` 完全独立，可单配）；`WeeklyReporter` 收件人两路独立（单店/跨店），与 `reportTo` 不串扰；+ 12 个新单测（cron 12）。
 
 ---
 
@@ -1458,7 +1459,7 @@ type ChainWeeklyReport struct {
 #### 11.12.8 后续可继续做（P2 增量）
 
 1. ⏳ 真实环境 SMTP 测试（用 Gmail 应用密码跑一封出来）
-2. ⏳ 跨店周报 cron 触发（v4.3 只做 helper，cron 触发留给运营侧按需启用）
+2. ✅ 跨店周报 cron 触发（v4.5 增量已落地 —— 详见 §11.15）
 3. ⏳ 周环比颜色根据阈值变色（增长率 > 50% 才绿，否则灰）
 4. ⏳ 同比上周同一天（周一 vs 上周一）作为更精细的对比
 5. ⏳ 业务事件埋点（每周 1 复购率 / 每周新增顾客数）
@@ -1607,6 +1608,122 @@ type Service struct {
 
 ---
 
+### 11.15 P2 — 跨店周报 cron 触发（v4.5 增量，2026-06-22）
+
+#### 11.15.1 业务背景
+
+v4.3 的周报 cron 只发了**单店版**邮件（每店一封），但 `storage.BuildChainWeeklyUsageReport` + `notify.RenderChainWeeklyReportHTML` 这两个 helper 早就写好了，只是没接进 `WeeklyReporter.scan`。
+
+对连锁品牌 owner 来说，单店周报意味着"看 N 次不同邮件、做 N 次心算"；跨店周报意味着"一封邮件看所有店 + 跨店汇总"。后者是"每周一 9 点打开邮箱就能 30 秒看完整个品牌的健康度"。
+
+本轮把 v4.3 留下的 helper 真正接进 cron，落地连锁视角的跨店汇总邮件。
+
+#### 11.15.2 收件人两路独立（关键设计决策）
+
+为什么 `reportTo` 和 `chainReportTo` 互不耦合？
+
+| 视角 | 收件人配置 | 内容 |
+|------|----------|------|
+| 单店 owner | `REPORT_TO=owner@shop1.com` | 每店一封，含本店详情 |
+| 连锁 owner | `CHAIN_REPORT_TO=chain@group.com` | 一封汇总邮件，含所有店 + 跨店排行 |
+| 同时配两个 | 两个都发 | 不串扰、不合并 |
+
+- 单店视角关心"我这店这周 vs 上周"
+- 连锁视角关心"哪个店最忙 / 哪个店有下滑 / 整体趋势"
+- 合并发会让两个视角都看不清（要么连锁 owner 收到 N+1 封，要么单店 owner 看到不该看的跨店数据）
+
+实现：
+- `WeeklyReporter.SetReportTo(to)` — 单店逐店周报（v4.3 已存在）
+- `WeeklyReporter.SetChainReportTo(to)` — 跨店汇总周报（v4.5 新增）
+- `WeeklyReporter.scan()` — 两个 setter 任一非空就触发对应路径
+- `main.go` 读 `REPORT_TO` + `CHAIN_REPORT_TO` 两个环境变量，独立 parse + log
+
+#### 11.15.3 实现路径
+
+新增 `cron/weekly_report.go triggerChain(ctx, now)`：
+1. 写埋点 — `TrackEvent(ctx, "", EventWeeklyReport, "chain", {scope: "chain", week_start, recipients})`（shopID 留空，refID="chain"）
+2. 组装报告 — `storage.BuildChainWeeklyUsageReport(ctx, now)`
+3. ShopCount=0 时 skip（避免给空店群发邮件）
+4. 渲染 HTML — `notify.RenderChainWeeklyReportHTML(rep)`
+5. 发邮件 — `r.sender.SendHTML(ctx, r.chainReportTo, subject, html)`（chainReportTo 由 scan guard）
+
+`scan` 调用顺序（重要）：
+- 先 `triggerChain`（如果 chainReportTo 非空）
+- 再循环 `triggerOne`（如果 reportTo 非空）
+- 两个互不阻塞：chain 失败不影响 per-shop，per-shop 失败不影响 chain
+
+#### 11.15.4 失败语义
+
+| 场景 | 行为 |
+|------|------|
+| SMTP 未配置 | `NoopSender` 兜底，chain 邮件也只 log |
+| CHAIN_REPORT_TO 未配置 | 跨店不发邮件（仅写埋点 + log），per-shop 不受影响 |
+| REPORT_TO 未配置 | 单店不发邮件，chain 不受影响 |
+| 跨店组装失败 | log + continue（per-shop 仍发） |
+| 跨店邮件发送失败 | log + continue（per-shop 仍发） |
+| DB 未初始化 | scan 头部 return（既不发 chain 也不发 per-shop） |
+| 无店铺 | 跨店 scan 内部 `if rep.ShopCount == 0` skip（per-shop 走 ListAllShopIDs 空切片也 skip） |
+
+#### 11.15.5 配置
+
+`.env` 新增 `CHAIN_REPORT_TO`（与 `REPORT_TO` 完全独立）：
+```
+# 单店周报（沿用 D+15 同 SMTP）
+REPORT_TO=owner@shop1.com,owner@shop2.com
+
+# 跨店汇总周报（v4.5 增量，连锁 owner 视角）
+CHAIN_REPORT_TO=chain-owner@group.com
+```
+
+- `CHAIN_REPORT_TO` 留空 → 跨店周报完全关闭（仅写埋点 + log）
+- 同时留空 → 整个周报 cron 静默 no-op（埋点都不写，因为 scan 在第一行 guard）
+- 同时非空 → 两路邮件独立发送
+
+#### 11.15.6 测试覆盖（+12 用例）
+
+`cron/weekly_report_test.go`（v4.5 全量新增）：
+
+**Setter / 默认值（4）**
+- `TestWeeklyReporter_DefaultSenderIsNoop` — 默认 sender = NoopSender
+- `TestWeeklyReporter_SetSender_Replace` — 替换 sender
+- `TestWeeklyReporter_SetSender_NilRestoresNoop` — SetSender(nil) 恢复 Noop
+- `TestWeeklyReporter_SetReportTo` — 单店收件人设置
+- `TestWeeklyReporter_SetChainReportTo` — 跨店收件人设置（+ 验证与 reportTo 独立）
+
+**scan 行为（3）**
+- `TestWeeklyReporter_Scan_DBNotInitialized_NoPanic` — DB nil 不 panic
+- `TestWeeklyReporter_Scan_BothReportToAndChainReportTo_FiresBoth` — 两路都配时发 2 封（按 subject 区分）
+- `TestWeeklyReporter_Scan_NoReportTo_NoChainReportTo_DoesNotCallSender` — 都不配时 0 封
+
+**triggerChain 行为（5）**
+- `TestTriggerChain_DBNotInitialized_NoPanic` — DB nil 不 panic
+- `TestTriggerChain_NoShops_DoesNotCallSender` — 无店铺时不发邮件
+- `TestTriggerChain_FullPath_SendsOneChainEmail` — 单店 + 1 封 chain 邮件（subject 含"连锁周报"）
+- `TestTriggerChain_MultipleShops_AggregatesCorrectly` — 多店 + 聚合数正确（4 completed + 1 noshow）
+- `TestTriggerChain_SenderError_DoesNotPanic` — sender 报错不 panic
+
+**triggerOne 回归（1）**
+- `TestTriggerOne_FullPath_StillSendsPerShop` — v4.3 单店路径不受 v4.5 改动影响（subject 不含"连锁周报"）
+
+#### 11.15.7 关键代码
+
+- `cron/weekly_report.go` `WeeklyReporter.chainReportTo` — 新增字段
+- `cron/weekly_report.go` `SetChainReportTo(to)` — 新增 setter
+- `cron/weekly_report.go` `triggerChain(ctx, now)` — 新增方法
+- `cron/weekly_report.go` `scan` — 在原 per-shop 循环前先调 triggerChain
+- `main.go` — 新增 `os.Getenv("CHAIN_REPORT_TO")` parseRecipients + log
+- `.env.example` — 新增 `CHAIN_REPORT_TO` 配置项
+
+#### 11.15.8 后续可继续做（P2 增量）
+
+1. ⏳ 跨店周报支持按区域/品牌分组（现在是平铺所有店）
+2. ⏳ 跨店周报加"哪家店最需要关注"智能提示（基于 noshow_rate 突增）
+3. ⏳ 跨店周报"对比上月同期"（现在是上周 vs 本周，可以做上月 vs 本月）
+4. ⏳ chain 周报 + D+15 复用一封邮件（连锁 owner 不想收 2 封）
+5. ⏳ 真实环境 SMTP 测试（需 Gmail 应用密码，验证 chain 邮件的中文 subject / HTML 渲染）
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -1630,7 +1747,7 @@ type Service struct {
 
 ---
 
-*文档版本：v4.4 | 更新日期：2026-06-22*
+*文档版本：v4.5 | 更新日期：2026-06-22*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
@@ -1648,3 +1765,4 @@ type Service struct {
 **v4.2 增量**：新增 §11.11 PRD §8.2 D+15 使用报告邮件（`storage.BuildD15UsageReport` 数据组装 + 冷启动 vs 增长期两段对比 + `notify/email.go` SMTP 发送层 + `Sender` 接口 + `SMTPSender` / `NoopSender` + `RenderD15ReportHTML` HTML 模板 + `cron/lifecycle.go` D+15 集成 + .env SMTP_* 配置 + 25 个新单测：storage 8 + notify 16 + cron 9 增量，cron 总数 14）。
 **v4.3 增量**：新增 §11.12 P2 每周一周报 cron（`storage.WeeklyReport` / `ChainWeeklyReport` 数据结构 + `BuildWeeklyUsageReport` / `BuildChainWeeklyUsageReport` 跨店聚合 + `ListAllShopIDs` + `notify.RenderWeeklyReportHTML` / `RenderChainWeeklyReportHTML` HTML 模板（总览/周环比/排行/7 天日趋势条形图）+ `cron/weekly_report.go` `WeeklyReporter` 标准 cron 6 段 `"0 0 9 * * 1"` + 23 个新单测（storage 8 周报 + notify 5 周报模板））。
 **v4.4 增量**：新增 §11.13 P2 服务目录管理（`storage.Service` 模型 + `services` 表 + 7 个默认服务自动种子 + `storage/service_crud.go` 7 个核心函数（CreateService / GetServiceInShop / ListServicesByShop / UpdateService / DeactivateService / ActivateService / CountServices）+ 11 个新单测）+ §11.14 后台 5 个新模块（店铺设置 / 转人工列表 / 顾客管理 / 续费管理 / 服务目录，11 个新 endpoint，`api/admin_features.go` 656 行 + `static/admin.html` 984 → 2633 行重构集成 5 个新 tab）。
+**v4.5 增量**：新增 §11.15 P2 跨店周报 cron 触发（v4.3 留下的 `BuildChainWeeklyUsageReport` + `RenderChainWeeklyReportHTML` 真正接入 `WeeklyReporter.scan` —— 新增 `SetChainReportTo` setter + `triggerChain` 方法，与 `triggerOne` 完全独立；`main.go` 新增 `CHAIN_REPORT_TO` 环境变量，与 `REPORT_TO` 互不耦合；+ 12 个新单测：cron 12）。
