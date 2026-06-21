@@ -121,7 +121,7 @@ func FindShopsForLifecycle(ctx context.Context, days int, eventType string) []st
 	return due
 }
 
-// parseAnyTime 把数据库驱动返回的任意时间值转成 time.Time。
+// parseAnyTime 把数据库驱动返回的任意时间值转成 time.Time（包内使用）。
 //
 // 支持：
 //   - time.Time（MySQL go-sql-driver）
@@ -146,6 +146,12 @@ func parseAnyTime(v any) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+// ParseAnyTime 是 parseAnyTime 的导出版本，供其他包（api/cron）复用。
+// 见 parseAnyTime 的注释。
+func ParseAnyTime(v any) (time.Time, bool) {
+	return parseAnyTime(v)
 }
 
 func parseTimeString(s string) (time.Time, bool) {

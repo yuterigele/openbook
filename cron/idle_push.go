@@ -151,6 +151,8 @@ func (p *IdleSlotPusher) pushForShop(ctx context.Context, shop *storage.Shop, to
 	log.Printf("[idle] shop=%s 今天有 %d 个空档待推", shop.ID, len(slots))
 
 	// 3. 找"休眠客"：30+ 天没来 + 最近 60 天来过（避免打扰从未到店的人）
+	//
+	// 注意：Customer 模型没有 shop_id 字段（顾客跨店共享），所以不再用 shopID 过滤。
 	var dormant []storage.Customer
 	cutoffDate := now.AddDate(0, 0, -30).Format("2006-01-02")
 	recentDate := now.AddDate(0, 0, -60).Format("2006-01-02")
@@ -159,7 +161,6 @@ func (p *IdleSlotPusher) pushForShop(ctx context.Context, shop *storage.Shop, to
 		Where("DATE(last_visit_at) <= ?", cutoffDate).
 		Where("DATE(last_visit_at) >= ?", recentDate).
 		Where("tags NOT LIKE ?", "%BLACKLIST%").
-		Where("(shop_id = ? OR shop_id = '' OR shop_id IS NULL)", shop.ID).
 		Limit(50). // 防止一次推太多
 		Find(&dormant).Error; err != nil {
 		log.Printf("[idle] 加载休眠客失败: %v", err)

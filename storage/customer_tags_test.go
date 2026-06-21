@@ -238,3 +238,74 @@ func TestRemoveCustomerTag_CustomerNotFound(t *testing.T) {
 		t.Error("expected error for non-existent customer, got nil")
 	}
 }
+
+// ===================== isCustomerBlacklistedByTx (黑名单查询修复) =====================
+//
+// 回归测试：原先 `isCustomerBlacklistedByTx` 在 Customer 表上用了不存在的
+// `shop_id` 列做过滤，SQLite/MySQL 都报 "no such column: shop_id" warning。
+// v3.8 修复：黑名单是按顾客维度（跨店共享），去掉 shop_id 过滤。
+//
+// 这些测试不依赖事务（直接传 DB），但保持函数签名一致以验证修复。
+
+func TestIsCustomerBlacklistedByTx_PhoneMatch(t *testing.T) {
+	SetupTestDB(t)
+	// 顾客 A 在黑名单里，有手机号
+	black := MakeCustomer(t, "Bad", 0, 0)
+	DB.Model(black).Updates(map[string]any{
+		"phone": "13800000000",
+		"tags":  TagBlacklist,
+	})
+	// 顾客 B 正常
+	_ = MakeCustomer(t, "Good", 0, 0)
+
+	if got := isCustomerBlacklistedByTx(DB, "13800000000", "shop-X"); !got {
+		t.Error("按 phone 匹配黑名单应返回 true")
+	}
+}
+
+func TestIsCustomerBlacklistedByTx_NameFallback(t *testing.T) {
+	SetupTestDB(t)
+	black := MakeCustomer(t, "李黑", 0, 0)
+	DB.Model(black).Update("tags", TagBlacklist) // 没手机号，靠名字匹配
+
+	if got := isCustomerBlacklistedByTx(DB, "李黑", "shop-Y"); !got {
+		t.Error("按 name fallback 匹配黑名单应返回 true")
+	}
+}
+
+func TestIsCustomerBlacklistedByTx_NoMatch(t *testing.T) {
+	SetupTestDB(t)
+	black := MakeCustomer(t, "李黑", 0, 0)
+	DB.Model(black).Updates(map[string]any{
+		"phone": "13800000000",
+		"tags":  TagBlacklist,
+	})
+
+	if got := isCustomerBlacklistedByTx(DB, "13800001111", "shop-Z"); got {
+		t.Error("陌生 phone 不应命中黑名单")
+	}
+}
+
+func TestIsCustomerBlacklistedByTx_EmptyCustomerNoOp(t *testing.T) {
+	SetupTestDB(t)
+	// 空 customer 直接返回 false，不查 DB
+	if got := isCustomerBlacklistedByTx(DB, "", "shop-1"); got {
+		t.Error("空 customer 应返回 false（短路）")
+	}
+}
+
+func TestIsCustomerBlacklistedByTx_ShopIDAccepted(t *testing.T) {
+	SetupTestDB(t)
+	// 关键回归：调用时传 shopID 不能 SQL 报错（之前会触发 shop_id 列警告）
+	black := MakeCustomer(t, "Mallory", 0, 0)
+	DB.Model(black).Updates(map[string]any{
+		"phone": "13700000000",
+		"tags":  TagBlacklist,
+	})
+
+	// 不应 panic，不应 error；正确返回 true
+	got := isCustomerBlacklistedByTx(DB, "13700000000", "shop-连锁-A")
+	if !got {
+		t.Error("跨店查询黑名单应仍然命中（黑名单是全局的）")
+	}
+}

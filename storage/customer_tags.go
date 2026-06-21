@@ -122,16 +122,17 @@ func RemoveCustomerTag(ctx context.Context, customerID, tag string) error {
 }
 
 // 工具函数：checkBlacklist 由 repo.go 复用
+//
+// 设计决策：黑名单是按顾客维度（不是按店铺维度）—— 一个顾客在任何店都黑名单。
+// Customer 模型没有 shop_id 字段，所以不能用 shopID 过滤。
+// shopID 参数保留（兼容 call site），但不在 SQL 端使用。
 func isCustomerBlacklistedByTx(tx *gorm.DB, customer, shopID string) bool {
+	_ = shopID // 黑名单是跨店的；保留参数仅为兼容调用方
 	if customer == "" {
 		return false
 	}
 	var rows []Customer
-	q := tx.Where("tags LIKE ?", "%BLACKLIST%")
-	if shopID != "" {
-		q = q.Where("shop_id = ? OR shop_id = '' OR shop_id IS NULL", shopID)
-	}
-	if err := q.Find(&rows).Error; err != nil {
+	if err := tx.Where("tags LIKE ?", "%BLACKLIST%").Find(&rows).Error; err != nil {
 		return false
 	}
 	for _, c := range rows {

@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.7）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.8）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.7（P4 改派策略升级：按 Barber.Skills 三档分级匹配）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.8（P2 dashboard 事件漏斗 + 修 pre-existing SQL warning）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -11,6 +11,7 @@
 > **v3.6 变更**：新增 §11.7.9 P4 query_schedule 视觉区分 —— `QueryScheduleBreakdown` storage helper 一次返回 available / leave blocks / booked count；query_schedule 渲染拆三段（可约 / 师傅请假 / 已约满），让 Agent 直接判断"换时间"还是"换师傅"；修复 toBarberLeaves 跨天请假判整天的 bug；+ 12 个新单测（storage 6 + tools 6）。
 > **v3.6 增量**：新增 §11.7.10 P4 list_barbers 标记请假理发师 —— 选人阶段就把"今日请假"前置，让顾客不用先选师傅再被 reject；区分"正在请假（HH:MM-HH:MM）"和"即将请假（HH:MM 起）"两种文案；cancelled / expired leave 不显示；+ 8 个新单测。
 > **v3.7 变更**：新增 §11.7.11 P4 改派策略升级 —— `findAlternateBarber` 从"按 name asc 取第一个空闲"改为三档分级：第一档 Skills 匹配（真会这门手艺）→ 第二档空 Skills 兜底（视作"全能"）→ 第三档任意 active 时段空闲（保底可用性）；+ 14 个新单测（`skillContains` 6 + `findAlternateBarber` 8）。
+> **v3.8 变更**：新增 §11.8 P2 dashboard 事件漏斗 + 修 pre-existing SQL warning —— `eventFunnel` helper 把 18 个 event_type 按 today/week/month 三窗口聚合到 dashboard response；`idle_slot_push:DATE:CUST` 自动归一；修复 `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在的 `shop_id` 列导致的 SQLite/MySQL warning；+ 14 个新单测（storage 5 + api 9）。
 
 ---
 
@@ -808,6 +809,89 @@ v3.7 升级为**三档分级匹配**：
 
 ---
 
+### 11.8 P2 — dashboard 事件漏斗（v3.8 新增，2026-06-21）
+
+> **背景**：PRD §11.2 P1「经营看板 MVP」目前只展示预约聚合（总 / 完成 / 爽约 / 取消 / 即将到店等），但 18 个埋点事件（`EventAppointmentCreated` / `EventBlacklisted` / `EventIdleSlotPush` / `EventBarberLeaveCreated` 等）只躺在 `event_logs` 表里，商户看不到。P2 v3.8 把这些事件按 today / week / month 三窗口聚合进 dashboard response，让商户一眼看清"今天创了多少预约 / 推了多少 idle 提醒 / 拉黑了多少人"。
+
+#### 11.8.1 dashboard response 新增字段
+
+```go
+type EventStat struct {
+    EventType string `json:"event_type"`
+    Count     int    `json:"count"`
+}
+
+type DashboardResponse struct {
+    // ... 原有字段
+    EventFunnelToday []EventStat `json:"event_funnel_today"`
+    EventFunnelWeek  []EventStat `json:"event_funnel_week"`
+    EventFunnelMonth []EventStat `json:"event_funnel_month"`
+}
+```
+
+每个窗口独立聚合（todayStart / weekStart / monthStart 为下界，now 为上界），按 count DESC 排序，截 top 20 防止 response 膨胀。
+
+#### 11.8.2 eventFunnel helper（api/api.go）
+
+```go
+func eventFunnel(ctx context.Context, shopID string, since, until time.Time, limit int) []EventStat
+```
+
+实现要点：
+- **粗筛**：`created_at` 落在 `[since-1d, until+1d]`，给跨天 / 边界预留 buffer
+- **精确过滤**：Go 端用 `storage.ParseAnyTime`（`map[string]any` 中转）跨 sqlite / mysql 驱动解析 `created_at`（与 `FindShopsForLifecycle` 同样的策略，避免 driver 差异）
+- **归一化**：`EventIdleSlotPush` 在存储层是 `idle_slot_push:DATE:CUSTID`（带 customer 维度的幂等键），按 `:` 切前缀，归一为 `idle_slot_push`（避免展开成 N 条）
+- **排序**：count DESC；count 相同时按 `event_type` ASC 稳定排序
+- **limit**：`limit <= 0` 时返回全部；`limit > len(out)` 时直接返回（不补零）
+
+#### 11.8.3 修复 pre-existing SQL warning
+
+`isCustomerBlacklistedByTx`（`storage/customer_tags.go`）和 `IdleSlotPusher.pushForShop`（`cron/idle_push.go`）都引用了 `shop_id` 列做过滤，但 `Customer` 模型没有 `shop_id` 字段（顾客跨店共享，黑名单是按顾客维度的）。SQLite 和 MySQL 都报 `no such column: shop_id` warning。
+
+**修复决策**：去掉 `shop_id` 过滤；`shopID` 参数保留兼容 call site，但加 `_ = shopID` 显式标注「已不用」。
+- **为什么不加 `shop_id` 列？** 设计上顾客是跨店共享的（一个 VIP 顾客在所有店都 VIP），加列会破坏这一不变量；后续如果要做"分店专属 VIP"，应该新开一张 `customer_shop_preference` 表。
+- **为什么不改 call site？** 移除参数会牵动 `repo.go:checkBlacklist` 等多个文件；保留参数 + 显式 `_` 是最小风险做法。
+
+#### 11.8.4 关键设计决策
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 聚合粒度 | today/week/month 三窗口 | 商家日常关心"今天"+"这周"+"这个月"，再多窗口响应膨胀 |
+| 时间字段处理 | Go 端 parseAnyTime | sqlite 返回 string，mysql 返回 time.Time，统一在 Go 解析 |
+| idle_slot_push 归一 | 切 `:` 前缀 | 保留 storage 的幂等命名空间，dashboard 端聚合时不展开 |
+| sort tiebreaker | event_type ASC | count 相同时给一个稳定排序，避免 limit 边界抖动 |
+| 窗口缓冲 | ±1 天 | 跨天预约 + 时区边界预留 |
+| 黑名单 shopID 处理 | 去掉 SQL 过滤 | Customer 模型本身没有 shop_id；用 `_ = shopID` 标注 |
+
+#### 11.8.5 测试覆盖（+14 用例）
+
+**storage（+5）** `customer_tags_test.go`：
+- `TestIsCustomerBlacklistedByTx_PhoneMatch`：按手机号匹配黑名单
+- `TestIsCustomerBlacklistedByTx_NameFallback`：手机号空时按 name 匹配
+- `TestIsCustomerBlacklistedByTx_NoMatch`：陌生 phone 不命中
+- `TestIsCustomerBlacklistedByTx_EmptyCustomerNoOp`：空 customer 短路返回 false
+- `TestIsCustomerBlacklistedByTx_ShopIDAccepted`：**关键回归** —— 传 shopID 不再触发 shop_id 列警告
+
+**api（+9）** `dashboard_test.go`：
+- `TestEventFunnel_EmptyDB`：空 DB 返回空
+- `TestEventFunnel_GroupsByType`：多种事件正确按 event_type 聚合
+- `TestEventFunnel_SortByCountDesc`：count DESC 排序
+- `TestEventFunnel_LimitApplied`：limit 截断
+- `TestEventFunnel_NormalizesIdleSlotPushPrefix`：`idle_slot_push:DATE:CUST` 归一
+- `TestEventFunnel_FiltersByShopID`：按 shop 隔离
+- `TestEventFunnel_FiltersByTimeRange`：跨窗口过滤
+- `TestEventFunnel_DBNotInitialized`：DB nil 安全
+- `TestBuildDashboard_IncludesEventFunnel`：integration —— dashboard response 三窗口均含 funnel
+
+#### 11.8.6 后续可继续做的 P2 增量
+
+1. **多店数据汇总**（PRD §11.3 连锁版本）：新增 `/api/dashboard/chain` endpoint 跨店聚合
+2. **事件趋势图**：把 funnel 扩成时序（`event_funnel_30d_trend` 数组），商户看事件量随时间变化
+3. **事件详情钻取**：在 dashboard 上点某个 event_type → 弹最近 N 条 ref_id + meta
+4. **修 pre-existing `customer_tags.go:134` 老 warning 的同时，把 `late_cancel_count` / `no_show_count` 单独建索引**（目前全表扫，黑名单多时性能下降）
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -831,9 +915,11 @@ v3.7 升级为**三档分级匹配**：
 
 ---
 
-*文档版本：v3.7 | 更新日期：2026-06-21*
+*文档版本：v3.8 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
 **v3.6 增量**：新增 §11.7.9 P4 query_schedule 视觉区分（`QueryScheduleBreakdown` helper + 三段渲染 + 6 storage 单测 + 6 tools 单测）+ §11.7.10 list_barbers 标记今日请假理发师（8 tools 单测，共 20 个新单测）。
+**v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级 + 14 个新单测）。
+**v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + today/week/month 三窗口 + 9 个 api 单测）+ 修 pre-existing `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在 `shop_id` 列的 SQL warning（5 个 storage 单测）。
 **v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级：Skills 匹配 → 空 Skills 兜底 → 任意 active 保底；新增 `skillContains` helper + 14 个新单测）。

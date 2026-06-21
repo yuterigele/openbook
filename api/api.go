@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -263,6 +264,18 @@ type DashboardResponse struct {
 	TopHours       []HourStat                   `json:"top_hours"`        // 热门时段 TOP 5
 	TopBarbers     []BarberStat                 `json:"top_barbers"`      // 热门理发师
 	LifecycleCount int64                        `json:"lifecycle_count"`  // 总事件数（埋点用）
+	// v3.8 P2 dashboard 补全：事件漏斗
+	//   - EventFunnelToday / Week / Month：按 event_type 聚合的事件数（month 范围，desc by count）
+	//   - 包含 PRD §11.2 续费转化漏斗 + P3 黑名单 / P4 请假 / idle_push 等所有埋点
+	EventFunnelToday []EventStat `json:"event_funnel_today"`
+	EventFunnelWeek  []EventStat `json:"event_funnel_week"`
+	EventFunnelMonth []EventStat `json:"event_funnel_month"`
+}
+
+// EventStat 单类事件统计
+type EventStat struct {
+	EventType string `json:"event_type"`
+	Count     int    `json:"count"`
 }
 
 type HourStat struct {
@@ -311,7 +324,75 @@ func buildDashboard(ctx context.Context, shopID string) DashboardResponse {
 
 	// 接下来的 2 小时即将到店人数
 	resp.Today.Upcoming = countUpcoming(ctx, shopID, now, now.Add(2*time.Hour))
+
+	// v3.8 P2 dashboard 补全：事件漏斗（按 event_type 聚合，含全部埋点）
+	//  - today / week / month 三个窗口独立聚合
+	//  - 用 Go 端 parseAnyTime 解析 created_at，跨 sqlite/mysql 驱动兼容
+	//  - 排序按 count DESC，限制 top 20 防止 response 膨胀
+	resp.EventFunnelToday = eventFunnel(ctx, shopID, todayStart, now, 20)
+	resp.EventFunnelWeek = eventFunnel(ctx, shopID, weekStart, now, 20)
+	resp.EventFunnelMonth = eventFunnel(ctx, shopID, monthStart, now, 20)
 	return resp
+}
+
+// eventFunnel 按 event_type 聚合事件数（PRD §11.2 续费漏斗 + P3/P4 埋点）
+//
+//   - since: 起始时间（inclusive）
+//   - until: 截止时间（exclusive）
+//   - limit: top N（按 count DESC），<= 0 时返回全部
+//   - EventIdleSlotPush 是带前缀的（idle_slot_push:DATE:CUST），用 LIKE 聚合
+//
+// 注意：使用 map[string]any + parseAnyTime 跨 sqlite/mysql 驱动兼容（参考
+// storage.FindShopsForLifecycle 的做法）。
+func eventFunnel(ctx context.Context, shopID string, since, until time.Time, limit int) []EventStat {
+	if storage.DB == nil {
+		return nil
+	}
+	// 粗筛：created_at 落在 [since-1d, until+1d]，给跨天 / 边界预留 buffer
+	// 精确过滤在 Go 端做（与 dashboard.summarizeRange 同样的策略）。
+	sinceBuf := since.AddDate(0, 0, -1)
+	untilBuf := until.AddDate(0, 0, 1)
+	var rows []map[string]any
+	if err := storage.DB.WithContext(ctx).
+		Table("event_logs").
+		Select("event_type, created_at").
+		Where("shop_id = ?", shopID).
+		Where("created_at >= ? AND created_at <= ?", sinceBuf, untilBuf).
+		Scan(&rows).Error; err != nil {
+		return nil
+	}
+	counts := make(map[string]int, len(rows))
+	for _, r := range rows {
+		et, _ := r["event_type"].(string)
+		if et == "" {
+			continue
+		}
+		// 把 idle_slot_push:DATE:CUST 归一为 idle_slot_push（避免展开成 N 条记录）
+		if i := strings.Index(et, ":"); i > 0 {
+			et = et[:i]
+		}
+		// 精确时间过滤（按真实 created_at）
+		ts, ok := storage.ParseAnyTime(r["created_at"])
+		if !ok || ts.Before(since) || !ts.Before(until) {
+			continue
+		}
+		counts[et]++
+	}
+	out := make([]EventStat, 0, len(counts))
+	for et, n := range counts {
+		out = append(out, EventStat{EventType: et, Count: n})
+	}
+	// 按 count DESC 排序（稳定排序保证 limit 稳定）
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].EventType < out[j].EventType
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // summarizeRange 按"预约实际发生时间"落在 [from, to) 内的预约聚合
