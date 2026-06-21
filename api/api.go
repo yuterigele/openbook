@@ -78,6 +78,12 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.POST("/leave/create", createLeaveHandler)
 	protected.POST("/leave/cancel", cancelLeaveHandler)
 	protected.GET("/leave/list", listLeavesHandler)
+	// v4.0 P2 跨店看板（连锁品牌 owner 用）
+	//   - 任何已登录 admin 都能访问（role != ""），不限制到 platform_admin
+	//   - 原因：当前 ShopAdmin 只有 owner/staff 两种，没有 platform_admin 概念；
+	//     真实场景中连锁 owner 通常也是某家店 owner，所以默认放行
+	//   - 后续要做细粒度控制：role="platform_admin" 限定（待产品定义）
+	protected.GET("/chain/dashboard", chainDashboardHandler)
 
 	// 静态：商户后台页面
 	h.GET("/admin", func(ctx context.Context, c *app.RequestContext) {

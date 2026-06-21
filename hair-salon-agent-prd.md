@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v3.9）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.0）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v3.9（MVP 第 5 项 — 转人工兜底 + dashboard 待处理卡片）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v4.0（P2 多店数据汇总 — `/api/admin/chain/dashboard` 跨店看板）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -13,6 +13,7 @@
 > **v3.7 变更**：新增 §11.7.11 P4 改派策略升级 —— `findAlternateBarber` 从"按 name asc 取第一个空闲"改为三档分级：第一档 Skills 匹配（真会这门手艺）→ 第二档空 Skills 兜底（视作"全能"）→ 第三档任意 active 时段空闲（保底可用性）；+ 14 个新单测（`skillContains` 6 + `findAlternateBarber` 8）。
 > **v3.8 变更**：新增 §11.8 P2 dashboard 事件漏斗 + 修 pre-existing SQL warning —— `eventFunnel` helper 把 18 个 event_type 按 today/week/month 三窗口聚合到 dashboard response；`idle_slot_push:DATE:CUST` 自动归一；修复 `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在的 `shop_id` 列导致的 SQLite/MySQL warning；+ 14 个新单测（storage 5 + api 9）。
 > **v3.9 变更**：新增 §11.9 MVP 第 5 项「转人工兜底」+ dashboard `HandoffPendingToday` 卡片 —— `HandoffToHumanTool` 在 Agent 解决不了顾客问题时写埋点 + 提示商户联系（伪 handoff，预留第三方客服对接）；Agent 指令新增 3 类允许场景 + 1 条严禁规则，避免没事就调；`DashboardResponse` 新增 `HandoffPendingToday` 字段（复用 `EventFunnelToday` 零额外 SQL）；+ 10 个新单测（tools 5 + api 5）。
+> **v4.0 变更**：新增 §11.10 P2 多店数据汇总 —— `/api/admin/chain/dashboard` 跨店看板 endpoint，连锁品牌 owner 一次性看所有门店的 total / noshow rate / 各店明细 + Top 5 忙店 + 跨店事件漏斗；`storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper（口径与单店 `summarizeRange` 一致：date+time 解析后按时间戳精确过滤，22:00 算今天）；+ 16 个新单测（api 16）。
 
 ---
 
@@ -990,6 +991,134 @@ Agent 只能在这 3 类场景调用 `handoff_to_human`：
 
 ---
 
+### 11.10 P2 — 多店数据汇总 / 连锁看板（v4.0 新增，2026-06-21）
+
+#### 11.10.1 业务背景
+
+PRD §11.3「多店数据汇总」是 P2 里的加分项 —— 现实里很多连锁品牌 owner 一个人盯 3-10 家店，逐店切 dashboard 效率低。新版 endpoint 一次性返回：
+- **所有门店的总体经营指标**（total / noshow / completed）
+- **每家店明细**（让 owner 一眼对比）
+- **Top 5 忙店**（按总预约数排序，识别明星门店）
+- **跨店事件漏斗**（看整个连锁的事件分布）
+
+#### 11.10.2 Endpoint
+
+```
+GET /api/admin/chain/dashboard
+```
+
+鉴权：任何已登录的 admin 都能访问（`role != ""`），不限定 platform_admin。
+
+**为什么不做 platform_admin 限定？**
+- 当前 ShopAdmin 只有 owner / staff 两种角色，没有 platform_admin 概念
+- 真实场景中连锁 owner 通常也是某家店的 owner（用 owner 账号登录就能看所有店）
+- 后续要做细粒度控制：加 `platform_admin` 角色 + 限定 endpoint
+- 文档里写明这一权衡，避免后续误以为"默认是 owner 限定"
+
+#### 11.10.3 响应结构
+
+```json
+{
+  "generated_at": "2026-06-21T16:30:00+08:00",
+  "total_shops": 3,
+  "chain_totals": {
+    "window": "month",
+    "total": 8,
+    "completed": 6,
+    "noshow": 1,
+    "cancelled": 1,
+    "active": 0,
+    "no_show_rate": 0.143,
+    "complete_rate": 0.857
+  },
+  "shops": [
+    {
+      "shop": { "id": "shop-A", "name": "总店", ... },
+      "stats": { "total": 2, "completed": 2, "noshow": 0, ... }
+    },
+    ...
+  ],
+  "top_shops": [
+    { "shop_id": "shop-B", "shop_name": "分店B", "total": 5 },
+    { "shop_id": "shop-A", "shop_name": "总店",   "total": 2 },
+    { "shop_id": "shop-C", "shop_name": "分店C", "total": 1 }
+  ],
+  "event_funnel_chain": [
+    { "event_type": "appointment_created", "count": 8 },
+    { "event_type": "appointment_completed", "count": 6 },
+    ...
+  ]
+}
+```
+
+**字段说明**：
+- `chain_totals`：月窗口（30 天）跨店合计 —— 商家最关心的"过去一个月整盘"
+- `shops`：每家店明细（与 `chain_totals` 同一窗口）
+- `top_shops`：按 total DESC 排序，limit 5
+- `event_funnel_chain`：跨店事件漏斗（月窗口），复用 `eventFunnel` 的归一逻辑（`idle_slot_push:DATE:CUST` → `idle_slot_push`）
+
+#### 11.10.4 关键设计决策
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 时间窗口 | 月（30 天） | 商家关心"近期整盘"，日/周波动大；单店 dashboard 已有 today/week/month 三档，chain 默认月更稳 |
+| 性能边界 | N+2 次 SQL（N 个店 + 1 list + 1 event 跨店） | 当前目标 5-20 家店足够；100+ 时改成批量 appointments 查 + Go 端按 shop_id 分组 |
+| TopShops limit | 5 | 老板看 dashboard 不希望滚屏；超过 5 就得 list 全部 → 后端排序后取前 5 |
+| 鉴权 | 任何已登录 admin | 见 §11.10.2，权衡 |
+| 数据源 | 直接 ListAllShops + ShopAggregateByID | 不引入新的"门店分组"概念，保持简单；后续分库要重构成 union |
+| 事件漏斗跨店 | 不按 shop_id 过滤 | chain funnel 看的是"整个连锁"事件分布；单店 funnel 仍在 `/api/shop/:id/dashboard` |
+| 排序 tiebreaker | shopID ASC | total 相同时给一个稳定排序，避免 limit 边界抖动 |
+
+#### 11.10.5 关键代码
+
+**storage**（`storage/chain_repo.go`）：
+- `ListAllShops(ctx)` —— ListAll shops，DB nil 返回空切片（零成本）
+- `ShopAggregateByID(ctx, shopID, from, to)` —— 单店 [from, to) 预约汇总，复用单店 dashboard 的 date+time 解析口径
+
+**api**（`api/chain_dashboard.go`）：
+- `chainDashboardHandler` —— HTTP handler，鉴权后调 buildChainDashboard
+- `buildChainDashboard(ctx)` —— 串起来：ListAll → 逐店 ShopAggregateByID → ChainTotals 累加 → TopShops 排序 + limit 5 → chainEventFunnel
+- `chainEventFunnel(ctx, since, until, limit)` —— 不按 shop_id 过滤的 eventFunnel
+
+**路由注册**（`api/api.go:RegisterRoutes`）：
+```go
+// 任何已登录 admin 都能访问
+protected.GET("/chain/dashboard", chainDashboardHandler)
+```
+
+#### 11.10.6 测试覆盖（+16 用例）
+
+**storage（+4）**：
+- `TestListAllShops_EmptyDB`：空 DB 返回空切片
+- `TestListAllShops_MultipleShops`：3 家店按 id ASC 返回
+- `TestShopAggregateByID_EmptyDB`：空数据全 0
+- `TestShopAggregateByID_GroupsByStatus`：1+1+1+1 = total 4，分项对齐，闭单率计算正确
+- `TestShopAggregateByID_FiltersByDateRange`：5 天前的不在 today 窗内
+- `TestShopAggregateByID_ShopIsolation`：shop-A 1 + shop-B 2 严格隔离
+
+**api（+12）**：
+- `TestBuildChainDashboard_EmptyDB`：空 DB，TotalShops=0 / ChainTotals=0
+- `TestBuildChainDashboard_SingleShop`：1 家店 2 单 → 链合计 = 单店
+- `TestBuildChainDashboard_MultiShop`：3 家店 (2+5+1=8) → TopShops 按 DESC 排序 B/A/C
+- `TestBuildChainDashboard_TopShops_Limit5`：8 家店 → 只返回 top 5
+- `TestChainEventFunnel_GroupsAcrossShops`：shop-A 2 + shop-B 1 = appointment_created=3（跨店合计）
+- `TestChainEventFunnel_ExcludesOldEvents`：40 天前不在月窗内
+- `TestChainEventFunnel_NormalizesIdleSlotPush`：`idle_slot_push:DATE:CUST` 跨店归一
+- `TestChainDashboardHandler_NoClaims_401`：未登录 → 401
+- `TestChainDashboardHandler_HappyPath`：登录后返回正确 JSON 结构
+- `TestChainDashboardHandler_DBNotInitialized`：DB nil → 503
+
+#### 11.10.7 后续可继续做（P2 增量）
+
+1. **platform_admin 角色限定**：加 `platform_admin` role + login handler 支持，给连锁总部单独账号
+2. **时间窗口 query 参数**：`?window=today|week|month`，让 chain dashboard 也能选窗口
+3. **跨店客户分析**：top customer（按 total_visits 排序，跨店），帮 owner 看"谁是我的 VIP 客户"
+4. **跨店理发师排行**：合并所有店 barber_name，看"谁是最多单的师傅"
+5. **批量聚合优化**：N+2 → 1（一次查所有 appointments，Go 端按 shop_id 分组），支持 100+ 店
+6. **Dashboard UI 切换**：在 `static/admin.html` 加"切到 chain 看板"按钮（需 platform_admin 限定）
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -1013,7 +1142,7 @@ Agent 只能在这 3 类场景调用 `handoff_to_human`：
 
 ---
 
-*文档版本：v3.9 | 更新日期：2026-06-21*
+*文档版本：v4.0 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
@@ -1021,3 +1150,4 @@ Agent 只能在这 3 类场景调用 `handoff_to_human`：
 **v3.7 增量**：新增 §11.7.11 P4 改派策略升级（`findAlternateBarber` 三档分级 + 14 个新单测）。
 **v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + today/week/month 三窗口 + 9 个 api 单测）+ 修 pre-existing `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在 `shop_id` 列的 SQL warning（5 个 storage 单测）。
 **v3.9 增量**：新增 §11.9 MVP 第 5 项「转人工兜底」（`HandoffToHumanTool` 写埋点 + 3 类允许场景约束 + `EventHandoffToHuman` 事件类型 + 5 个 tools 单测）+ `DashboardResponse.HandoffPendingToday` 卡片（复用 `EventFunnelToday` 零额外 SQL + 5 个 api 单测），共 +10 个新单测。
+**v4.0 增量**：新增 §11.10 P2 多店数据汇总（`/api/admin/chain/dashboard` 跨店看板 endpoint + `storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper + `chainEventFunnel` 跨店事件漏斗 + 16 个 api 单测）。
