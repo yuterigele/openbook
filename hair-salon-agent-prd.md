@@ -1,6 +1,6 @@
-# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.0）
+# 美发店智能预约助手 · 整体解决方案（PRD + 技术规格 v4.2）
 
-> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v4.0（P2 多店数据汇总 — `/api/admin/chain/dashboard` 跨店看板）
+> **作者**：Mavis（M3）| **日期**：2026-06-21 | **版本**：v4.2（PRD §8.2 D+15 真正升级 — 使用报告邮件 / SMTP 发送 / 阶段对比）
 > **目标读者**：投资人 / 商务 BD / 后续接手的工程师（输入给 coding 工具用）
 > **核心约束**：不含研发成本，仅含运营成本
 
@@ -14,6 +14,8 @@
 > **v3.8 变更**：新增 §11.8 P2 dashboard 事件漏斗 + 修 pre-existing SQL warning —— `eventFunnel` helper 把 18 个 event_type 按 today/week/month 三窗口聚合到 dashboard response；`idle_slot_push:DATE:CUST` 自动归一；修复 `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在的 `shop_id` 列导致的 SQLite/MySQL warning；+ 14 个新单测（storage 5 + api 9）。
 > **v3.9 变更**：新增 §11.9 MVP 第 5 项「转人工兜底」+ dashboard `HandoffPendingToday` 卡片 —— `HandoffToHumanTool` 在 Agent 解决不了顾客问题时写埋点 + 提示商户联系（伪 handoff，预留第三方客服对接）；Agent 指令新增 3 类允许场景 + 1 条严禁规则，避免没事就调；`DashboardResponse` 新增 `HandoffPendingToday` 字段（复用 `EventFunnelToday` 零额外 SQL）；+ 10 个新单测（tools 5 + api 5）。
 > **v4.0 变更**：新增 §11.10 P2 多店数据汇总 —— `/api/admin/chain/dashboard` 跨店看板 endpoint，连锁品牌 owner 一次性看所有门店的 total / noshow rate / 各店明细 + Top 5 忙店 + 跨店事件漏斗；`storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper（口径与单店 `summarizeRange` 一致：date+time 解析后按时间戳精确过滤，22:00 算今天）；+ 16 个新单测（api 16）。
+> **v4.1 变更**：新增 §11.10.8 P2 跨店看板时间窗口切换 —— `?window=today|week|month` query 参数化；`parseWindow` / `resolveWindowBounds` / `ValidChainDashboardWindows` 配套 helpers；老客户端不传默认 `month`（向后兼容）；+ 13 个新单测（api 13）。
+> **v4.2 变更**：新增 §11.11 PRD §8.2 D+15 真正升级为「使用报告邮件」—— 之前 D+15 只发一行微信短文，本轮渲染完整 HTML 报告（总览 + 阶段对比 + 服务排行 TOP 5 + 熟客排行 TOP 5）+ 通过 SMTP 发送给店铺 owner；`storage.BuildD15UsageReport` 数据组装（按"冷启动期 vs 增长期"两段对比）+ `notify/email.go` 邮件层（`Sender` 接口 + `SMTPSender` + `NoopSender` 兜底 + `RenderD15ReportHTML` 模板 + `net/smtp` 走 465 SSL / 587）；SMTP 未配置时自动退化到 NoopSender，D+15 只发微信不报错；`cron/lifecycle.go` D+15 路径集成 `SetSender` / `SetReportTo`（向后兼容默认 Noop）；+ 25 个新单测（storage 8 + notify 16 + cron 9 增量 + chain 2 不变）。
 
 ---
 
@@ -1188,6 +1190,155 @@ v4.0 chain dashboard 只能查"过去一个月"，owner 想看"今天"或"本周
 
 ---
 
+### 11.11 P2 — D+15 使用报告邮件（v4.2 新增，2026-06-21）
+
+#### 11.11.1 业务背景
+
+PRD §8.2 续费动作链 D+15 节点原本只发一条短文："您已使用 AI 预约助手半个月，共处理 N 笔预约"。
+
+真实需求是「生成使用报告（对比手写时期的变化）」—— 店主想看到的是：
+- 半个月内服务/顾客/完成率的真实数据
+- 跟刚上线时的对比，看到 AI 带来的实际效果
+- 一份可以保存/打印/转发的报告
+
+本轮把 D+15 升级为「使用报告邮件」：渲染完整 HTML 报告 + 通过 SMTP 发给店铺 owner + 微信短摘要（保持原有 v3.x 行为）。
+
+#### 11.11.2 数据结构（storage/usage_report.go）
+
+```go
+type UsageReport struct {
+    // 基础信息
+    ShopID, ShopName                string
+    GeneratedAt, FirstApptAt        time.Time
+    WindowStart, WindowEnd          time.Time
+    WindowDays                      int
+
+    // 总览
+    TotalAppointments, CompletedAppointments,
+    NoShowAppointments, CancelledAppointments,
+    ActiveAppointments              int
+    CompletionRate, NoShowRate      float64
+
+    // 服务维度（按 count DESC，limit 5）
+    UniqueServices                  int
+    ServiceRank                     []ServiceStat
+
+    // 顾客维度（按 total DESC，limit 5）
+    UniqueCustomers                 int
+    TopCustomers                    []CustomerStat
+
+    // 日趋势（按 date ASC，缺失日期补 0）
+    DailyTrend                      []DailyStat   // len == WindowDays
+
+    // 阶段对比（前 3 天冷启动 vs 后 12 天增长）
+    BaselineBaseline, GrowthPhase   BaselinePhase
+    GrowthDelta                     PhaseDelta
+}
+```
+
+#### 11.11.3 阶段对比口径
+
+为什么选"前 3 天 vs 后 12 天"？
+
+- 真实场景：店铺上线 AI 的头 3 天是**冷启动期**（顾客不知道可以微信预约、店员还在适应系统），3 天后才进入**增长期**
+- 对比基线必须是店主**真实能感知到的**，不是凭空捏造"行业平均"
+- 12 天增长期的数据足够给出有意义的增长率（5%+ 偏差才有意义）
+
+定义：
+- `BaselinePhase` = first_appointment 之后的前 3 天
+- `GrowthPhase` = 第 4 天到第 15 天（共 12 天）
+- `PhaseDelta.GrowthRate` = (growth_avg - baseline_avg) / baseline_avg；基线为 0 时 GrowthRate = 0（避免除零崩）
+
+#### 11.11.4 邮件层（notify/email.go）
+
+```go
+// 接口
+type Sender interface {
+    SendHTML(ctx context.Context, to []string, subject, htmlBody string) error
+}
+
+// 两种实现
+type SMTPSender struct{ cfg EmailConfig }    // 走 net/smtp
+type NoopSender struct{}                     // 只 log 不发（兜底）
+```
+
+**关键设计决策**：
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| SMTP 库 | `net/smtp` (stdlib) | 避免引第三方包；Gmail/QQ/163 通用 |
+| 端口 | 465 SSL（默认）/ 587 / 25 | 465 是 Gmail/QQ/163 默认 |
+| 模板引擎 | 字符串拼接（不用 html/template） | 报告数据受控（来自 DB），无需复杂逻辑 |
+| XSS 防护 | 显式 `htmlEscape`（subject + 姓名 + 服务名） | 邮件客户端对 <style> 标签支持差，内联 CSS 复杂但可读性高 |
+| Base64 编码 | 自实现简化版 | 避免引 encoding/base64 包（其实 stdlib 有，但为了代码体积可控） |
+| 未配置 SMTP | 自动退化 NoopSender | 永不因邮件失败 panic；cron 调用安全 |
+
+#### 11.11.5 配置项（.env）
+
+```bash
+# 收件人（逗号分隔）；空时 D+15 只发微信
+REPORT_TO=owner@shop.com,partner@shop.com
+
+# SMTP（Gmail 用应用专用密码 / QQ 用授权码 / 163 用授权码）
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=shop@gmail.com
+SMTP_PASSWORD=xxxx xxxx xxxx xxxx
+SMTP_FROM=shop@gmail.com   # 默认 = SMTP_USER
+SMTP_FROM_NAME=美发店 AI Agent
+```
+
+#### 11.11.6 关键代码
+
+- `storage.BuildD15UsageReport(ctx, shopID, firstApptAt, now)` — 单 SQL 拉所有 appointments + Go 端聚合
+- `notify.RenderD15ReportHTML(rep)` — 渲染完整 HTML 邮件
+- `notify.NewSender(cfg)` — 配置无效自动 Noop
+- `cron.LifecycleTrigger.SetSender(s)` / `SetReportTo(to)` — 注入
+- `cron.LifecycleTrigger.triggerD15Report()` — 写埋点 + 组装报告 + 发邮件 + 发微信
+
+#### 11.11.7 测试覆盖（+25 用例）
+
+- **storage（8）** `usage_report_test.go`：
+  - BasicAggregates（12 笔 → total/completed/noshow/cancelled/active + 率）
+  - ServiceRanking（染发 x4 / 剪发 x3 / 烫发 x2 / 护理 x1 → DESC + 同 count 字典序）
+  - CustomerRanking（5/3/2/1 → DESC + 长度 4）
+  - DailyTrend_FillsGaps（缺失日期补 0 + 连续日期 ASC）
+  - PhaseComparison_PositiveGrowth（基线 1/天 → 增长 2/天，rate=1.0）
+  - PhaseComparison_ZeroBaseline（基线 0 笔，rate=0 不崩）
+  - EmptyShop（空店，rates=0, daily_trend=15）
+  - OutOfWindowExcluded（窗口外预约不计入）
+  - ShopNotFound（报错）
+- **notify（16）** `email_test.go`：
+  - EmailConfig.IsValid 全字段 / 缺字段
+  - LoadEmailConfigFromEnv 默认 port=465 / fallback From=SMTP_USER
+  - NewSender 无效 → Noop / 有效 → SMTP
+  - NoopSender.SendHTML 不报错
+  - SMTPSender 空 to 报错
+  - RenderD15ReportHTML 含关键字段 / 零值不崩 / XSS 转义
+  - encodeRFC2047 英文 / 中文
+  - base64Encode 6 个 RFC 4648 测试向量
+  - htmlEscape 基本 XSS
+  - buildMIMEMessage MIME multipart/alternative 结构
+- **cron（9 增量）** `lifecycle_test.go`：
+  - DefaultSenderIsNoop / SetSender 替换 / SetSender(nil) 恢复 Noop
+  - SetReportTo 接收多收件人
+  - triggerD15Report DB nil 不 panic
+  - triggerD15Report 无 first_appointment skip 邮件
+  - triggerD15Report 无 reportTo 不调 sender
+  - triggerD15Report 完整路径（埋点 + 报告 + 邮件 + mock sender 验证）
+  - triggerD15Report sender 报错不 panic
+  - findFirstApptAt DB nil / 找不到 / 找到
+
+#### 11.11.8 后续可继续做（P2 增量）
+
+1. ⏳ 邮件退订链接（合规）
+2. ⏳ 附件 PDF（用 wkhtmltopdf / chromedp 渲染）
+3. ⏳ 多收件人不同模板（owner 摘要 / barber 业绩）
+4. ⏳ 周报 cron（每周一 9:00 跑出，覆盖所有店铺）
+5. ⏳ 真实环境 SMTP 测试（需 Gmail 应用密码）
+
+---
+
 ## 12. 总结
 
 ### 12.1 核心优势
@@ -1211,7 +1362,7 @@ v4.0 chain dashboard 只能查"过去一个月"，owner 想看"今天"或"本周
 
 ---
 
-*文档版本：v4.1 | 更新日期：2026-06-21*
+*文档版本：v4.2 | 更新日期：2026-06-21*
 *— Mavis（M3）整理*
 
 **v3.5 增量**：新增 §11.7.8 P4 cron 兜底（`LeaveExpirer` 每分钟扫描 + `ExpireOverdueLeaves` storage helper + `EventBarberLeaveExpired` 事件 + 9 个新单测）。
@@ -1221,6 +1372,7 @@ v4.0 chain dashboard 只能查"过去一个月"，owner 想看"今天"或"本周
 **v3.9 增量**：新增 §11.9 MVP §5 转人工兜底（`handoff_to_human` 工具 + 10 个新单测）。
 **v4.0 增量**：新增 §11.10 P2 多店数据汇总 / 连锁看板（`/api/admin/chain/dashboard` + `ListAllShops` / `ShopAggregateByID` / `chainEventFunnel` + 16 个新单测）。
 **v4.1 增量**：新增 §11.10.8 P2 跨店看板时间窗口切换（`?window=today|week|month` + `parseWindow` / `resolveWindowBounds` / `ValidChainDashboardWindows` + 13 个新单测）。
+**v4.2 增量**：新增 §11.11 PRD §8.2 D+15 使用报告邮件（`storage.BuildD15UsageReport` 数据组装 + 冷启动 vs 增长期两段对比 + `notify/email.go` SMTP 发送层 + `Sender` 接口 + `SMTPSender` / `NoopSender` + `RenderD15ReportHTML` HTML 模板 + `cron/lifecycle.go` D+15 集成 + .env SMTP_* 配置 + 25 个新单测：storage 8 + notify 16 + cron 9 增量，cron 总数 14）。
 **v3.8 增量**：新增 §11.8 P2 dashboard 事件漏斗（`eventFunnel` helper + today/week/month 三窗口 + 9 个 api 单测）+ 修 pre-existing `customer_tags.go:132` 和 `idle_push.go:162` 引用不存在 `shop_id` 列的 SQL warning（5 个 storage 单测）。
 **v3.9 增量**：新增 §11.9 MVP 第 5 项「转人工兜底」（`HandoffToHumanTool` 写埋点 + 3 类允许场景约束 + `EventHandoffToHuman` 事件类型 + 5 个 tools 单测）+ `DashboardResponse.HandoffPendingToday` 卡片（复用 `EventFunnelToday` 零额外 SQL + 5 个 api 单测），共 +10 个新单测。
 **v4.0 增量**：新增 §11.10 P2 多店数据汇总（`/api/admin/chain/dashboard` 跨店看板 endpoint + `storage.ListAllShops` + `storage.ShopAggregateByID` 跨店聚合 helper + `chainEventFunnel` 跨店事件漏斗 + 16 个 api 单测）。

@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	clc "github.com/cloudwego/eino-ext/callbacks/cozeloop"
@@ -38,6 +39,7 @@ import (
 	lockpkg "github.com/cloudwego/eino-examples/quickstart/chatwitheino/lock"
 	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/mem"
 	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
+	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/notify"
 	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/server"
 	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
 	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
@@ -213,6 +215,22 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		}
 
 		lifecycle := cronpkg.NewLifecycleTrigger(wecomClient)
+
+		// v4.2 PRD §11.11：D+15 使用报告邮件
+		//   - SMTP 未配置时 sender = NoopSender（只 log 不发）
+		//   - REPORT_TO 配置后 D+15 触发时同时发邮件 + 微信
+		emailCfg := notify.LoadEmailConfigFromEnv()
+		lifecycle.SetSender(notify.NewSender(emailCfg))
+
+		// D+15 邮件收件人（逗号分隔）；空时只发微信
+		reportTo := parseRecipients(os.Getenv("REPORT_TO"))
+		if len(reportTo) > 0 {
+			lifecycle.SetReportTo(reportTo)
+			log.Printf("[lifecycle] D+15 报告邮件已启用，收件人 %d 人：%v", len(reportTo), reportTo)
+		} else {
+			log.Printf("[lifecycle] REPORT_TO 未配置，D+15 报告邮件跳过（仅发微信）")
+		}
+
 		if err := lifecycle.Start(ctx); err != nil {
 			log.Printf("⚠️  启动 lifecycle cron 失败: %v", err)
 		} else {
@@ -286,6 +304,26 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	log.Printf("starting server on http://localhost:%s", port)
 	log.Printf("商户后台: http://localhost:%s/admin (默认 admin/admin123，首次登录后请改密码)", port)
 	srv.Spin()
+}
+
+// parseRecipients 解析 REPORT_TO 字符串（逗号分隔）成收件人列表
+//
+//   - 去掉每个地址的空白
+//   - 过滤空串
+//   - 不做邮箱格式校验（让 SMTP 失败时报错）
+func parseRecipients(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // buildLeaveNotificationSender 构造请假通知发送器（P4）
