@@ -286,12 +286,32 @@
     <div id="events"><div class="empty">加载中...</div></div>
   </section>
 
+  <!-- P5 理发师管理 -->
+  <section>
+    <h2>💈 理发师管理 <button class="secondary" onclick="openAddBarberModal()" style="float:right;padding:4px 14px;font-size:13px;">+ 新增理发师</button></h2>
+    <div id="barbers"><div class="empty">加载中...</div></div>
+  </section>
+
   <!-- P4 理发师请假 -->
   <section>
     <h2>🏖️ 理发师请假管理</h2>
     <div id="leaveBarbers"><div class="empty">加载中...</div></div>
   </section>
 </main>
+
+<!-- ====== 新增理发师弹窗（P5） ====== -->
+<div class="login-overlay" id="addBarberOverlay" style="display:none;">
+  <div class="login-box" style="max-width:480px;">
+    <h2>新增理发师</h2>
+    <label style="font-size:13px;color:var(--muted);">姓名（必填，1-32 字）</label>
+    <input id="newBarberName" type="text" placeholder="例如：Tony、Kevin" maxlength="32" />
+    <label style="font-size:13px;color:var(--muted);">技能标签（可选，逗号分隔）</label>
+    <input id="newBarberSkills" type="text" placeholder="例如：剪发,染发,烫发" maxlength="256" />
+    <div class="err" id="newBarberErr"></div>
+    <button onclick="submitNewBarber()">确认新增</button>
+    <button class="secondary" style="background:#f3f4f6;margin-top:8px;" onclick="document.getElementById('addBarberOverlay').style.display='none'">取消</button>
+  </div>
+</div>
 
 <!-- ====== 请假弹窗（P4） ====== -->
 <div class="login-overlay" id="leaveOverlay" style="display:none;">
@@ -458,7 +478,8 @@ function loadAll() {
   loadUpcoming();
   loadAppointments();
   loadEvents();
-  loadLeaveBarbers(); // P4
+  loadBarbers();       // P5 理发师管理
+  loadLeaveBarbers();  // P4
 }
 
 function startAutoRefresh() {
@@ -694,38 +715,145 @@ async function doChangePassword() {
   logout();
 }
 
+// ========== P5 理发师管理 ==========
+
+let BARBERS_CACHE = [];
+
+// 加载本店所有理发师（含 inactive）
+async function loadBarbers() {
+  const el = document.getElementById('barbers');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/admin/barbers?include_inactive=true', {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (!r.ok) {
+      el.innerHTML = '<div class="empty">加载失败（HTTP ' + r.status + '）</div>';
+      return;
+    }
+    const list = await r.json();
+    BARBERS_CACHE = Array.isArray(list) ? list : [];
+    if (BARBERS_CACHE.length === 0) {
+      el.innerHTML = '<div class="empty">还没有理发师，点右上角"+ 新增理发师"开始</div>';
+      return;
+    }
+    el.innerHTML = '<table><thead><tr><th>姓名</th><th>技能</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>' +
+      BARBERS_CACHE.map(b => {
+        const statusBadge = b.active
+          ? '<span style="color:#16a34a;">🟢 在职</span>'
+          : '<span style="color:#9ca3af;">⚪ 已停用</span>';
+        const skills = b.skills || '<span style="color:var(--muted);">—</span>';
+        const createdAt = b.created_at ? formatDT(b.created_at) : '—';
+        const actions = b.active
+          ? `<button onclick="openLeaveModal('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 10px;font-size:12px;">请假</button>
+             <button onclick="deleteBarber('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 10px;font-size:12px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;">删除</button>`
+          : `<button onclick="activateBarber('${b.id}', '${escapeHtml(b.name).replace(/'/g, "\\'")}')" style="padding:4px 10px;font-size:12px;background:#dcfce7;color:#166534;border:1px solid #bbf7d0;">恢复</button>`;
+        const rowStyle = b.active ? '' : ' style="opacity:0.7;"';
+        return `<tr${rowStyle}>
+          <td><strong>${escapeHtml(b.name)}</strong></td>
+          <td style="font-size:12px;color:var(--muted);">${escapeHtml(skills)}</td>
+          <td>${statusBadge}</td>
+          <td style="font-size:12px;color:var(--muted);">${escapeHtml(createdAt)}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  } catch (e) {
+    el.innerHTML = '<div class="empty">加载异常: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function openAddBarberModal() {
+  document.getElementById('newBarberName').value = '';
+  document.getElementById('newBarberSkills').value = '';
+  document.getElementById('newBarberErr').textContent = '';
+  document.getElementById('addBarberOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('newBarberName').focus(), 50);
+}
+
+async function submitNewBarber() {
+  const name = document.getElementById('newBarberName').value.trim();
+  const skills = document.getElementById('newBarberSkills').value.trim();
+  const errEl = document.getElementById('newBarberErr');
+  errEl.textContent = '';
+  if (!name) {
+    errEl.textContent = '请填写姓名';
+    return;
+  }
+  try {
+    const r = await fetch('/api/admin/barbers', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, skills })
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      errEl.textContent = body.error || '创建失败';
+      return;
+    }
+    document.getElementById('addBarberOverlay').style.display = 'none';
+    loadBarbers();
+  } catch (e) {
+    errEl.textContent = '网络异常: ' + e.message;
+  }
+}
+
+async function deleteBarber(barberId, barberName) {
+  if (!confirm('确定删除理发师「' + barberName + '」吗？\n（有未来预约会被拒绝，请先取消或请假）')) return;
+  try {
+    const r = await fetch('/api/admin/barbers/' + encodeURIComponent(barberId), {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      alert(body.error || '删除失败');
+      return;
+    }
+    loadBarbers();
+  } catch (e) {
+    alert('网络异常: ' + e.message);
+  }
+}
+
+async function activateBarber(barberId, barberName) {
+  if (!confirm('确定恢复理发师「' + barberName + '」吗？')) return;
+  try {
+    const r = await fetch('/api/admin/barbers/' + encodeURIComponent(barberId) + '/activate', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      alert(body.error || '恢复失败');
+      return;
+    }
+    loadBarbers();
+  } catch (e) {
+    alert('网络异常: ' + e.message);
+  }
+}
+
 // ========== P4 理发师请假 ==========
 
 let CURRENT_LEAVE_BARBER_ID = null;
 
-// 加载本店理发师列表 + 每个的请假历史（取最近 5 条）
+// 加载本店 active 理发师 + 每个的请假历史（取最近 5 条）
+//   P5 改造：直接调 /api/admin/barbers 拿 active barber，不再 workaround 聚合 appointments。
 async function loadLeaveBarbers() {
   const el = document.getElementById('leaveBarbers');
   if (!el) return;
   try {
-    // 1) 拉所有 active 理发师（先用 list_barbers 工具？这里 admin 后台没有现成 endpoint，复用 dashboard 接口里的逻辑不可行）
-    // 简化：从 dashboard 拉 top_barbers，然后逐个查 leaves
-    const dashResp = await fetch('/api/shop/' + SHOP_ID + '/dashboard', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
-    if (!dashResp.ok) { el.innerHTML = '<div class="empty">加载失败</div>'; return; }
-    const dash = await dashResp.json();
-    // top_barbers 是近 30 天数据，但我们要"所有 active 理发师"。
-    // 兜底：直接从 upcoming / appointments 聚合理发师集合（包含有/无预约的）
-    const resp = await fetch('/api/shop/' + SHOP_ID + '/appointments?status=active', {
+    // 1) 拉所有 active 理发师
+    const resp = await fetch('/api/admin/barbers?include_inactive=false', {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
-    if (!resp.ok) { el.innerHTML = '<div class="empty">加载失败</div>'; return; }
-    const data = await resp.json();
-    // 后端返回 []Appointment（裸数组），不是 {appointments: [...]}
-    const list = Array.isArray(data) ? data : (data.appointments || []);
-    const barberMap = new Map();
-    for (const a of list) {
-      if (!barberMap.has(a.barber_id)) {
-        barberMap.set(a.barber_id, { id: a.barber_id, name: a.barber_name });
-      }
+    if (!resp.ok) {
+      el.innerHTML = '<div class="empty">加载失败</div>';
+      return;
     }
-    const barbers = [...barberMap.values()];
-    if (barbers.length === 0) {
-      el.innerHTML = '<div class="empty">暂无理发师数据</div>';
+    const barbers = await resp.json();
+    if (!Array.isArray(barbers) || barbers.length === 0) {
+      el.innerHTML = '<div class="empty">还没有理发师，请先到「理发师管理」里添加</div>';
       return;
     }
     // 2) 并发查每个理发师的最近 5 条 leave
