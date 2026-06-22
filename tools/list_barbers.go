@@ -23,33 +23,49 @@ type ListBarbersTool struct{}
 func (t *ListBarbersTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "list_barbers",
-		Desc: "列出当前店铺所有可预约的理发师（姓名 + 技能 + 当日请假状态）。" +
-			"当用户没指定理发师时调用，让用户挑选。如果某理发师今日有请假，工具会明确标注。",
+		Desc: "列出当前店铺所有可预约的理发师（姓名 + 技能 + 当日请假状态）。\n" +
+			"\n" +
+			"【调用时机】\n" +
+			"  - 顾客没指定理发师但要预约时，先调让顾客挑；\n" +
+			"  - 顾客问「你们有谁」「师傅都有谁」时。\n" +
+			"\n" +
+			"【业务规则】\n" +
+			"  - 如果某理发师今日有请假，工具会明确标注「今日 HH:MM 起请假」或「今日 HH:MM-HH:MM 请假」；\n" +
+			"  - 已停用（inactive）的师傅不列。\n" +
+			"\n" +
+			"【回复要求】\n" +
+			"  - 不要把列表原文照搬，按理发师人数给推荐：\n" +
+			"    * 1-2 位：直接全列；\n" +
+			"    * 3 位以上：只推今天全勤的，请假的标到末尾说「XXX 师傅今天 X 点起请假」；\n" +
+			"  - 顾客对某师傅有偏好的（VIP/常客/特定剪发习惯），优先推。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }
 
 // InvokableRun 执行
 func (t *ListBarbersTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if err := EnsureDB("list_barbers"); err != nil {
+		return "", err
+	}
 	shopID := ShopIDFromCtx(ctx)
 	if shopID == "" {
 		// 兜底：取第一家的 active barber
 		bs, err := storage.ListActiveBarbers(ctx)
 		if err != nil {
-			return "", fmt.Errorf("查询理发师失败: %v", err)
+			return "", FriendlyError(ctx, err, "查询师傅名单失败，请稍后再试", "list_barbers.fallback")
 		}
 		return formatBarbers(ctx, bs), nil
 	}
 	bs, err := storage.ListBarbersByShop(ctx, shopID)
 	if err != nil {
-		return "", fmt.Errorf("查询理发师失败: %v", err)
+		return "", FriendlyError(ctx, err, "查询师傅名单失败，请稍后再试", "list_barbers.byShop")
 	}
 	return formatBarbers(ctx, bs), nil
 }
 
 func formatBarbers(ctx context.Context, bs []storage.Barber) string {
 	if len(bs) == 0 {
-		return "本店暂时没有可预约的理发师"
+		return "本店暂时没有可预约的师傅呢，请联系店员了解"
 	}
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Now().In(loc)

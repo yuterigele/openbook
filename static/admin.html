@@ -617,6 +617,39 @@
 
     /* v4.4 轻打磨：filter bar 在小屏不折行 */
     .filterbar .field { min-width: 120px; }
+
+    /* ============================================================
+       v4.5 告警 banner
+       ============================================================ */
+    .alerts-banner {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .alert-item {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--ink-muted);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      transition: all .15s;
+    }
+    .alert-item.alert-info { border-left-color: var(--ink-muted); background: var(--surface); }
+    .alert-item.alert-warning { border-left-color: #d97706; background: #fffbeb; }
+    .alert-item.alert-critical {
+      border-left-color: var(--red);
+      background: #fef2f2;
+      animation: alertPulse 2s ease-in-out infinite;
+    }
+    @keyframes alertPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+      50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.08); }
+    }
+    .alert-item:hover { box-shadow: var(--shadow-sm); transform: translateX(2px); }
+    .alert-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+    .alert-desc { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+    .alert-action { font-size: 11px; color: var(--brand); margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -732,6 +765,17 @@
         </svg>
         <span>转人工</span>
         <span class="badge badge-warning" id="handoffsBadge" style="display:none;">0</span>
+      </a>
+      <a class="nav-item" data-view="weekly" href="#weekly">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+          <line x1="8" y1="14" x2="16" y2="14"/>
+          <line x1="8" y1="18" x2="13" y2="18"/>
+        </svg>
+        <span>周报</span>
       </a>
       <a class="nav-item" data-view="customers" href="#customers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -855,6 +899,9 @@ const App = (() => {
     customers: [],        // v4.4 顾客列表
     services: [],         // v4.4 服务目录
     subscription: [],     // v4.4 订阅历史
+    weekly: null,         // v4.4 周报（单店）
+    chainWeekly: null,    // v4.4 周报（跨店）
+    alerts: null,         // v4.5 dashboard 告警（B3）
 
     // Filters
     apptDate: todayStr(),
@@ -937,7 +984,7 @@ const App = (() => {
       dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
       leaves: '请假管理', events: '事件日志', chain: '多店看板',
       handoffs: '转人工', customers: '顾客', services: '服务目录',
-      subscription: '订阅', shop: '店铺设置'
+      subscription: '订阅', shop: '店铺设置', weekly: '周报'
     };
     $('#crumbView').textContent = labels[v] || v;
     render();
@@ -956,6 +1003,7 @@ const App = (() => {
     else if (state.view === 'services') c.innerHTML = renderServices();
     else if (state.view === 'subscription') c.innerHTML = renderSubscription();
     else if (state.view === 'shop') c.innerHTML = renderShop();
+    else if (state.view === 'weekly') c.innerHTML = renderWeekly();
   }
 
   function renderEmpty(title, hint, iconName = 'inbox') {
@@ -991,20 +1039,22 @@ const App = (() => {
         <p>今天 · 本周 · 本月经营快照，30 秒自动刷新</p>
       </div>
 
+      ${renderAlertsBanner()}
+
       <div class="kpi-grid">
-        ${kpiCard('今日预约', today.total || 0, 'info', `${today.upcoming || 0} 单将在 2 小时内到店`)}
+        ${kpiCard('今日预约', today.total || 0, 'info', `${today.upcoming || 0} 单将在 2 小时内到店`, 'appointments')}
         ${kpiCard('今日完成率', fmtPct(today.complete_rate || 0), 'success',
-          `已完成 ${today.completed || 0} · 爽约 ${today.noshow || 0}`)}
+          `已完成 ${today.completed || 0} · 爽约 ${today.noshow || 0}`, 'appointments', { status: 'completed' })}
         ${kpiCard('今日爽约率', fmtPct(today.no_show_rate || 0),
           (today.no_show_rate || 0) > 0.15 ? 'alert' : 'normal',
-          '每 5 分钟由 cron 自动标记')}
+          '每 5 分钟由 cron 自动标记', 'appointments', { status: 'noshow' })}
         ${kpiCard('待人工处理', handoffN, handoffClass,
-          handoffN > 0 ? '点击下方"待人工"卡片查看' : '今日无待办')}
+          handoffN > 0 ? '点击下方"待人工"卡片查看' : '今日无待办', 'handoffs')}
         ${kpiCard('本周预约', week.total || 0, 'normal',
-          `完成 ${week.completed || 0} · 取消 ${week.cancelled || 0}`)}
+          `完成 ${week.completed || 0} · 取消 ${week.cancelled || 0}`, 'appointments')}
         ${kpiCard('本月预约', month.total || 0, 'normal',
-          `完成 ${month.completed || 0} · 爽约 ${month.noshow || 0}`)}
-        ${kpiCard('总事件数', d.lifecycle_count || 0, 'normal', '埋点事件累计')}
+          `完成 ${month.completed || 0} · 爽约 ${month.noshow || 0}`, 'appointments')}
+        ${kpiCard('总事件数', d.lifecycle_count || 0, 'normal', '埋点事件累计', 'events')}
       </div>
 
       <div class="section">
@@ -1052,13 +1102,44 @@ const App = (() => {
     `;
   }
 
-  function kpiCard(label, value, variant = 'normal', sub) {
+  function kpiCard(label, value, variant = 'normal', sub, linkTo, linkQuery) {
     const cls = variant === 'alert' ? 'alert' : variant === 'success' ? 'success' : '';
-    return `<div class="kpi ${cls}">
-      <div class="label">${esc(label)}</div>
+    const clickable = linkTo ? `onclick="App.drillDown('${esc(linkTo)}', ${JSON.stringify(linkQuery || {}).replace(/"/g, '&quot;')})" style="cursor:pointer;"` : '';
+    const hint = linkTo ? '<span style="opacity:0.5;margin-left:4px;">↗</span>' : '';
+    return `<div class="kpi ${cls}" ${clickable}>
+      <div class="label">${esc(label)}${hint}</div>
       <div class="value">${esc(value)}</div>
       <div class="sub">${esc(sub || '')}</div>
     </div>`;
+  }
+
+  // 告警 banner（dashboard 顶部）
+  function renderAlertsBanner() {
+    const a = state.alerts;
+    if (!a || !a.alerts || a.alerts.length === 0) return '';
+    const items = a.alerts.map(al => {
+      const sev = al.severity || 'info';
+      const action = al.action || {};
+      const click = action.view
+        ? `onclick="App.drillDown('${esc(action.view)}', ${JSON.stringify(parseQuery(action.query)).replace(/"/g, '&quot;')})" style="cursor:pointer;"`
+        : '';
+      return `<div class="alert-item alert-${esc(sev)}" ${click}>
+        <div class="alert-title">${esc(al.title)}</div>
+        ${al.description ? `<div class="alert-desc">${esc(al.description)}</div>` : ''}
+        ${action.view ? '<div class="alert-action">点击查看 →</div>' : ''}
+      </div>`;
+    }).join('');
+    return `<div class="alerts-banner">${items}</div>`;
+  }
+
+  // 把 "tag=BLACKLIST&foo=bar" 转成对象
+  function parseQuery(q) {
+    if (!q) return {};
+    return q.split('&').reduce((acc, p) => {
+      const [k, v] = p.split('=');
+      if (k) acc[k] = v || '';
+      return acc;
+    }, {});
   }
 
   function renderBarList(rows) {
@@ -1616,6 +1697,151 @@ const App = (() => {
     return arr.map(d => `<span class="tag-chip">${esc(d)}</span>`).join(' ');
   }
 
+  // ---------- Weekly report view (v4.3 PRD §11.12 增量) ----------
+  function renderWeekly() {
+    return `<div class="view-head">
+      <h1>周报</h1>
+      <p>最近 7 天经营数据 + 周环比。跨店看底部"连锁汇总"。每周一 9:00 自动邮件到 REPORT_TO</p>
+    </div>
+    <div class="filterbar">
+      <div class="field">
+        <label>截止日（as_of 之后 7 天为本周）</label>
+        <input class="input" type="date" id="weeklyAsOf" value="${esc(state.weeklyAsOf || todayStr())}" />
+      </div>
+      <button class="btn btn-primary" onclick="App.loadWeekly()">查询</button>
+      <button class="btn btn-ghost" onclick="App.resetWeekly()">重置</button>
+      <span class="spacer"></span>
+      <span class="text-muted" id="weeklyTs" style="font-size:12px;"></span>
+    </div>
+
+    <div id="weeklyBody">
+      ${state.weekly ? renderWeeklyBody(state.weekly) : '<div class="card card-pad">' + renderSkeleton(4) + '</div>'}
+    </div>
+
+    <div class="section" id="chainWeeklySection">
+      <div class="card">
+        <div class="section-head card-pad-sm" style="border-bottom:1px solid var(--line);">
+          <h2 style="font-size:14px;">连锁汇总</h2>
+          <span class="sub">所有店铺本周合计</span>
+        </div>
+        <div id="chainWeeklyBody" style="padding:16px;">
+          ${state.chainWeekly ? renderChainWeeklyBody(state.chainWeekly) : '<div class="text-muted" style="font-size:12px;">加载中…</div>'}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderWeeklyBody(r) {
+    const start = r.window_start ? r.window_start.slice(0, 10) : '—';
+    const end = r.window_end ? r.window_end.slice(0, 10) : '—';
+    const total = r.total_appointments || 0;
+    const completed = r.completed_appointments || 0;
+    const noshow = r.noshow_appointments || 0;
+    const cancelled = r.cancelled_appointments || 0;
+    const active = r.active_appointments || 0;
+    const growthPct = (r.total_growth_rate * 100).toFixed(1);
+    const growthCls = r.total_growth_rate > 0 ? 'success' : r.total_growth_rate < 0 ? 'alert' : 'normal';
+    const growthSign = r.total_growth_rate > 0 ? '+' : '';
+
+    return `
+      <div class="kpi-grid">
+        ${kpiCard('总预约', total, 'info', `${start} ~ ${end}`)}
+        ${kpiCard('已完成', completed, 'success', `完成率 ${fmtPct(r.completion_rate || 0)}`)}
+        ${kpiCard('爽约', noshow, noshow > 0 ? 'alert' : 'normal', `爽约率 ${fmtPct(r.noshow_rate || 0)}`)}
+        ${kpiCard('已取消', cancelled, 'normal', '')}
+        ${kpiCard('待到店', active, 'normal', '')}
+        ${kpiCard('周环比（总数）', growthSign + growthPct + '%', growthCls,
+          `上周 ${r.last_week_total} 单 → 本周 ${total} 单`)}
+      </div>
+
+      <div class="section">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>7 天日趋势</h2>
+            <span class="sub">${(r.daily_trend || []).length} 天</span>
+          </div>
+          ${renderWeeklyDailyChart(r.daily_trend || [])}
+        </div>
+      </div>
+
+      <div class="section" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>服务排行</h2>
+            <span class="sub">Top ${(r.service_rank || []).length}</span>
+          </div>
+          ${renderRankList((r.service_rank || []).map(s => ({ name: s.name, count: s.count })))}
+        </div>
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>顾客排行</h2>
+            <span class="sub">Top ${(r.top_customers || []).length}</span>
+          </div>
+          ${renderRankList((r.top_customers || []).map(c => ({ name: c.name || '匿名', count: c.count })))}
+        </div>
+      </div>`;
+  }
+
+  function renderWeeklyDailyChart(rows) {
+    if (!rows.length) return renderEmpty('暂无 7 天数据', null, 'chart');
+    const max = Math.max(...rows.map(r => r.count || 0), 1);
+    // 周一在前（v4.3 默认就是 [now-7d, now) ASC；后端 fillDailyTrend 已补 0）
+    return '<div class="bar-list">' + rows.map(r => {
+      const date = (r.date || '').slice(5); // MM-DD
+      const dow = weekdayOf(r.date);
+      return `<div class="bar-row" style="grid-template-columns: 70px 1fr 40px;">
+        <div class="name text-mono">${esc(date)} ${esc(dow)}</div>
+        <div class="bar"><div class="fill" style="width:${((r.count || 0) / max * 100).toFixed(1)}%;"></div></div>
+        <div class="num">${r.count || 0}</div>
+      </div>`;
+    }).join('') + '</div>';
+  }
+
+  function weekdayOf(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d)) return '';
+    return '周' + '日一二三四五六'[d.getDay()];
+  }
+
+  function renderRankList(rows) {
+    if (!rows.length) return renderEmpty('暂无数据', null, 'user');
+    const max = Math.max(...rows.map(r => r.count), 1);
+    return '<div class="bar-list">' + rows.map((r, i) => {
+      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
+      return `<div class="bar-row" style="grid-template-columns: 24px 90px 1fr 50px;">
+        <div style="text-align:center;">${medal}</div>
+        <div class="name">${esc(r.name)}</div>
+        <div class="bar"><div class="fill" style="width:${(r.count / max * 100).toFixed(1)}%;"></div></div>
+        <div class="num">${r.count}</div>
+      </div>`;
+    }).join('') + '</div>';
+  }
+
+  function renderChainWeeklyBody(c) {
+    const t = c.total || {};
+    const ps = c.per_shop || [];
+    if (!ps.length) return renderEmpty('暂无店铺数据', '至少需要一家店有过本周预约', 'building');
+    return `
+      <div class="kv-list" style="margin-bottom:12px;">
+        <div class="k">门店数</div><div class="v">${c.shop_count || 0}</div>
+        <div class="k">窗口</div><div class="v mono">${esc((c.window_start || '').slice(0,10))} ~ ${esc((c.window_end || '').slice(0,10))}</div>
+        <div class="k">总预约</div><div class="v">${t.total_appointments || 0}</div>
+        <div class="k">完成率</div><div class="v">${fmtPct(t.completion_rate || 0)}</div>
+        <div class="k">爽约率</div><div class="v">${fmtPct(t.noshow_rate || 0)}</div>
+      </div>
+      <table class="table">
+        <thead><tr><th>门店</th><th class="num">预约</th><th class="num">完成</th><th class="num">爽约</th><th class="num">完成率</th></tr></thead>
+        <tbody>${ps.map(s => `<tr>
+          <td><strong>${esc(s.shop_name || s.shop_id)}</strong></td>
+          <td class="num">${s.total_appointments || 0}</td>
+          <td class="num">${s.completed_appointments || 0}</td>
+          <td class="num">${s.noshow_appointments || 0}</td>
+          <td class="num">${fmtPct(s.completion_rate || 0)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  }
+
   // ---------- Icons ----------
   function icon(name, size = 18) {
     const s = size;
@@ -2022,6 +2248,7 @@ const App = (() => {
         loadUpcoming(silent),
         loadLeavesBadge(),
         loadHandoffsBadge(),
+        loadAlerts(silent),
       ]);
     } finally { state.loading = false; }
   }
@@ -2246,6 +2473,78 @@ const App = (() => {
     } catch (e) {
       if (state.view === 'shop') showToast('加载店铺信息失败：' + e.message, 'error');
     }
+  }
+
+  // v4.5 dashboard 告警
+  async function loadAlerts(silent = true) {
+    try {
+      const data = await api('/api/admin/alerts');
+      state.alerts = data;
+      if (state.view === 'dashboard') render();
+    } catch (e) {
+      if (!silent) showToast('加载告警失败：' + e.message, 'error');
+    }
+  }
+
+  // drill-down：点击 KPI / 告警 → 切 view + 应用 filter
+  function drillDown(view, query) {
+    if (!view) return;
+    setView(view);
+    // 应用 filter（按 view 分类）
+    if (view === 'customers' && query && query.tag) {
+      setTimeout(() => {
+        const sel = $('#custTag');
+        if (sel) { sel.value = query.tag; loadCustomers(); }
+      }, 50);
+    } else if (view === 'appointments' && query && query.status) {
+      setTimeout(() => {
+        const sel = $('#apptStatus');
+        if (sel) { sel.value = query.status; loadAppointments(); }
+      }, 50);
+    } else {
+      // 触发对应 view 的 loader
+      setTimeout(() => {
+        if (view === 'handoffs') loadHandoffs();
+        else if (view === 'events') loadEvents();
+        else if (view === 'leaves') loadLeaves();
+        else if (view === 'subscription') loadSubscription();
+        else if (view === 'shop') loadShop();
+        else if (view === 'appointments') loadAppointments();
+        else if (view === 'customers') loadCustomers();
+      }, 50);
+    }
+  }
+
+  // v4.3 周报
+  async function loadWeekly() {
+    const asOf = $('#weeklyAsOf')?.value || '';
+    state.weeklyAsOf = asOf;
+    const body = $('#weeklyBody');
+    const chainBody = $('#chainWeeklyBody');
+    if (body) body.innerHTML = '<div class="card card-pad">' + renderSkeleton(4) + '</div>';
+    if (chainBody) chainBody.innerHTML = '<div class="text-muted" style="font-size:12px;">加载中…</div>';
+    try {
+      let url = '/api/admin/weekly-report';
+      if (asOf) url += '?as_of=' + encodeURIComponent(asOf);
+      // 拉本周 + 跨店（并行）
+      const [r, cr] = await Promise.all([
+        api(url),
+        api('/api/admin/weekly-report/chain' + (asOf ? '?as_of=' + encodeURIComponent(asOf) : '')),
+      ]);
+      state.weekly = r;
+      state.chainWeekly = cr;
+      const ts = $('#weeklyTs'); if (ts) ts.textContent = '最近刷新：' + new Date().toLocaleTimeString();
+      if (body) body.innerHTML = renderWeeklyBody(r);
+      if (chainBody) chainBody.innerHTML = renderChainWeeklyBody(cr);
+    } catch (e) {
+      if (body) body.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function resetWeekly() {
+    state.weeklyAsOf = todayStr();
+    if ($('#weeklyAsOf')) $('#weeklyAsOf').value = state.weeklyAsOf;
+    loadWeekly();
   }
 
   // ---------- Actions ----------
@@ -2574,6 +2873,7 @@ const App = (() => {
     else if (state.view === 'services') loadServices();
     else if (state.view === 'subscription') loadSubscription();
     else if (state.view === 'shop') loadShop();
+    else if (state.view === 'weekly') loadWeekly();
   }
 
   // ---------- Init ----------
@@ -2594,6 +2894,7 @@ const App = (() => {
       else if (v === 'services') loadServices();
       else if (v === 'subscription') loadSubscription();
       else if (v === 'shop') loadShop();
+      else if (v === 'weekly') loadWeekly();
     }));
     // 顾客搜索回车支持（v4.4 轻打磨）
     document.addEventListener('keydown', e => {
@@ -2621,6 +2922,7 @@ const App = (() => {
     markCompleted, markCancelled,
     loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain,
     loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop,
+    loadWeekly, resetWeekly, loadAlerts, drillDown,
     resetCustFilters,
     refreshCurrent,
   };

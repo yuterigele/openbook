@@ -30,9 +30,21 @@ type QueryScheduleTool struct{}
 func (t *QueryScheduleTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "query_schedule",
-		Desc: "查询某位理发师在指定日期的可预约时段。输入理发师姓名和日期，返回该理发师当天的空闲时段列表。" +
-			"如果该理发师当天有请假，工具会自动从可预约时段中扣除请假时段并单独标注「师傅请假占用」段。" +
-			"如果整天请假，会直接告诉顾客原因，让其换理发师或换时间。",
+		Desc: "查询某位理发师在指定日期的可预约时段。输入理发师姓名和日期，返回该理发师当天的空闲时段列表。\n" +
+			"\n" +
+			"【调用时机】\n" +
+			"  - 顾客问「Tony 明天几点有空」「周末能约吗」时；\n" +
+			"  - 在 create_appointment 前**必须先调**（确认时段真空闲，避免盲下被拒）。\n" +
+			"\n" +
+			"【业务规则】\n" +
+			"  - 输出三段：「可约」「师傅请假占用」「已约满」—— Agent 可据此判断是「换时间」还是「换师傅」；\n" +
+			"  - 节假日会直接告知「休息日」；\n" +
+			"  - 整天请假会输出「师傅请假占用」段，让 Agent 推荐换时间/换师傅。\n" +
+			"\n" +
+			"【回复要求】\n" +
+			"  - 把「可约」段的关键时段挑 2-3 个推给顾客（不要照搬全部）；\n" +
+			"  - 如果同时有「可约」和「师傅请假占用」，主动说「下午 X-X 有师傅请假，上午还有空」；\n" +
+			"  - 如果「已约满」段占大头（如 14/15 个时段都满了），提醒顾客这个师傅当天挺忙。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"barber_name": {
 				Type:     "string",
@@ -68,19 +80,23 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 		return "", fmt.Errorf("date 参数不能为空")
 	}
 
+	if err := EnsureDB("query_schedule"); err != nil {
+		return "", err
+	}
+
 	// 查询理发师 + 所属店铺（用于节假日判断）
 	barber, err := storage.GetBarberByName(params.BarberName)
 	if err != nil {
-		return "", fmt.Errorf("理发师 %s 不存在", params.BarberName)
+		return "", fmt.Errorf("师傅 %s 不在店里呢（本店有 Tony、Kevin 两位），换个试试？", params.BarberName)
 	}
 	if !barber.Active {
-		return "", fmt.Errorf("理发师 %s 暂时不接单", params.BarberName)
+		return fmt.Sprintf("%s 师傅暂时不接单了，试试 Kevin 师傅？", params.BarberName), nil
 	}
 
 	// 节假日判断（PRD #6）
 	shop, _ := storage.GetShopByID(ctx, barber.ShopID)
 	if storage.IsShopHoliday(shop, params.Date) {
-		return fmt.Sprintf("%s 是店铺休息日（节假日），不提供预约。", params.Date), nil
+		return fmt.Sprintf("%s 是本店休息日（节假日），换个日期试试", params.Date), nil
 	}
 
 	// 一次 SQL 拿全 available / leave blocks / booked count（v3.6 新 helper）

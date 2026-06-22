@@ -35,24 +35,28 @@ func (t *MarkNoShowTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		AppointmentID string `json:"appointment_id"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &params); err != nil {
-		return "", fmt.Errorf("解析参数失败: %v", err)
+		return "", FriendlyError(ctx, err, "参数解析失败", "mark_no_show.unmarshal")
 	}
 	if params.AppointmentID == "" {
 		return "", fmt.Errorf("appointment_id 不能为空")
 	}
 
+	if err := EnsureDB("mark_no_show"); err != nil {
+		return "", err
+	}
+
 	appt, err := storage.GetAppointment(params.AppointmentID)
 	if err != nil {
-		return "", fmt.Errorf("预约 %s 不存在", params.AppointmentID)
+		return "", fmt.Errorf("找不到这个预约（ID: %s），确认下没复制错？", params.AppointmentID)
 	}
 	if appt.Status == "noshow" {
-		return fmt.Sprintf("预约 %s 已经是爽约状态", params.AppointmentID), nil
+		return "这个预约已经是爽约状态了", nil
 	}
 	if appt.Status == "cancelled" {
-		return "", fmt.Errorf("预约 %s 已被取消，不能标记爽约", params.AppointmentID)
+		return "", fmt.Errorf("这个预约已取消，不用再标爽约了")
 	}
 	if appt.Status == "completed" {
-		return "", fmt.Errorf("预约 %s 已完成，不能标记爽约", params.AppointmentID)
+		return "", fmt.Errorf("这个预约已完成，不能标爽约")
 	}
 
 	now := time.Now()
@@ -63,7 +67,7 @@ func (t *MarkNoShowTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 			"status":     "noshow",
 			"updated_at": now,
 		}).Error; err != nil {
-		return "", fmt.Errorf("标记失败: %v", err)
+		return "", FriendlyError(ctx, err, "标记爽约失败，请稍后再试", "mark_no_show.update")
 	}
 
 	// 埋点
@@ -100,13 +104,16 @@ func (t *MarkCompletedTool) InvokableRun(ctx context.Context, argumentsInJSON st
 		AppointmentID string `json:"appointment_id"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &params); err != nil {
-		return "", err
+		return "", FriendlyError(ctx, err, "参数解析失败", "mark_completed.unmarshal")
 	}
 	if params.AppointmentID == "" {
 		return "", fmt.Errorf("appointment_id 不能为空")
 	}
-	if err := storage.MarkAppointmentCompleted(ctx, params.AppointmentID); err != nil {
+	if err := EnsureDB("mark_completed"); err != nil {
 		return "", err
+	}
+	if err := storage.MarkAppointmentCompleted(ctx, params.AppointmentID); err != nil {
+		return "", FriendlyError(ctx, err, "标记完成失败，请稍后再试", "mark_completed.update")
 	}
 	return fmt.Sprintf("预约 %s 已标记为完成", params.AppointmentID), nil
 }

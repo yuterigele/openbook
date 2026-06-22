@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -401,6 +402,161 @@ func TestServices_CrossShopForbidden(t *testing.T) {
 	status, _ := runHandler(t, updateServiceHandler, ctx)
 	if status != 404 {
 		t.Errorf("B 店 update A 店 service 应 404，实际 %d", status)
+	}
+}
+
+// ============================================================
+// 6) Weekly report
+// ============================================================
+
+func TestWeeklyReport_NoClaims(t *testing.T) {
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report", nil)
+	status, _ := runHandler(t, getWeeklyReportHandler, ctx)
+	if status != 401 {
+		t.Errorf("无 claims 应 401，实际 %d", status)
+	}
+}
+
+func TestWeeklyReport_BadAsOf(t *testing.T) {
+	setupAPITestDB(t)
+	shop := storage.MakeShop(t, "shop-wr-bad", "")
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report?as_of=2026/06/22",
+		nil, withClaims(adminClaims(shop.ID)))
+	status, body := runHandler(t, getWeeklyReportHandler, ctx)
+	if status != 400 {
+		t.Errorf("非法 as_of 应 400，实际 %d body=%s", status, body)
+	}
+	if !strings.Contains(body, "as_of") {
+		t.Errorf("错误信息应提示 as_of: %s", body)
+	}
+}
+
+func TestWeeklyReport_HappyPath(t *testing.T) {
+	setupAPITestDB(t)
+	shop := storage.MakeShop(t, "shop-wr-ok", "")
+
+	// 造 1 条本周的 active 预约
+	c := storage.MakeCustomer(t, "Alice", 0, 0)
+	storage.MakeAppointment(t, shop.ID, c.ID, "Alice", "Tony", "2026-06-21", "10:00")
+
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report",
+		nil, withClaims(adminClaims(shop.ID)))
+	status, body := runHandler(t, getWeeklyReportHandler, ctx)
+	if status != 200 {
+		t.Fatalf("应 200，实际 %d body=%s", status, body)
+	}
+	if !strings.Contains(body, shop.ID) {
+		t.Errorf("响应缺 shop_id: %s", body)
+	}
+	if !strings.Contains(body, `"window_days":7`) {
+		t.Errorf("响应缺 window_days=7: %s", body)
+	}
+	// 至少 1 条 active
+	if !strings.Contains(body, `"total_appointments":1`) {
+		t.Errorf("本周应有 1 条预约: %s", body)
+	}
+}
+
+func TestWeeklyReport_Chain_HappyPath(t *testing.T) {
+	setupAPITestDB(t)
+	shopA := storage.MakeShop(t, "shop-wr-chain-A", "")
+	shopB := storage.MakeShop(t, "shop-wr-chain-B", "")
+
+	storage.MakeAppointment(t, shopA.ID, "c1", "X", "Tony", "2026-06-21", "10:00")
+	storage.MakeAppointment(t, shopB.ID, "c2", "Y", "Tony", "2026-06-22", "11:00")
+
+	// chain 不限店铺（与 chainDashboardHandler 一致：已登录即可）
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report/chain",
+		nil, withClaims(adminClaims(shopA.ID)))
+	status, body := runHandler(t, getChainWeeklyReportHandler, ctx)
+	if status != 200 {
+		t.Fatalf("应 200，实际 %d body=%s", status, body)
+	}
+	if !strings.Contains(body, `"shop_count":2`) {
+		t.Errorf("应有 2 家店: %s", body)
+	}
+	if !strings.Contains(body, shopA.ID) || !strings.Contains(body, shopB.ID) {
+		t.Errorf("两店都应在 per_shop 里: %s", body)
+	}
+}
+
+// ============================================================
+// 7) Alerts（B3 主动告警）
+// ============================================================
+
+func TestAlerts_NoClaims(t *testing.T) {
+	ctx := newAPIContext(t, "GET", "/api/admin/alerts", nil)
+	status, _ := runHandler(t, getAlertsHandler, ctx)
+	if status != 401 {
+		t.Errorf("无 claims 应 401，实际 %d", status)
+	}
+}
+
+func TestAlerts_FreshShop_NoAlerts(t *testing.T) {
+	setupAPITestDB(t)
+	shop := storage.MakeShop(t, "shop-alert-fresh", "")
+	ctx := newAPIContext(t, "GET", "/api/admin/alerts", nil, withClaims(adminClaims(shop.ID)))
+	status, body := runHandler(t, getAlertsHandler, ctx)
+	if status != 200 {
+		t.Fatalf("应 200，实际 %d body=%s", status, body)
+	}
+	if !strings.Contains(body, `"alert_count":0`) {
+		t.Errorf("新店应无告警: %s", body)
+	}
+}
+
+func TestAlerts_HandoffPending(t *testing.T) {
+	setupAPITestDB(t)
+	shop := storage.MakeShop(t, "shop-alert-handoff", "")
+	// 写 2 条今天的 handoff
+	storage.TrackEvent(context.Background(), shop.ID, storage.EventHandoffToHuman, "c1", nil)
+	storage.TrackEvent(context.Background(), shop.ID, storage.EventHandoffToHuman, "c2", nil)
+
+	ctx := newAPIContext(t, "GET", "/api/admin/alerts", nil, withClaims(adminClaims(shop.ID)))
+	_, body := runHandler(t, getAlertsHandler, ctx)
+	if !strings.Contains(body, "handoff_pending") {
+		t.Errorf("应有 handoff_pending 告警: %s", body)
+	}
+	if !strings.Contains(body, "今天有 2 个转人工") {
+		t.Errorf("应说明 2 个: %s", body)
+	}
+	if !strings.Contains(body, `"view":"handoffs"`) {
+		t.Errorf("应带跳转到 handoffs: %s", body)
+	}
+}
+
+func TestAlerts_HolidayUpcoming(t *testing.T) {
+	setupAPITestDB(t)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	// 明天设为节假日
+	tomorrow := time.Now().In(loc).AddDate(0, 0, 1).Format("2006-01-02")
+	shop := storage.MakeShop(t, "shop-alert-holiday", tomorrow)
+
+	ctx := newAPIContext(t, "GET", "/api/admin/alerts", nil, withClaims(adminClaims(shop.ID)))
+	_, body := runHandler(t, getAlertsHandler, ctx)
+	if !strings.Contains(body, "holiday_upcoming") {
+		t.Errorf("应有 holiday_upcoming 告警: %s", body)
+	}
+	if !strings.Contains(body, "明天是休息日") {
+		t.Errorf("应说「明天」: %s", body)
+	}
+}
+
+func TestAlerts_SeverityOrder(t *testing.T) {
+	// 验证：critical 排在 warning 前面
+	alerts := []Alert{
+		{Severity: AlertSeverityInfo, Code: "i"},
+		{Severity: AlertSeverityCritical, Code: "c"},
+		{Severity: AlertSeverityWarning, Code: "w"},
+	}
+	sort.SliceStable(alerts, func(i, j int) bool {
+		return severityRank(alerts[i].Severity) > severityRank(alerts[j].Severity)
+	})
+	if alerts[0].Code != "c" || alerts[1].Code != "w" || alerts[2].Code != "i" {
+		t.Errorf("排序错: %+v", alerts)
 	}
 }
 

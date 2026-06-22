@@ -18,6 +18,15 @@ import (
 // DB 全局 *gorm.DB 句柄。InitDB 后所有 repo 方法都依赖它。
 var DB *gorm.DB
 
+// IsReady 返回 storage.DB 是否已初始化（v4.5 C1 工具降级用）
+//
+// 用途：tools 包在调用前可检查；DB 未就绪时返回友好错误而不是 panic。
+// 注意：本函数只判断 DB != nil，**不**做连接活性检查（避免拖慢热路径）。
+// 实际"DB 暂时连不上"由各 storage 调用的 err 反映。
+func IsReady() bool {
+	return DB != nil
+}
+
 // InitDB 根据环境变量连接 MySQL，做 AutoMigrate，并返回 *gorm.DB。
 //
 // 必填环境变量：

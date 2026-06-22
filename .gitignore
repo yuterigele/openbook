@@ -26,7 +26,9 @@ Thumbs.db
 *.log
 data/*.db
 data/*.db-journal
-data/**/*.jsonl  # 运行时 session 日志（不要入库）
+data/sessions/   # 运行时 chat session（不要入库）
+data/sessions/*.jsonl
+data/**/*.jsonl
 
 # Build / coverage
 *.test

@@ -2,7 +2,7 @@ package api
 
 // admin_features.go
 //
-// v4.4 补全商户后台 — 5 个新模块的 handler：
+// v4.4 补全商户后台 — 6 个新模块的 handler：
 //
 //   1) 店铺设置   GET /api/admin/shop          +  PUT /api/admin/shop
 //   2) 转人工列表 GET /api/admin/handoffs      （从 event_logs 筛 handoff_to_human）
@@ -10,6 +10,8 @@ package api
 //   4) 续费管理   GET /api/admin/subscription  （当前订阅 + 历史列表）
 //                  POST /api/admin/subscription/renew  已有，路径沿用 api.go 的
 //   5) 服务目录   GET/POST/PUT/DELETE /api/admin/services
+//   6) 周报预览   GET /api/admin/weekly-report +  GET /api/admin/weekly-report/chain
+//                  复用 storage.BuildWeeklyUsageReport / BuildChainWeeklyUsageReport
 //
 // 设计约定：
 //   - shopID 一律从 JWT claims 取（多店隔离）
@@ -21,7 +23,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -653,4 +657,382 @@ func isServiceValidationErr(err error) bool {
 		strings.Contains(msg, "过长") ||
 		strings.Contains(msg, "必须在") ||
 		strings.Contains(msg, "无效")
+}
+
+// ============================================================
+// 6) 周报预览（v4.3 PRD §11.12 — 数据已在 storage，UI 一直缺）
+// ============================================================
+
+// getWeeklyReportHandler GET /api/admin/weekly-report?as_of=YYYY-MM-DD
+//
+// 返回当前 admin 所属店铺的最近一周（[as_of-7d, as_of)）经营报告。
+//   - as_of 缺省 = now；非法格式 400
+//   - 用 storage.BuildWeeklyUsageReport 复用 D+15 同一套数据组装逻辑
+//   - 返回结构与 email 模板渲染的 source 字段一致；前端用同一份数据画卡片/排行/趋势
+func getWeeklyReportHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	if storage.DB == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})
+		return
+	}
+	asOf, err := parseAsOf(c.Query("as_of"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	rep, err := storage.BuildWeeklyUsageReport(ctx, shopID, asOf)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, rep)
+}
+
+// getChainWeeklyReportHandler GET /api/admin/weekly-report/chain?as_of=YYYY-MM-DD
+//
+// 跨店周报（连锁 owner 用）。权限沿用 chainDashboardHandler：已登录即可。
+//   - 原因：当前 ShopAdmin 只有 owner/staff 两种角色；连锁 owner 本身也是某店 owner
+//   - 后续要做细粒度：role="platform_admin" 限定
+func getChainWeeklyReportHandler(ctx context.Context, c *app.RequestContext) {
+	if storage.DB == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})
+		return
+	}
+	asOf, err := parseAsOf(c.Query("as_of"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	rep, err := storage.BuildChainWeeklyUsageReport(ctx, asOf)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, rep)
+}
+
+// parseAsOf 解析 as_of query（YYYY-MM-DD），空时 = now，非法时返回 error
+func parseAsOf(raw string) (time.Time, error) {
+	if raw == "" {
+		return time.Now(), nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", raw, time.Local)
+	if err != nil {
+		return time.Time{}, errors.New("as_of 格式错误，需 YYYY-MM-DD")
+	}
+	return t, nil
+}
+
+// ============================================================
+// 7) Dashboard 告警 + drill-down（v4.5 B3 主动告警 + B1 操作闭环）
+// ============================================================
+
+// AlertSeverity 告警级别（前端按颜色渲染）
+type AlertSeverity string
+
+const (
+	AlertSeverityInfo     AlertSeverity = "info"     // 灰，提示
+	AlertSeverityWarning  AlertSeverity = "warning"  // 黄，建议关注
+	AlertSeverityCritical AlertSeverity = "critical" // 红，需立即处理
+)
+
+// Alert 单条告警
+type Alert struct {
+	Severity    AlertSeverity `json:"severity"`
+	Code        string        `json:"code"`         // 稳定 code，前端可作 key 渲染
+	Title       string        `json:"title"`        // 一句话标题
+	Description string        `json:"description"`  // 详细说明
+	Action      *AlertAction  `json:"action,omitempty"` // 跳转目标（dashboard 卡片 → 详情页）
+}
+
+// AlertAction 跳转目标（drill-down）
+type AlertAction struct {
+	View  string `json:"view"`            // 前端要切换的 view
+	Query string `json:"query,omitempty"` // query 字符串
+}
+
+// AlertResponse 告警响应
+type AlertResponse struct {
+	Alerts       []Alert `json:"alerts"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	AlertCount   int    `json:"alert_count"`
+	HasCritical  bool   `json:"has_critical"`
+	HasWarning   bool   `json:"has_warning"`
+}
+
+// getAlertsHandler GET /api/admin/alerts
+//
+// 返回当前店铺需要关注的告警列表，按 severity 排序（critical > warning > info）。
+// 计算规则：
+//   - subscription_expiring_7d  订阅 7 天内到期
+//   - noshow_rate_high_weekly    本周爽约率 > 15%
+//   - completion_rate_low_weekly 本周完成率 < 50%（预约数 ≥ 10）
+//   - leave_heavy                某理发师本周 ≥ 3 次请假
+//   - holiday_upcoming            3 天内有节假日
+//   - handoff_pending             今天有 ≥ 1 个转人工未处理
+func getAlertsHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	if storage.DB == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})
+		return
+	}
+	alerts := buildAlerts(ctx, shopID)
+
+	// 按严重度排序：critical > warning > info
+	sort.SliceStable(alerts, func(i, j int) bool {
+		return severityRank(alerts[i].Severity) > severityRank(alerts[j].Severity)
+	})
+
+	resp := AlertResponse{
+		Alerts:      alerts,
+		GeneratedAt: time.Now(),
+		AlertCount:  len(alerts),
+	}
+	for _, a := range alerts {
+		if a.Severity == AlertSeverityCritical {
+			resp.HasCritical = true
+		}
+		if a.Severity == AlertSeverityWarning {
+			resp.HasWarning = true
+		}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func severityRank(s AlertSeverity) int {
+	switch s {
+	case AlertSeverityCritical:
+		return 3
+	case AlertSeverityWarning:
+		return 2
+	default:
+		return 1
+	}
+}
+
+// buildAlerts 计算所有告警
+func buildAlerts(ctx context.Context, shopID string) []Alert {
+	var alerts []Alert
+
+	// 1) 订阅快到期
+	if a := checkSubscriptionExpiring(ctx, shopID); a != nil {
+		alerts = append(alerts, *a)
+	}
+
+	// 2) 本周爽约率
+	if a := checkNoShowRateWeekly(ctx, shopID); a != nil {
+		alerts = append(alerts, *a)
+	}
+
+	// 3) 本周完成率低
+	if a := checkCompletionRateWeekly(ctx, shopID); a != nil {
+		alerts = append(alerts, *a)
+	}
+
+	// 4) 请假密集
+	if a := checkLeaveHeavy(ctx, shopID); a != nil {
+		alerts = append(alerts, *a)
+	}
+
+	// 5) 节假日临近
+	if a := checkHolidayUpcoming(ctx, shopID); a != nil {
+		alerts = append(alerts, *a)
+	}
+
+	// 6) 转人工待处理
+	if a := checkHandoffPending(ctx, shopID); a != nil {
+		alerts = append(alerts, *a)
+	}
+
+	return alerts
+}
+
+// checkSubscriptionExpiring 订阅 7 天内到期
+func checkSubscriptionExpiring(ctx context.Context, shopID string) *Alert {
+	var sub storage.Subscription
+	if err := storage.DB.WithContext(ctx).
+		Where("shop_id = ? AND cancelled_at IS NULL", shopID).
+		Order("expires_at DESC").
+		First(&sub).Error; err != nil {
+		return nil // 没有有效订阅，不告警
+	}
+	daysLeft := int(time.Until(sub.ExpiresAt).Hours() / 24)
+	if daysLeft >= 0 && daysLeft <= 7 {
+		severity := AlertSeverityWarning
+		if daysLeft <= 3 {
+			severity = AlertSeverityCritical
+		}
+		return &Alert{
+			Severity: severity,
+			Code:     "subscription_expiring_7d",
+			Title:    fmt.Sprintf("订阅还有 %d 天到期", daysLeft),
+			Description: fmt.Sprintf("当前 %s 套餐到期日 %s，过期后将无法使用 AI 预约助手。",
+				sub.Plan, sub.ExpiresAt.Format("2006-01-02")),
+			Action: &AlertAction{View: "subscription"},
+		}
+	}
+	return nil
+}
+
+// checkNoShowRateWeekly 本周爽约率 > 15%
+func checkNoShowRateWeekly(ctx context.Context, shopID string) *Alert {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	now := time.Now().In(loc)
+	weekStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -7)
+	summary := summarizeRange(ctx, shopID, weekStart, now.Add(24*time.Hour))
+	closed := summary.NoShow + summary.Completed
+	if closed < 5 {
+		return nil // 样本太少，不告警
+	}
+	if summary.NoShowRate > 0.15 {
+		return &Alert{
+			Severity:    AlertSeverityWarning,
+			Code:        "noshow_rate_high_weekly",
+			Title:       fmt.Sprintf("本周爽约率 %.1f%%（%d/%d）", summary.NoShowRate*100, summary.NoShow, closed),
+			Description: "高于 15% 警戒线。建议：复盘爽约顾客 + D-1 微信提醒强化。",
+			Action:      &AlertAction{View: "customers", Query: "tag=BLACKLIST"},
+		}
+	}
+	return nil
+}
+
+// checkCompletionRateWeekly 本周完成率 < 50%（样本 ≥ 10）
+func checkCompletionRateWeekly(ctx context.Context, shopID string) *Alert {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	now := time.Now().In(loc)
+	weekStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -7)
+	summary := summarizeRange(ctx, shopID, weekStart, now.Add(24*time.Hour))
+	closed := summary.NoShow + summary.Completed
+	if closed < 10 {
+		return nil
+	}
+	if summary.CompleteRate < 0.5 {
+		return &Alert{
+			Severity:    AlertSeverityWarning,
+			Code:        "completion_rate_low_weekly",
+			Title:       fmt.Sprintf("本周完成率仅 %.1f%%（%d/%d）", summary.CompleteRate*100, summary.Completed, closed),
+			Description: "完成率偏低，可能与爽约 / 取消过多有关。",
+			Action:      &AlertAction{View: "appointments"},
+		}
+	}
+	return nil
+}
+
+// checkLeaveHeavy 某理发师本周 ≥ 3 次请假（不重叠合并）
+func checkLeaveHeavy(ctx context.Context, shopID string) *Alert {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	now := time.Now().In(loc)
+	weekStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -7)
+
+	type row struct {
+		BarberID   string
+		BarberName string
+		Count      int
+	}
+	var rows []row
+	if err := storage.DB.WithContext(ctx).
+		Table("barber_leaves").
+		Select("barber_id, barber_name, COUNT(*) as count").
+		Where("shop_id = ? AND status = ? AND start_at >= ?", shopID, storage.LeaveStatusActive, weekStart).
+		Group("barber_id, barber_name").
+		Having("count >= ?", 3).
+		Order("count DESC").
+		Limit(1).
+		Scan(&rows).Error; err != nil || len(rows) == 0 {
+		return nil
+	}
+	r := rows[0]
+	return &Alert{
+		Severity:    AlertSeverityInfo,
+		Code:        "leave_heavy",
+		Title:       fmt.Sprintf("%s 师傅本周已请假 %d 次", r.BarberName, r.Count),
+		Description: "频繁请假可能影响顾客体验，建议确认下师傅状态或考虑改派。",
+		Action:      &AlertAction{View: "leaves"},
+	}
+}
+
+// checkHolidayUpcoming 3 天内有节假日
+func checkHolidayUpcoming(ctx context.Context, shopID string) *Alert {
+	shop, err := storage.GetShopByID(ctx, shopID)
+	if err != nil || shop.Holidays == "" {
+		return nil
+	}
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	today := time.Now().In(loc)
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
+
+	for _, d := range strings.Split(shop.Holidays, ",") {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		hDate, err := time.ParseInLocation("2006-01-02", d, loc)
+		if err != nil {
+			continue
+		}
+		daysAway := int(hDate.Sub(todayStart).Hours() / 24)
+		if daysAway >= 0 && daysAway <= 3 {
+			label := "今天"
+			if daysAway == 1 {
+				label = "明天"
+			} else if daysAway == 2 {
+				label = "后天"
+			} else if daysAway == 3 {
+				label = "大后天"
+			}
+			return &Alert{
+				Severity:    AlertSeverityInfo,
+				Code:        "holiday_upcoming",
+				Title:       fmt.Sprintf("%s是休息日（%s）", label, d),
+				Description: "记得提前告知顾客、暂停提醒推送。",
+				Action:      &AlertAction{View: "shop"},
+			}
+		}
+	}
+	return nil
+}
+
+// checkHandoffPending 今天有 ≥ 1 个转人工未处理
+func checkHandoffPending(ctx context.Context, shopID string) *Alert {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	var n int64
+	storage.DB.WithContext(ctx).
+		Table("event_logs").
+		Where("shop_id = ? AND event_type = ? AND created_at >= ?", shopID, storage.EventHandoffToHuman, todayStart).
+		Count(&n)
+	if n == 0 {
+		return nil
+	}
+	return &Alert{
+		Severity:    AlertSeverityWarning,
+		Code:        "handoff_pending",
+		Title:       fmt.Sprintf("今天有 %d 个转人工待处理", n),
+		Description: "Agent 把顾客转给了你，记得尽快联系避免顾客流失。",
+		Action:      &AlertAction{View: "handoffs"},
+	}
 }

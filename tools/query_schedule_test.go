@@ -220,7 +220,7 @@ func TestQuerySchedule_HolidayOverridesLeave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v, out=%q", err, out)
 	}
-	if !strings.Contains(out, "店铺休息日") {
+	if !strings.Contains(out, "本店休息日") {
 		t.Errorf("holiday message should take priority, got %q", out)
 	}
 	if strings.Contains(out, "师傅请假占用") {

@@ -103,6 +103,9 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.PUT("/services/:id", updateServiceHandler)
 	protected.DELETE("/services/:id", deactivateServiceHandler)
 	protected.POST("/services/:id/activate", activateServiceHandler)
+	// v4.3 周报预览（数据已在 storage，UI 一直缺；现在补 2 个端点）
+	protected.GET("/weekly-report", getWeeklyReportHandler)
+	protected.GET("/weekly-report/chain", getChainWeeklyReportHandler)
 
 	// 静态：商户后台页面
 	h.GET("/admin", func(ctx context.Context, c *app.RequestContext) {
