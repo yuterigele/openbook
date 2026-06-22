@@ -34,12 +34,21 @@ import (
 //   - role 缺该 perm → 403 forbidden
 //
 // 成功：c.Next(ctx) 继续
+//
+// 特殊：platform_admin 角色 → 直接放行（v4.9 跨店超管）。
+// 这是设计选择：超管的权限矩阵虽然默认是 AllPermissions，但某些跨店接口可能仍需要绕过
+// perm 检查直接查询全平台数据；统一在中间件层短路，比每个 handler 自己写判断更安全。
 func RequirePerm(perm string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		cl := GetClaims(c)
 		if cl == nil || cl.AdminID == 0 {
 			c.JSON(http.StatusUnauthorized, map[string]string{"error": "未登录"})
 			c.Abort()
+			return
+		}
+		// v4.9: 超管直接放行（不论接口要求什么 perm）
+		if cl.Role == "platform_admin" {
+			c.Next(ctx)
 			return
 		}
 		ok, err := HasPermission(ctx, cl.AdminID, perm)

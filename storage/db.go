@@ -227,6 +227,34 @@ func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
 		return err
 	}
 	log.Printf("[storage] 种子 admin: %s / %s（请尽快改密码）", username, password)
+
+	// 3) v4.9: 种子 platform_admin 超管账号（跨店看所有数据）
+	//   - 默认用户名 platform / 密码 platform123
+	//   - shop_id 仍指向默认店（防止某些按 shop_id 过滤的 SQL 把超管过滤掉；超管本身无视该字段）
+	//   - 已存在则跳过
+	platformUsername := getenv("DEFAULT_PLATFORM_ADMIN_USERNAME", "platform")
+	platformPassword := getenv("DEFAULT_PLATFORM_ADMIN_PASSWORD", "platform123")
+	var existingPlatform ShopAdmin
+	if err := db.WithContext(ctx).Where("username = ?", platformUsername).First(&existingPlatform).Error; err != nil {
+		phash, perr := bcrypt.GenerateFromPassword([]byte(platformPassword), bcrypt.DefaultCost)
+		if perr != nil {
+			return perr
+		}
+		padmin := ShopAdmin{
+			ShopID:       shopID, // 留个默认值避免空指针；超管本身不限店
+			Username:     platformUsername,
+			PasswordHash: string(phash),
+			Role:         "platform_admin",
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		if err := db.WithContext(ctx).Create(&padmin).Error; err != nil {
+			return err
+		}
+		log.Printf("[storage] 种子 platform_admin: %s / %s（v4.9 跨店超管，请尽快改密码）",
+			platformUsername, platformPassword)
+	}
+
 	return nil
 }
 

@@ -14,9 +14,9 @@ import (
 // 设计要点：
 //   - 细粒度 action 权限（15 个），不是粗粒度 role-only 判断
 //   - 权限存 DB（role_permissions 表），不是 Go 常量，运营可在线调整
-//   - role 字段（owner/staff）存 shop_admins，按 role 查 role_permissions 拿权限
-//   - owner 默认全权限；staff 默认"看 + 业务操作"，不能"管理"
-//   - 系统不存"超管"（platform_admin）—— 见 PRD §11.10.8 待办 #2
+//   - role 字段（owner / staff / platform_admin）存 shop_admins，按 role 查 role_permissions 拿权限
+//   - owner 默认全权限（本店）；staff 默认"看 + 业务操作"，不能"管理"（本店）
+//   - platform_admin（v4.9）跨店全权限，看全平台所有数据
 //
 // 表结构：
 //   CREATE TABLE role_permissions (
@@ -94,12 +94,18 @@ var AllPermissions = []string{
 
 // Role 角色枚举
 const (
-	RoleOwner = "owner" // 店主，全权限
-	RoleStaff = "staff" // 店员，业务权限
+	RoleOwner         = "owner"          // 店主，全权限（本店）
+	RoleStaff         = "staff"          // 店员，业务权限（本店）
+	RolePlatformAdmin = "platform_admin" // 平台超管，跨店全权限（v4.9）
 )
 
 // AllRoles 所有已知 role
-var AllRoles = []string{RoleOwner, RoleStaff}
+var AllRoles = []string{RoleOwner, RoleStaff, RolePlatformAdmin}
+
+// IsPlatformAdmin 判断是否是平台超管（便捷判断，避免到处比对字符串）
+func IsPlatformAdmin(role string) bool {
+	return role == RolePlatformAdmin
+}
 
 // defaultRolePermissions 默认 role → 权限矩阵（initDB seed 用）
 //
@@ -120,6 +126,7 @@ var defaultRolePermissions = map[string][]string{
 		// 不含：view:weekly_report / view:chain_dashboard / edit:shop / edit:services
 		//       / view:subscription / manage:subscription / manage:members
 	},
+	RolePlatformAdmin: AllPermissions, // 超管全权限（v4.9 新增）
 }
 
 // RolePermission role → permission 多对多（v4.7）

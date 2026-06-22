@@ -32,6 +32,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/yuterigele/openbook/auth"
 	"github.com/yuterigele/openbook/storage"
 )
 
@@ -512,23 +513,42 @@ type serviceRequest struct {
 }
 
 // listServicesHandler GET /api/admin/services?include_inactive=true
+//
+// v4.9:返回带 shop_name 的服务列表
+//   - platform_admin:跨店看所有店的服务（前端按商户分组渲染）
+//   - owner / staff:只看本店服务（带本店 shop_name 用于显示）
 func listServicesHandler(ctx context.Context, c *app.RequestContext) {
-	shopID := shopFromClaims(c)
-	if shopID == "" {
-		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+	cl := auth.GetClaims(c)
+	if cl == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "未登录"})
 		return
 	}
 	includeInactive := false
 	if v, err := strconv.ParseBool(c.Query("include_inactive")); err == nil {
 		includeInactive = v
 	}
-	svcs, err := storage.ListServicesByShop(ctx, shopID, includeInactive)
+
+	var (
+		svcs []storage.ServiceWithShop
+		err  error
+	)
+	if cl.Role == "platform_admin" {
+		// 超管：跨店看所有店
+		svcs, err = storage.ListAllServicesWithShopName(ctx, includeInactive)
+	} else {
+		// 普通 owner/staff：限本店（必须有 shop_id）
+		if cl.ShopID == "" {
+			c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+			return
+		}
+		svcs, err = storage.ListServicesByShopWithShopName(ctx, cl.ShopID, includeInactive)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if svcs == nil {
-		svcs = []storage.Service{}
+		svcs = []storage.ServiceWithShop{}
 	}
 	c.JSON(http.StatusOK, svcs)
 }

@@ -905,9 +905,9 @@
     .plan-pill.plan-flagship { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; }
     .plan-pill.plan-expired { background: #fef2f2; color: var(--red); }
 
-    .service-row {
+.service-row {
       display: grid;
-      grid-template-columns: 1fr 90px 100px 110px;
+      grid-template-columns: 1fr 130px 90px 100px 110px;
       gap: 12px;
       align-items: center;
       padding: 10px 14px;
@@ -918,6 +918,64 @@
     .service-row.inactive { opacity: 0.5; }
     .service-row .name { font-weight: 500; color: var(--ink); }
     .service-row .price { color: var(--ink-muted); font-family: var(--font-mono); font-size: 12px; }
+    .service-row .shop-cell {
+      color: var(--ink-muted);
+      font-size: 12px;
+      font-family: var(--font-mono);
+    }
+    .service-row .shop-cell .shop-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--olive-soft);
+      color: var(--olive);
+      font-size: 11px;
+    }
+    /* v4.9 跨店展示：商户分组标题 */
+    .service-shop-head {
+      padding: 10px 14px;
+      background: var(--surface-2);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .service-shop-head .shop-count {
+      margin-left: auto;
+      color: var(--ink-faint);
+      font-weight: 400;
+      font-family: var(--font-mono);
+    }
+    /* v4.9 跨店展示：商户分组标题 */
+    .service-shop-head {
+      padding: 8px 14px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .service-shop-head .shop-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--olive-soft);
+      color: var(--olive);
+      font-size: 11px;
+      font-family: var(--font-mono);
+    }
+    .service-shop-head .shop-count {
+      margin-left: auto;
+      color: var(--ink-faint);
+      font-weight: 400;
+    }
 
     /* v4.4 轻打磨：empty + skel 更柔和 */
     .empty {
@@ -1980,15 +2038,47 @@ const App = (() => {
     if (!rows.length) {
       return '<div style="padding:20px;">' + renderEmpty('还没有服务', '点击右上角"新增服务"开始', 'plus') + '</div>';
     }
+    // v4.9 判断是否跨店：service 的 shop_id 是否多于 1 个
+    const shopIds = Array.from(new Set(rows.map(r => r.shop_id)));
+    const isCrossShop = shopIds.length > 1;
+
     const header = `<div class="service-row" style="background:var(--surface-2);font-size:11px;font-weight:600;text-transform:uppercase;color:var(--ink-muted);letter-spacing:.04em;">
-      <div>服务名</div><div>预估时长</div><div>价格区间</div><div class="num">操作</div>
+      <div>服务名</div><div>${isCrossShop ? '商户' : '商户'}</div><div>预估时长</div><div>价格区间</div><div class="num">操作</div>
     </div>`;
-    return header + rows.map(renderServiceRow).join('');
+
+    if (!isCrossShop) {
+      // 单店模式：直接列表
+      return header + rows.map(renderServiceRow).join('');
+    }
+
+    // 跨店模式：按 shop_id 分组（接口已 ORDER BY shop_id ASC）
+    const groups = [];
+    let curShop = null;
+    let curGroup = null;
+    for (const r of rows) {
+      if (r.shop_id !== curShop) {
+        curShop = r.shop_id;
+        curGroup = { shop_id: r.shop_id, shop_name: r.shop_name || r.shop_id, items: [] };
+        groups.push(curGroup);
+      }
+      curGroup.items.push(r);
+    }
+    let html = header;
+    for (const g of groups) {
+      html += `<div class="service-shop-head">
+        <span class="shop-pill">${esc(g.shop_name)}</span>
+        <span class="text-muted" style="font-weight:400;">${esc(g.shop_id)}</span>
+        <span class="shop-count">${g.items.length} 项</span>
+      </div>`;
+      html += g.items.map(renderServiceRow).join('');
+    }
+    return html;
   }
 
   function renderServiceRow(s) {
     return `<div class="service-row ${s.is_active ? '' : 'inactive'}">
       <div class="name">${esc(s.name)} ${s.is_active ? '' : '<span class="text-muted" style="font-weight:400;font-size:11px;">· 已下架</span>'}</div>
+      <div class="shop-cell"><span class="shop-pill">${esc(s.shop_name || s.shop_id)}</span></div>
       <div class="text-muted text-mono">${s.estimated_min || 0} 分钟</div>
       <div class="price">${esc(s.price_range || '—')}</div>
       <div class="num">

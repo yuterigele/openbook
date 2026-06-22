@@ -137,6 +137,62 @@ func ListServicesByShop(ctx context.Context, shopID string, includeInactive bool
 	return out, nil
 }
 
+// ServiceWithShop 服务 + 所属商户名（v4.9 跨店展示用）
+//
+// 用途：admin 后台"服务目录"页面要展示"商户"列；platform_admin 跨店看所有店时，
+// 每行带 shop_name 用于按商户分组渲染。
+type ServiceWithShop struct {
+	Service
+	ShopName string `json:"shop_name"`
+}
+
+// ListServicesByShopWithShopName 列某店所有 service + JOIN shop.name 返回商户名
+//
+// 与 ListServicesByShop 区别：返回值带 ShopName 字段。前端展示更友好。
+func ListServicesByShopWithShopName(ctx context.Context, shopID string, includeInactive bool) ([]ServiceWithShop, error) {
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	if shopID == "" {
+		return nil, errors.New("shop_id 必填")
+	}
+	q := DB.WithContext(ctx).Table("services s").
+		Select("s.*, sh.name AS shop_name").
+		Joins("LEFT JOIN shops sh ON sh.id = s.shop_id").
+		Where("s.shop_id = ?", shopID)
+	if !includeInactive {
+		q = q.Where("s.is_active = ?", true)
+	}
+	var out []ServiceWithShop
+	if err := q.Order("s.sort_order asc, s.id asc").Scan(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListAllServicesWithShopName 列所有店的服务 + JOIN shop.name 返回商户名（v4.9 跨店）
+//
+// 用途：platform_admin 跨店看全平台服务 + 前端按商户分组渲染。
+// 排序：shop_id ASC, sort_order ASC, id ASC（前端直接按出现顺序渲染就是按商户分组）。
+//
+// ⚠️ 仅 platform_admin 使用；普通 owner/staff 调此函数会跨店泄漏。
+func ListAllServicesWithShopName(ctx context.Context, includeInactive bool) ([]ServiceWithShop, error) {
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	q := DB.WithContext(ctx).Table("services s").
+		Select("s.*, sh.name AS shop_name").
+		Joins("LEFT JOIN shops sh ON sh.id = s.shop_id")
+	if !includeInactive {
+		q = q.Where("s.is_active = ?", true)
+	}
+	var out []ServiceWithShop
+	if err := q.Order("s.shop_id ASC, s.sort_order ASC, s.id ASC").Scan(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UpdateService 更新服务（name / estimated_min / price_range / sort_order）
 func UpdateService(ctx context.Context, shopID, serviceID, name string, estimatedMin int, priceRange string, sortOrder int) (*Service, error) {
 	s, err := GetServiceInShop(ctx, shopID, serviceID)
