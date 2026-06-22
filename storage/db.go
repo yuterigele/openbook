@@ -107,6 +107,17 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		log.Printf("[storage] seedDefaultServices 警告: %v", err)
 	}
 
+	// v4.7 RBAC 老数据兜底：admin.role 为空/NULL 的统一填 owner
+	//
+	// 背景：role / status 列是 v4.7 这次 AutoMigrate 加的。GORM 加列时**不会**回填已有行，
+	// 老 admin 在 DB 里 role='' → 登录后所有 RequirePerm 全 403（无权限）。
+	// 这里幂等（只 update 空 role），每次启动都跑也没事，自愈型。
+	if err := db.WithContext(ctx).Model(&ShopAdmin{}).
+		Where("role = '' OR role IS NULL").
+		Update("role", "owner").Error; err != nil {
+		log.Printf("[storage] backfill ShopAdmin.role 警告: %v", err)
+	}
+
 	// v4.7 RBAC 默认 role → permission 映射（只在表空时跑，不覆盖运营在线调整）
 	if err := SeedDefaultRolePermissions(ctx); err != nil {
 		log.Printf("[storage] SeedDefaultRolePermissions 警告: %v", err)
