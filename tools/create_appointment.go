@@ -18,6 +18,9 @@ import (
 // ctxKeyShopID 注入 ctx 的 shop_id key
 type ctxKeyShopID struct{}
 
+// ctxKeyOpenID 注入 ctx 的微信 openID（v4.8 给 CreateAppointmentFull 透传顾客档案用）
+type ctxKeyOpenID struct{}
+
 // WithShopID 把 shop_id 放进 ctx（Agent 工具从 ctx 拿）
 func WithShopID(ctx context.Context, shopID string) context.Context {
 	return context.WithValue(ctx, ctxKeyShopID{}, shopID)
@@ -26,6 +29,17 @@ func WithShopID(ctx context.Context, shopID string) context.Context {
 // ShopIDFromCtx 从 ctx 取 shop_id（取不到返回 ""）
 func ShopIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyShopID{}).(string)
+	return v
+}
+
+// WithOpenID 把微信 openID 放进 ctx（v4.8 +）
+func WithOpenID(ctx context.Context, openID string) context.Context {
+	return context.WithValue(ctx, ctxKeyOpenID{}, openID)
+}
+
+// OpenIDFromCtx 从 ctx 取微信 openID（取不到返回 ""）
+func OpenIDFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyOpenID{}).(string)
 	return v
 }
 
@@ -160,10 +174,12 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		defer func() { _ = l.Unlock(context.Background()) }()
 	}
 
-	appointment, err := storage.CreateAppointmentWithShop(
+	appointment, err := storage.CreateAppointmentFull(
 		ShopIDFromCtx(ctx),
 		params.BarberName,
 		params.Customer,
+		OpenIDFromCtx(ctx),  // v4.8: 透传微信 openID，让 storage 自动建顾客档案
+		"",                  // externalUserID 暂未注入，后续如需要再加
 		params.Date,
 		params.Time,
 		params.Service,

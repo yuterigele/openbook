@@ -123,6 +123,13 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		log.Printf("[storage] SeedDefaultRolePermissions 警告: %v", err)
 	}
 
+	// v4.8 顾客档案自愈：appointments 有 customer_id 为空 + customer 名字非空的，
+	// 按名字去 customers 表查（没有就建），回填 appointment.customer_id。
+	// 老数据就是因为 CreateAppointment 不建顾客档案才漏的——这里兜底。
+	if err := BackfillMissingCustomers(ctx); err != nil {
+		log.Printf("[storage] BackfillMissingCustomers 警告: %v", err)
+	}
+
 	DB = db
 	log.Printf("[storage] MySQL 初始化完成")
 	return db, nil

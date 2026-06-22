@@ -1219,7 +1219,9 @@ func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client *
 
 	// 注入 shopID 到 ctx，让 Agent 工具（create_appointment 等）能拿到
 	ctxWithShop := tools.WithShopID(ctx, shopID)
-	reply := s.processAgentMessage(ctxWithShop, sess, msg.Content, shopID)
+	// v4.8: 透传微信 openID，让 create_appointment 自动建顾客档案（修 admin 顾客列表空 bug）
+	ctxWithUser := tools.WithOpenID(ctxWithShop, msg.FromUserName)
+	reply := s.processAgentMessage(ctxWithUser, sess, msg.Content, shopID)
 	log.Printf("[wecom] Agent回复: %s", reply)
 
 	// 发送回复消息
