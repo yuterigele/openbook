@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // FriendlyError 把内部错误转成"给顾客看的友好话术"

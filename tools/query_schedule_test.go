@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // runQuerySchedule 跑一次 query_schedule 工具，shop_id 通过 ctx 注入

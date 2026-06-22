@@ -27,8 +27,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/notify"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/notify"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // WeeklyReporter 周报触发器（v4.3 / v4.5）

@@ -34,7 +34,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // ---- list ----

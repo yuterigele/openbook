@@ -39,13 +39,13 @@ import (
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
-	commontool "github.com/cloudwego/eino-examples/adk/common/tool"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/a2ui"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/mem"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/tools"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
+	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
+	"github.com/yuterigele/openbook/a2ui"
+	"github.com/yuterigele/openbook/mem"
+	"github.com/yuterigele/openbook/msgops"
+	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/tools"
+	"github.com/yuterigele/openbook/wecom"
 )
 
 func init() {

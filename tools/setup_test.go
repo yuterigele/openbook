@@ -18,7 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // setupToolsTestDB creates an isolated sqlite DB and binds it to storage.DB.

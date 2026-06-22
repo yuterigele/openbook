@@ -32,17 +32,17 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/coze-dev/cozeloop-go"
 
-	adkstore "github.com/cloudwego/eino-examples/adk/common/store"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/api"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/chatmodel"
-	cronpkg "github.com/cloudwego/eino-examples/quickstart/chatwitheino/cron"
-	lockpkg "github.com/cloudwego/eino-examples/quickstart/chatwitheino/lock"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/mem"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/notify"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/server"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
+	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
+	"github.com/yuterigele/openbook/api"
+	"github.com/yuterigele/openbook/chatmodel"
+	cronpkg "github.com/yuterigele/openbook/cron"
+	lockpkg "github.com/yuterigele/openbook/lock"
+	"github.com/yuterigele/openbook/mem"
+	"github.com/yuterigele/openbook/msgops"
+	"github.com/yuterigele/openbook/notify"
+	"github.com/yuterigele/openbook/server"
+	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/wecom"
 )
 
 func main() {

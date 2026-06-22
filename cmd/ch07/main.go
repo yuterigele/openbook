@@ -40,12 +40,12 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/coze-dev/cozeloop-go"
 
-	adkstore "github.com/cloudwego/eino-examples/adk/common/store"
-	commontool "github.com/cloudwego/eino-examples/adk/common/tool"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/chatmodel"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/helpers"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/mem"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
+	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
+	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
+	"github.com/yuterigele/openbook/chatmodel"
+	"github.com/yuterigele/openbook/helpers"
+	"github.com/yuterigele/openbook/mem"
+	"github.com/yuterigele/openbook/msgops"
 )
 
 func main() {

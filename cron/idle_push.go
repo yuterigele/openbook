@@ -9,8 +9,8 @@ import (
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
+	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/wecom"
 )
 
 // IdleSlotPusher 空闲时段主动推送器（PRD §11.3 P2 旗舰版：理发师空闲时段主动推送）

@@ -28,7 +28,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
+	"github.com/yuterigele/openbook/msgops"
 )
 
 // SessionMeta provides summary info for the session list.

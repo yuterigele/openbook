@@ -49,15 +49,18 @@ type Shop struct {
 // ShopAdmin 商户后台账号（PRD §11.2 多店隔离）
 //   - 每个 Admin 绑定一个 Shop（FK），登录后只能看自己的店
 //   - 密码用 bcrypt 哈希存储
+//   - Role 决定权限矩阵（v4.7 RBAC）：owner 全权限，staff 业务权限
+//   - Status：active / disabled（v4.7）；disabled 账号登录会被拒
 type ShopAdmin struct {
-	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	ShopID       string    `gorm:"size:64;index;not null" json:"shop_id"`
-	Username     string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"size:128;not null" json:"-"`
-	Role         string    `gorm:"size:16;default:owner" json:"role"` // owner / staff
+	ID           uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ShopID       string     `gorm:"size:64;index;not null" json:"shop_id"`
+	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash string     `gorm:"size:128;not null" json:"-"`
+	Role         string     `gorm:"size:16;default:owner" json:"role"` // owner / staff
+	Status       string     `gorm:"size:16;default:active" json:"status"` // active / disabled（v4.7）
 	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // Barber 理发师（对应 PRD §11.4 Stylist）

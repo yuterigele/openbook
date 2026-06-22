@@ -27,7 +27,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
+	"github.com/yuterigele/openbook/msgops"
 )
 
 // PrintOptions controls how PrintAndCollect renders agent events.

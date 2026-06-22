@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // runCreate 跑一次 create_appointment 工具，shop_id 通过 ctx 注入

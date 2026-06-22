@@ -10,8 +10,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
+	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/wecom"
 )
 
 // Reminder 提醒发送器（注入企业微信客户端）

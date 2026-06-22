@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 func TestFriendlyError_NilInput(t *testing.T) {

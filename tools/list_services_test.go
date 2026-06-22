@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 func TestListServicesTool_InfoMentionsServices(t *testing.T) {

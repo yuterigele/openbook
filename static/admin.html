@@ -4,14 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>美发预约助手 · 商户后台</title>
+  <!-- Display font: Bricolage Grotesque（英 / 个性）+ 思源黑体（中 / 稳重）
+       国内用户: 走 fonts.font.im 镜像（Google Fonts 1:1 代理,API 完全兼容,字体重写到 gstatic.font.im）
+       镜像挂了兜底 loli.net；最后兜底系统字体。 -->
+  <link rel="preconnect" href="https://fonts.font.im" crossorigin />
+  <link rel="preconnect" href="https://fonts.gstatic.font.im" crossorigin />
+  <link href="https://fonts.font.im/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"
+        onerror="this.onerror=null;this.href='https://fonts.loli.net/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap';" />
   <style>
     /* ============================================================
-       Design tokens — warm salon palette
+       Design tokens — warm salon palette + v4.6 polish
        ============================================================ */
     :root {
       --canvas: #faf9f5;
+      --canvas-warm: #f5f1e8;
       --surface: #ffffff;
       --surface-2: #f5f3eb;
+      --surface-3: #ebe7d8;
       --line: #e8e6dc;
       --line-strong: #d4d0c0;
       --ink: #1c1917;
@@ -21,25 +30,33 @@
       --brand: #c26044;
       --brand-hover: #a8512f;
       --brand-soft: #faece2;
+      --brand-tint: #fef4ed;
       --olive: #788c5d;
+      --olive-soft: #eef0e4;
       --teal: #0f766e;
+      --teal-soft: #e0f2ef;
       --amber: #d97706;
+      --amber-soft: #fef3c7;
       --red: #dc2626;
+      --red-soft: #fee2e2;
       --rose: #f43f5e;
+      --rose-soft: #ffe4e6;
 
       --shadow-xs: 0 1px 2px rgba(28, 25, 23, 0.04);
       --shadow-sm: 0 2px 4px rgba(28, 25, 23, 0.04), 0 1px 2px rgba(28, 25, 23, 0.03);
       --shadow-md: 0 4px 12px rgba(28, 25, 23, 0.06), 0 2px 4px rgba(28, 25, 23, 0.04);
       --shadow-lg: 0 12px 32px rgba(28, 25, 23, 0.10), 0 4px 8px rgba(28, 25, 23, 0.04);
+      --shadow-xl: 0 24px 64px rgba(28, 25, 23, 0.14), 0 8px 16px rgba(28, 25, 23, 0.06);
 
       --radius-sm: 6px;
       --radius: 10px;
       --radius-lg: 16px;
       --radius-xl: 24px;
 
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      --font-sans: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "PingFang SC",
         "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
-      --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+      --font-display: "Bricolage Grotesque", "Noto Sans SC", -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, monospace;
     }
 
     * { box-sizing: border-box; }
@@ -52,11 +69,61 @@
       line-height: 1.55;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
+      position: relative;
+      min-height: 100vh;
     }
+    /* 全局暖色渐变背景 + 噪点纹理（v4.6 视觉升级） */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 20% 0%, rgba(194, 96, 68, 0.06), transparent 60%),
+        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(120, 140, 93, 0.05), transparent 50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.035;
+      pointer-events: none;
+      z-index: 0;
+      mix-blend-mode: multiply;
+    }
+    .app, .login-wrap, #loginView, #appView { position: relative; z-index: 1; }
     button { font-family: inherit; cursor: pointer; }
     input, select, textarea { font-family: inherit; }
     a { color: var(--brand); text-decoration: none; }
     a:hover { text-decoration: underline; }
+
+    /* 可访问性：键盘焦点环（v4.6） */
+    :focus-visible {
+      outline: 2px solid var(--brand);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .btn:focus-visible,
+    .icon-btn:focus-visible {
+      outline-offset: 3px;
+    }
+
+    /* Staggered 入场动画（v4.6） */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .stagger > * { animation: fadeUp 0.4s ease-out backwards; }
+    .stagger > *:nth-child(1) { animation-delay: 0.02s; }
+    .stagger > *:nth-child(2) { animation-delay: 0.06s; }
+    .stagger > *:nth-child(3) { animation-delay: 0.10s; }
+    .stagger > *:nth-child(4) { animation-delay: 0.14s; }
+    .stagger > *:nth-child(5) { animation-delay: 0.18s; }
+    .stagger > *:nth-child(6) { animation-delay: 0.22s; }
+    .stagger > *:nth-child(7) { animation-delay: 0.26s; }
+    .stagger > *:nth-child(8) { animation-delay: 0.30s; }
 
     /* ============================================================
        Utility classes
@@ -265,8 +332,22 @@
 
     .content { padding: 24px; flex: 1; }
     .view-head { margin-bottom: 20px; }
-    .view-head h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
-    .view-head p { margin: 4px 0 0; color: var(--ink-muted); font-size: 13px; }
+    .view-head h1 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--ink);
+    }
+    .view-head p { margin: 6px 0 0; color: var(--ink-muted); font-size: 13px; }
+    /* 让 hero 数字也用 display 字体，强化"实时"感 */
+    .kpi .value {
+      font-family: var(--font-display);
+      font-feature-settings: "tnum" 1;
+    }
+    .view-head .crumbs-inline { display: flex; align-items: center; gap: 6px; color: var(--ink-subtle); font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
 
     /* ============================================================
        KPI grid
@@ -499,6 +580,21 @@
       .nav-item .badge { display: none; }
       .sidebar-foot { display: none; }
       .content { padding: 16px; }
+      .view-head h1 { font-size: 18px; }
+      .kpi .value { font-size: 24px; }
+      .topbar { padding: 10px 16px; }
+      .crumbs { font-size: 12px; }
+      .live-pill { display: none !important; }
+    }
+    @media (max-width: 520px) {
+      .kpi-grid { grid-template-columns: 1fr 1fr; }
+      .kpi { padding: 14px; }
+      .kpi .value { font-size: 20px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .modal { max-width: 100vw; max-height: 100dvh; border-radius: 0; }
+      .modal.lg { max-width: 100vw; }
+      .table { font-size: 12px; }
+      .table thead th, .table tbody td { padding: 8px 10px; }
     }
 
     /* Scrollbar — make it warm */
@@ -514,6 +610,224 @@
     .text-subtle { color: var(--ink-subtle); }
     .text-mono { font-family: var(--font-mono); font-size: 12px; }
     .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; } .mt-4 { margin-top: 16px; }
+
+    /* ============================================================
+       v4.6 新增组件样式
+       ============================================================ */
+
+    /* Segmented control（时间窗口 / tab 切换） */
+    .seg {
+      display: inline-flex;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px;
+      gap: 2px;
+    }
+    .seg button {
+      border: 0;
+      background: transparent;
+      color: var(--ink-muted);
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .seg button:hover { color: var(--ink); }
+    .seg button.active {
+      background: var(--surface);
+      color: var(--brand);
+      box-shadow: var(--shadow-xs);
+      font-weight: 600;
+    }
+
+    /* Handoff card（v4.6 加「已处理」按钮 + 折叠 meta） */
+    .handoff-card {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 12px;
+      padding: 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      margin-bottom: 10px;
+      box-shadow: var(--shadow-xs);
+      transition: all .15s;
+    }
+    .handoff-card:hover { box-shadow: var(--shadow-sm); border-color: var(--line-strong); }
+    .handoff-card.resolved {
+      background: var(--olive-soft);
+      border-color: rgba(120, 140, 93, 0.3);
+      opacity: 0.78;
+    }
+    .handoff-card .reason { font-weight: 500; color: var(--ink); }
+    .handoff-card .meta { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+    .handoff-card .ts { font-size: 12px; color: var(--ink-muted); font-family: var(--font-mono); white-space: nowrap; }
+    .handoff-card .msg {
+      grid-column: 1 / -1;
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: var(--surface-2);
+      border-radius: var(--radius);
+      font-size: 13px;
+      color: var(--ink-2);
+      font-style: italic;
+    }
+    .handoff-card .actions {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      align-items: center;
+    }
+    .handoff-card .resolved-mark {
+      font-size: 12px;
+      color: var(--olive);
+      font-weight: 600;
+    }
+
+    /* Customer detail modal 内容 */
+    .cust-detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px 24px;
+      margin: 4px 0 16px;
+    }
+    .cust-detail-grid .k { color: var(--ink-muted); font-size: 12px; }
+    .cust-detail-grid .v { color: var(--ink); font-size: 13px; word-break: break-all; }
+    .cust-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin: 12px 0 16px;
+    }
+    .cust-stat {
+      background: var(--surface-2);
+      border-radius: var(--radius);
+      padding: 10px;
+      text-align: center;
+    }
+    .cust-stat .n {
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.1;
+    }
+    .cust-stat .l { font-size: 11px; color: var(--ink-muted); margin-top: 2px; }
+    .cust-stat.alert .n { color: var(--red); }
+    .cust-stat.warn .n { color: var(--amber); }
+    .cust-stat.good .n { color: var(--olive); }
+
+    .appt-mini {
+      display: grid;
+      grid-template-columns: 78px 80px 1fr 70px;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .appt-mini:last-child { border-bottom: 0; }
+    .appt-mini .when { font-family: var(--font-mono); font-size: 12px; }
+    .appt-mini .when .date { color: var(--ink); font-weight: 500; }
+    .appt-mini .when .time { color: var(--ink-muted); }
+    .appt-mini .barber { color: var(--ink-2); }
+    .appt-mini .service { color: var(--ink-muted); font-size: 12px; }
+
+    /* CSV upload area */
+    .upload-area {
+      border: 2px dashed var(--line-strong);
+      border-radius: var(--radius-lg);
+      padding: 32px 20px;
+      text-align: center;
+      background: var(--surface-2);
+      transition: all .15s;
+      cursor: pointer;
+    }
+    .upload-area:hover, .upload-area.dragover {
+      border-color: var(--brand);
+      background: var(--brand-tint);
+    }
+    .upload-area .hint { font-size: 12px; color: var(--ink-muted); margin-top: 8px; }
+    .upload-area .icon-big { color: var(--brand); }
+
+    .import-report {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      font-size: 13px;
+    }
+    .import-report.ok { background: var(--olive-soft); color: #3f5530; }
+    .import-report.partial { background: var(--amber-soft); color: #92590a; }
+    .import-report.fail { background: var(--red-soft); color: #b91c1c; }
+    .import-report ul { margin: 6px 0 0 18px; padding: 0; }
+
+    /* Chain Top 5 medal */
+    .top-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .top-row {
+      display: grid;
+      grid-template-columns: 32px 1fr 80px 60px;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      transition: background .12s;
+    }
+    .top-row:hover { background: var(--surface-2); }
+    .top-row .rank {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--ink-subtle);
+      text-align: center;
+    }
+    .top-row.gold .rank { color: #b58900; }
+    .top-row.silver .rank { color: #6b7280; }
+    .top-row.bronze .rank { color: #92400e; }
+    .top-row .name { font-weight: 500; }
+    .top-row .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+    .top-row .bar .fill { height: 100%; background: var(--brand); }
+    .top-row .num {
+      text-align: right;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    /* 链看板窗口徽章 */
+    .window-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 10px;
+      background: var(--brand-soft);
+      color: var(--brand);
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* 标签 chip 加强（v4.6 让 FREQUENT / NEW 也有颜色） */
+    .tag-frequent { background: var(--teal-soft); color: var(--teal); }
+    .tag-new { background: var(--brand-soft); color: var(--brand); }
+    .tag-vip { background: #fef3c7; color: #b58900; }
+    .tag-blacklist { background: var(--red-soft); color: var(--red); }
+
+    /* 链接样式（顾客行可点击） */
+    .clickable { cursor: pointer; transition: color .12s; }
+    .clickable:hover { color: var(--brand); text-decoration: underline; }
+
+    /* 让长内容容器带细滚动条 */
+    .scroll-y { overflow-y: auto; }
+    .max-h-400 { max-height: 400px; }
+    .max-h-300 { max-height: 300px; }
 
     /* ============================================================
        v4.4 新增：表单 / 标签 / handoff / service / plan pill
@@ -823,12 +1137,12 @@
         <div class="name" id="userName">—</div>
         <div class="role" id="userRole">—</div>
       </div>
-      <button class="icon-btn" title="修改密码" onclick="App.openModal('password')">
+      <button class="icon-btn" title="修改密码" aria-label="修改密码" onclick="App.openModal('password')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.13.32.21.66.21 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
       </button>
-      <button class="icon-btn" title="退出" onclick="App.logout()">
+      <button class="icon-btn" title="退出" aria-label="退出登录" onclick="App.logout()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
           <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
@@ -852,7 +1166,7 @@
         <span class="dot"></span>
         <span>看板 30s 自动刷新</span>
       </span>
-      <button class="btn btn-ghost btn-sm" onclick="App.refreshCurrent()">
+      <button class="btn btn-ghost btn-sm" onclick="App.refreshCurrent()" aria-label="刷新当前页">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -896,12 +1210,19 @@ const App = (() => {
     chainData: null,
     shop: null,           // v4.4 店铺信息
     handoffs: [],         // v4.4 转人工列表
+    handoffsResolved: {}, // v4.6 { [handoffID]: { resolved_at, resolved_by, note } }，按 handoff ID 缓存
+    showResolvedHandoffs: false, // v4.6 是否显示已处理的转人工
     customers: [],        // v4.4 顾客列表
+    customerDetail: null, // v4.6 当前查看的顾客详情
+    customerDetailLoading: false, // v4.6
     services: [],         // v4.4 服务目录
     subscription: [],     // v4.4 订阅历史
     weekly: null,         // v4.4 周报（单店）
     chainWeekly: null,    // v4.4 周报（跨店）
     alerts: null,         // v4.5 dashboard 告警（B3）
+
+    // Chain view 时间窗口（v4.6 PRD §11.10.8）
+    chainWindow: 'month', // today | week | month
 
     // Filters
     apptDate: todayStr(),
@@ -1041,7 +1362,7 @@ const App = (() => {
 
       ${renderAlertsBanner()}
 
-      <div class="kpi-grid">
+      <div class="kpi-grid stagger">
         ${kpiCard('今日预约', today.total || 0, 'info', `${today.upcoming || 0} 单将在 2 小时内到店`, 'appointments')}
         ${kpiCard('今日完成率', fmtPct(today.complete_rate || 0), 'success',
           `已完成 ${today.completed || 0} · 爽约 ${today.noshow || 0}`, 'appointments', { status: 'completed' })}
@@ -1361,6 +1682,7 @@ const App = (() => {
             <option value="appointment_cancelled">appointment_cancelled</option>
             <option value="appointment_completed">appointment_completed</option>
             <option value="handoff_to_human">handoff_to_human（待人工）</option>
+            <option value="handoff_resolved">handoff_resolved（已处理）</option>
             <option value="barber_leave_created">barber_leave_created</option>
             <option value="barber_leave_expired">barber_leave_expired</option>
           </select>
@@ -1404,21 +1726,73 @@ const App = (() => {
       <div class="card card-pad">${renderSkeleton(5)}</div>`;
     }
     const shops = c.shops || [];
+    const topShops = c.top_shops || [];
+    const funnel = c.event_funnel_chain || [];
+    const win = c.window || 'month';
+    const winLabel = ({ today: '今日', week: '本周', month: '本月' })[win] || '本月';
     return `
       <div class="view-head">
-        <h1>多店看板</h1>
-        <p>${c.window || 'month'} 窗口 · 跨店聚合</p>
+        <div class="row" style="margin-bottom: 4px;">
+          <h1>多店看板</h1>
+          <span class="window-pill">${esc(winLabel)}</span>
+        </div>
+        <p>跨店聚合 · ${shops.length} 家门店 · 数据每分钟刷新</p>
       </div>
-      <div class="kpi-grid">
-        ${kpiCard('门店总数', c.total_shops || 0, 'normal', `营业中 ${c.active_shops || 0}`)}
-        ${kpiCard('总预约', c.total_appointments || 0, 'info',
-          `完成 ${c.total_completed || 0} · 爽约 ${c.total_noshow || 0}`)}
-        ${kpiCard('平均爽约率', fmtPct(c.avg_no_show_rate || 0),
-          (c.avg_no_show_rate || 0) > 0.15 ? 'alert' : 'success', '所有门店加权')}
+
+      <div class="row" style="margin-bottom: 16px; gap: 12px;">
+        <div class="seg" role="tablist" aria-label="时间窗口">
+          <button data-win="today" class="${win === 'today' ? 'active' : ''}" onclick="App.switchChainWindow('today')">今日</button>
+          <button data-win="week"  class="${win === 'week'  ? 'active' : ''}" onclick="App.switchChainWindow('week')">本周</button>
+          <button data-win="month" class="${win === 'month' ? 'active' : ''}" onclick="App.switchChainWindow('month')">本月</button>
+        </div>
+        <span class="text-muted" style="font-size: 12px;">更新于 ${esc(new Date(c.generated_at || Date.now()).toLocaleString())}</span>
       </div>
+
+      <div class="kpi-grid stagger">
+        ${kpiCard('门店总数', c.total_shops || 0, 'normal', `跨店合计 ${winLabel}`)}
+        ${kpiCard('总预约', (c.chain_totals && c.chain_totals.total) || 0, 'info',
+          `完成 ${(c.chain_totals && c.chain_totals.completed) || 0} · 爽约 ${(c.chain_totals && c.chain_totals.noshow) || 0}`)}
+        ${(() => {
+          const nsr = (c.chain_totals && c.chain_totals.no_show_rate) || 0;
+          return kpiCard('加权爽约率', fmtPct(nsr), nsr > 0.15 ? 'alert' : 'success', '所有门店按预约量加权');
+        })()}
+        ${(() => {
+          const cpr = (c.chain_totals && c.chain_totals.complete_rate) || 0;
+          return kpiCard('加权完成率', fmtPct(cpr), 'success', '所有门店按预约量加权');
+        })()}
+      </div>
+
       <div class="section">
         <div class="card card-pad">
-          <div class="section-head"><h2>各店明细</h2></div>
+          <div class="section-head">
+            <h2>🏆 Top 5 忙店</h2>
+            <span class="sub">按预约量降序</span>
+          </div>
+          ${topShops.length === 0
+            ? renderEmpty('暂无忙店数据', '本窗口内至少需要一家店有预约', 'chart')
+            : '<div class="top-list">' + topShops.map((s, i) => {
+                const maxN = Math.max(...topShops.map(x => x.total || 0), 1);
+                const medalCls = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+                const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
+                return `<div class="top-row ${medalCls}">
+                  <div class="rank">${medal}</div>
+                  <div>
+                    <div class="name">${esc(s.shop_name || s.shop_id)}</div>
+                    <div class="bar"><div class="fill" style="width:${((s.total || 0) / maxN * 100).toFixed(1)}%;"></div></div>
+                  </div>
+                  <div class="text-muted text-mono" style="font-size:11px;">${esc(s.shop_id)}</div>
+                  <div class="num">${s.total || 0}</div>
+                </div>`;
+              }).join('') + '</div>'}
+        </div>
+      </div>
+
+      <div class="section" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>各店明细</h2>
+            <span class="sub">${shops.length} 家</span>
+          </div>
           ${shops.length === 0
             ? renderEmpty('暂无门店数据', null, 'building')
             : `<table class="table">
@@ -1435,26 +1809,52 @@ const App = (() => {
               `).join('')}</tbody>
             </table>`}
         </div>
+
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>跨店事件漏斗</h2>
+            <span class="sub">${winLabel} TOP ${funnel.length}</span>
+          </div>
+          ${funnel.length === 0
+            ? renderEmpty('本窗口暂无埋点', 'Agent 收到预约 / 续费 / 转人工时会写事件', 'activity')
+            : renderBarList(funnel.map(r => ({ name: r.event_type, count: r.count })))}
+        </div>
       </div>
     `;
   }
 
-  // ---------- Handoffs view (v4.4 PRD §9.2) ----------
+  // ---------- Handoffs view (v4.4 PRD §9.2 + v4.6 已处理) ----------
   function renderHandoffs() {
     const list = state.handoffs || [];
+    const showResolved = state.showResolvedHandoffs;
+    const pending = list.filter(h => !state.handoffsResolved[h.id]);
+    const resolved = list.filter(h => state.handoffsResolved[h.id]);
+    const display = showResolved ? list : pending;
+
     if (!list.length) {
       return `<div class="view-head">
-        <h1>转人工待处理</h1>
+        <h1>转人工</h1>
         <p>Agent 主动转给人工的请求，便于你直接跟进</p>
       </div>
       <div class="card card-pad">${renderEmpty('今天暂无转人工', '当 Agent 识别不了顾客意图或顾客明确要求时，会在这里留一条', 'inbox')}</div>`;
     }
+
     return `<div class="view-head">
-      <h1>转人工待处理</h1>
-      <p>共 ${list.length} 条，按时间倒序</p>
+      <h1>转人工</h1>
+      <p>共 ${list.length} 条 · 待处理 <strong style="color:var(--red);">${pending.length}</strong> · 已处理 ${resolved.length}</p>
     </div>
+
+    <div class="row" style="margin-bottom: 16px; gap: 12px;">
+      <div class="seg" role="tablist" aria-label="转人工筛选">
+        <button class="${!showResolved ? 'active' : ''}" onclick="App.toggleResolvedHandoffs(false)">待处理 (${pending.length})</button>
+        <button class="${showResolved ? 'active' : ''}" onclick="App.toggleResolvedHandoffs(true)">已处理 (${resolved.length})</button>
+      </div>
+    </div>
+
     <div class="handoff-list">
-      ${list.map(renderHandoffCard).join('')}
+      ${display.length === 0
+        ? '<div class="card card-pad">' + renderEmpty(showResolved ? '还没有已处理的转人工' : '所有转人工都已处理 ✓', '切换到「已处理」查看历史', 'inbox') + '</div>'
+        : display.map(renderHandoffCard).join('')}
     </div>`;
   }
 
@@ -1462,13 +1862,22 @@ const App = (() => {
     const ts = (h.created_at || '').slice(0, 19).replace('T', ' ');
     const name = h.customer_name ? h.customer_name : '匿名顾客';
     const reason = h.reason || '未填写原因';
-    return `<div class="handoff-card">
+    const resolved = state.handoffsResolved[h.id];
+    return `<div class="handoff-card ${resolved ? 'resolved' : ''}">
       <div>
         <div class="reason">${esc(name)} · ${esc(reason)}</div>
         <div class="meta">顾客 ID：<span class="text-mono">${esc(h.customer_id || '—')}</span></div>
       </div>
       <div class="ts">${esc(ts)}</div>
       ${h.last_user_message ? `<div class="msg">"${esc(h.last_user_message)}"</div>` : ''}
+      <div class="actions">
+        ${resolved
+          ? `<span class="resolved-mark">✓ 已处理 · ${esc((resolved.resolved_at || '').slice(0, 16).replace('T', ' '))} · 商户 #${esc(resolved.resolved_by || '?')}</span>
+             ${resolved.note ? `<span class="text-muted" style="font-size:12px;">"${esc(resolved.note)}"</span>` : ''}`
+          : `<button class="btn btn-sm btn-primary" onclick="App.resolveHandoff(${h.id})">${icon('check', 12)} 标为已处理</button>
+             <button class="btn btn-sm" onclick="App.openHandoffResolveModal(${h.id}, '${esc(h.customer_id || '').replace(/'/g, "\\'")}')">${icon('plus', 12)} 加备注处理</button>`
+        }
+      </div>
     </div>`;
   }
 
@@ -1524,10 +1933,10 @@ const App = (() => {
     const tags = (c.tags || '').split(',').map(s => s.trim()).filter(Boolean);
     const tagHtml = tags.length === 0
       ? '<span class="text-muted">—</span>'
-      : tags.map(t => `<span class="tag-chip tag-${esc(t.toLowerCase())} removable" onclick="App.removeCustTag('${esc(c.id)}','${esc(t)}')" title="点击移除">${esc(t)} <span class="x">×</span></span>`).join(' ');
+      : tags.map(t => `<span class="tag-chip tag-${esc(t.toLowerCase())} removable" onclick="event.stopPropagation();App.removeCustTag('${esc(c.id)}','${esc(t)}')" title="点击移除">${esc(t)} <span class="x">×</span></span>`).join(' ');
     const lastVisit = c.last_visit_at ? (c.last_visit_at || '').slice(0, 10) : '—';
-    return `<tr>
-      <td><strong>${esc(c.name || '匿名')}</strong></td>
+    return `<tr onclick="App.openCustomerDetail('${esc(c.id)}')" style="cursor:pointer;" title="点击查看详情">
+      <td><strong class="clickable">${esc(c.name || '匿名')} →</strong></td>
       <td class="text-mono">${esc(c.phone || '—')}</td>
       <td>${tagHtml}</td>
       <td class="num">${c.total_visits || 0}</td>
@@ -1535,7 +1944,7 @@ const App = (() => {
       <td class="num">${c.late_cancel_count || 0}</td>
       <td class="text-muted text-mono">${esc(lastVisit)}</td>
       <td class="num">
-        <button class="btn btn-sm" onclick="App.openCustTagModal('${esc(c.id)}','${esc(c.name || '')}')">+ 标签</button>
+        <button class="btn btn-sm" onclick="event.stopPropagation();App.openCustTagModal('${esc(c.id)}','${esc(c.name || '').replace(/'/g, "\\'")}')">+ 标签</button>
       </td>
     </tr>`;
   }
@@ -1546,9 +1955,15 @@ const App = (() => {
       <h1>服务目录</h1>
       <p>本店可提供的服务，Agent 用它回答"你们有哪些项目"。停用后历史预约不受影响</p>
     </div>
-    <div class="row" style="margin-bottom:14px;">
+    <div class="row" style="margin-bottom:14px; gap: 8px; flex-wrap: wrap;">
       <button class="btn btn-primary" onclick="App.openServiceModal()">
         ${icon('plus', 14)} 新增服务
+      </button>
+      <button class="btn" onclick="App.openServiceImportModal()">
+        ${icon('inbox', 14)} 批量导入
+      </button>
+      <button class="btn btn-ghost" onclick="App.downloadServiceTemplate()">
+        ${icon('calendar', 14)} 下载模板
       </button>
       <span class="spacer"></span>
       <label class="row" style="font-size:12px;color:var(--ink-muted);gap:6px;">
@@ -1874,6 +2289,9 @@ const App = (() => {
     else if (kind === 'service') body = serviceModal(data);
     else if (kind === 'renew') body = renewModal();
     else if (kind === 'shopEdit') body = shopEditModal();
+    else if (kind === 'customerDetail') body = customerDetailModal();
+    else if (kind === 'handoffResolve') body = handoffResolveModal(data);
+    else if (kind === 'serviceImport') body = serviceImportModal();
     else return;
     root.innerHTML = body;
     // wire submit buttons by id
@@ -1888,11 +2306,35 @@ const App = (() => {
       $('#svcName')?.focus();
     } else if (kind === 'shopEdit') {
       $('#shopName')?.focus();
+    } else if (kind === 'handoffResolve') {
+      $('#handoffResolveNote')?.focus();
+    } else if (kind === 'serviceImport') {
+      $('#svcImportFile')?.addEventListener('change', App.onServiceImportFile);
+    } else if (kind === 'confirm') {
+      // v4.6 修复:把 callback 绑在 .js-confirm-btn 上,保留 IIFE 闭包
+      const btn = root.querySelector('.js-confirm-btn');
+      if (btn && data && typeof data.onConfirm === 'function') {
+        btn.addEventListener('click', async () => {
+          const cb = data.onConfirm;
+          closeModal();
+          try { await cb(); } catch (_) { /* swallow; handler 已自己处理 */ }
+        });
+      }
     }
   }
   function closeModal() {
     state.modal = null;
+    state.customerDetail = null;
+    state.customerDetailLoading = false;
     $('#modalRoot').innerHTML = '';
+  }
+
+  // ESC 键关闭 modal（v4.6 可访问性）
+  function handleGlobalKeydown(e) {
+    if (e.key === 'Escape' && state.modal) {
+      // confirm modal 不让 ESC 关闭，避免误操作
+      if (state.modal.kind !== 'confirm') closeModal();
+    }
   }
 
   function newBarberModal() {
@@ -1996,6 +2438,10 @@ const App = (() => {
   }
 
   function confirmModal(data) {
+    // v4.6 修复:不能用 data.onConfirm.toString() 注入 onclick —— 那样会在全局作用域
+    // 执行,丢掉 IIFE 闭包,导致 showToast / refreshAll 等全部 undefined。
+    // 改为:把 callback 存在 state.modal.onConfirm,给确认按钮加 .js-confirm-btn 类,
+    // openModal 之后用 addEventListener 绑定（保留闭包）。
     return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
       <div class="modal" style="max-width:380px;">
         <div class="modal-head">
@@ -2006,7 +2452,7 @@ const App = (() => {
         </div>
         <div class="modal-foot">
           <button class="btn" onclick="App.closeModal()">取消</button>
-          <button class="btn ${data.danger ? 'btn-primary' : 'btn-primary'}" onclick="(${data.onConfirm.toString()})(); App.closeModal();">${esc(data.confirmText || '确定')}</button>
+          <button class="btn ${data.danger ? 'btn-primary' : 'btn-primary'} js-confirm-btn">${esc(data.confirmText || '确定')}</button>
         </div>
       </div>
     </div>`;
@@ -2177,6 +2623,175 @@ const App = (() => {
         <div class="modal-foot">
           <button class="btn" onclick="App.closeModal()">取消</button>
           <button class="btn btn-primary" onclick="App.submitShopEdit()">保存</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.6 顾客详情 modal
+  function customerDetailModal() {
+    const loading = state.customerDetailLoading;
+    if (loading || !state.customerDetail) {
+      return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+        <div class="modal lg">
+          <div class="modal-head">
+            <h2>顾客详情</h2>
+            <div class="spacer"></div>
+            <button class="icon-btn" aria-label="关闭" onclick="App.closeModal()">${icon('x', 16)}</button>
+          </div>
+          <div class="modal-body">${renderSkeleton(6)}</div>
+        </div>
+      </div>`;
+    }
+    const d = state.customerDetail;
+    const p = d.profile;
+    const sc = d.status_counts;
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h2>${esc(p.name || '匿名顾客')} 的详情</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" aria-label="关闭" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <!-- 基础信息 -->
+          <div class="cust-detail-grid">
+            <div class="k">顾客 ID</div><div class="v text-mono">${esc(p.id)}</div>
+            <div class="k">手机号</div><div class="v text-mono">${esc(p.phone || '—')}</div>
+            <div class="k">微信 openid</div><div class="v text-mono" style="font-size: 11px;">${esc(p.wechat_open_id || '—')}</div>
+            <div class="k">最近到店</div><div class="v text-mono">${esc(p.last_visit_at ? (p.last_visit_at || '').slice(0, 10) : '—')}</div>
+            <div class="k">标签</div><div class="v">${d.tags.length === 0
+              ? '<span class="text-muted">—</span>'
+              : d.tags.map(t => `<span class="tag-chip tag-${esc(t.toLowerCase())}" style="margin-right:4px;">${esc(t)}</span>`).join('')}</div>
+            <div class="k">创建于</div><div class="v text-mono">${esc((p.created_at || '').slice(0, 10))}</div>
+          </div>
+
+          <!-- 4 个核心指标 -->
+          <div class="cust-stats stagger">
+            <div class="cust-stat good">
+              <div class="n">${p.total_visits || 0}</div>
+              <div class="l">总到店</div>
+            </div>
+            <div class="cust-stat ${(p.no_show_count || 0) >= 2 ? 'alert' : 'good'}">
+              <div class="n">${p.no_show_count || 0}</div>
+              <div class="l">爽约</div>
+            </div>
+            <div class="cust-stat ${(p.late_cancel_count || 0) >= 3 ? 'alert' : 'good'}">
+              <div class="n">${p.late_cancel_count || 0}</div>
+              <div class="l">晚退订</div>
+            </div>
+            <div class="cust-stat warn">
+              <div class="n">${d.upcoming_count || 0}</div>
+              <div class="l">未来预约</div>
+            </div>
+          </div>
+
+          <!-- 已解决转人工数 -->
+          ${d.resolved_handoff_count > 0 ? `<div class="card-pad-sm" style="background: var(--olive-soft); border-radius: var(--radius); font-size: 12px; color: var(--olive); margin-bottom: 12px;">
+            ✓ 该顾客有 <strong>${d.resolved_handoff_count}</strong> 条转人工已被商户处理
+          </div>` : ''}
+
+          <!-- 最近 20 条预约 -->
+          <div class="section">
+            <div class="section-head">
+              <h2 style="font-size: 13px;">最近预约 (${d.recent.length})</h2>
+              <span class="text-muted" style="font-size: 11px;">${esc((d.generated_at || '').slice(0, 19).replace('T', ' '))} 拉取</span>
+            </div>
+            <div class="card" style="max-height: 320px; overflow-y: auto;">
+              ${d.recent.length === 0
+                ? '<div style="padding: 20px;">' + renderEmpty('该顾客还没有预约', null, 'calendar') + '</div>'
+                : d.recent.map(a => {
+                    const isFuture = a.date >= todayStr();
+                    return `<div class="appt-mini">
+                      <div class="when">
+                        <div class="date">${esc(a.date)}</div>
+                        <div class="time">${esc(a.time)}</div>
+                      </div>
+                      <div class="barber">${esc(a.barber_name || '—')}</div>
+                      <div>
+                        <div>${esc(a.service || '—')}</div>
+                        ${a.cancel_reason ? `<div class="text-muted" style="font-size:11px;">取消：${esc(a.cancel_reason)}</div>` : ''}
+                      </div>
+                      <div style="text-align: right;">
+                        <span class="badge badge-${esc(a.status)}">${statusLabel(a.status)}</span>
+                        ${isFuture && a.status === 'active' ? '<div class="text-muted" style="font-size:10px;margin-top:2px;">未来</div>' : ''}
+                      </div>
+                    </div>`;
+                  }).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">关闭</button>
+          <button class="btn btn-primary" onclick="App.closeModal();App.openCustTagModal('${esc(p.id)}', '${esc((p.name || '').replace(/'/g, "\\'"))}')">${icon('plus', 14)} 加标签</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.6 转人工「加备注处理」modal
+  function handoffResolveModal(data) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 460px;">
+        <div class="modal-head">
+          <h2>标记转人工为已处理</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" aria-label="关闭" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted" style="margin: 0 0 12px; font-size: 12px;">
+            处理后会在事件日志里留一条 "已处理" 埋点，便于后续审计。
+          </p>
+          <div class="field">
+            <label>备注 <span class="text-muted" style="font-weight: 400;">(可选, ≤ 256 字)</span></label>
+            <textarea class="textarea" id="handoffResolveNote" maxlength="256" placeholder="例如：已电话联系，顾客改约下周三 14:00"></textarea>
+          </div>
+          <div id="handoffResolveErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitHandoffResolve(${data.handoffID})">${icon('check', 14)} 确认已处理</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.6 服务批量导入 modal
+  function serviceImportModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h2>批量导入服务</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" aria-label="关闭" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted" style="margin: 0 0 12px; font-size: 12px;">
+            支持 CSV 格式：<span class="text-mono">name,estimated_min,price_range</span>（price_range 可选）。
+            单次最多 100 条；同店同名会自动跳过。
+          </p>
+          <label class="upload-area" id="svcImportDropzone" for="svcImportFile">
+            <div class="icon-big">${icon('inbox', 32)}</div>
+            <div style="margin-top: 8px; font-weight: 500;">点击选择 CSV 文件，或拖拽到此处</div>
+            <div class="hint">支持 .csv 编码 UTF-8 · 第一行为表头</div>
+            <input type="file" id="svcImportFile" accept=".csv,text/csv" style="display:none;" />
+          </label>
+
+          <div class="field" style="margin-top: 14px;">
+            <label class="row" style="gap: 6px; font-weight: 400; font-size: 12px; color: var(--ink-muted);">
+              <input type="checkbox" id="svcImportReplace" />
+              <span>替换模式：先软下架现有所有 active 服务，再导入</span>
+            </label>
+          </div>
+
+          <div id="svcImportPreview" style="margin-top: 14px;"></div>
+          <div id="svcImportReport"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="App.downloadServiceTemplate()">${icon('calendar', 14)} 下载 CSV 模板</button>
+          <span class="spacer"></span>
+          <button class="btn" onclick="App.closeModal()">关闭</button>
+          <button class="btn btn-primary" id="svcImportSubmit" disabled onclick="App.submitServiceImport()">${icon('check', 14)} 确认导入</button>
         </div>
       </div>
     </div>`;
@@ -2384,7 +2999,7 @@ const App = (() => {
     state.chainData = null;
     if (state.view === 'chain') render();
     try {
-      const data = await api('/api/admin/chain/dashboard?window=month');
+      const data = await api('/api/admin/chain/dashboard?window=' + encodeURIComponent(state.chainWindow || 'month'));
       state.chainData = data;
       if (state.view === 'chain') render();
     } catch (e) {
@@ -2394,12 +3009,27 @@ const App = (() => {
     }
   }
 
+  // v4.6 切换多店看板时间窗口
+  async function switchChainWindow(w) {
+    if (w === state.chainWindow) return;
+    state.chainWindow = w;
+    await loadChain();
+  }
+
+  // v4.6 切换转人工"已处理"显示
+  function toggleResolvedHandoffs(show) {
+    state.showResolvedHandoffs = show;
+    if (state.view === 'handoffs') render();
+  }
+
   // v4.4 新增 loader
   async function loadHandoffs() {
     if (state.view === 'handoffs') render();
     try {
       const data = await api('/api/admin/handoffs?limit=100');
       state.handoffs = Array.isArray(data) ? data : [];
+      // 拉 resolved 列表
+      await loadHandoffsResolved();
       if (state.view === 'handoffs') render();
     } catch (e) {
       if (state.view === 'handoffs') showToast('加载转人工失败：' + e.message, 'error');
@@ -2409,12 +3039,52 @@ const App = (() => {
   async function loadHandoffsBadge() {
     try {
       const data = await api('/api/admin/handoffs?limit=200');
+      // 减掉已处理
       const n = Array.isArray(data) ? data.length : 0;
       const b = $('#handoffsBadge');
-      if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+      // 用真正的"待处理"数：减去已 resolve 的
+      let pending = n;
+      try {
+        await loadHandoffsResolved();
+        pending = state.handoffs.filter(h => !state.handoffsResolved[h.id]).length;
+      } catch (_) {}
+      if (b) { b.textContent = pending; b.style.display = pending > 0 ? '' : 'none'; }
     } catch (_) { /* silent */ }
   }
 
+  // v4.6 拉转人工的 resolved 事件（按 handoff event id 索引）
+  async function loadHandoffsResolved() {
+    try {
+      // 拉最近 200 条 handoff_resolved 事件，解析 meta.resolved_from
+      const data = await api('/api/admin/events?event_type=handoff_resolved&limit=200');
+      const arr = Array.isArray(data) ? data : [];
+      const map = {};
+      for (const ev of arr) {
+        let fromId = null;
+        let note = '';
+        try {
+          if (ev.meta) {
+            const m = JSON.parse(ev.meta);
+            if (m.resolved_from) fromId = m.resolved_from;
+            if (m.note) note = m.note;
+          }
+        } catch (_) { /* ignore */ }
+        if (fromId == null) continue;
+        // 只保留最新一条（按 created_at 倒序拉，已是最新在前）
+        if (!map[fromId]) {
+          map[fromId] = {
+            resolved_at: ev.created_at,
+            resolved_by: ev.ref_id || '',
+            note: note,
+          };
+        }
+      }
+      state.handoffsResolved = map;
+    } catch (_) {
+      // 静默失败：不影响主流程
+      state.handoffsResolved = state.handoffsResolved || {};
+    }
+  }
   async function loadCustomers() {
     const query = $('#custQuery')?.value.trim() || '';
     const tag = $('#custTag')?.value || '';
@@ -2633,6 +3303,64 @@ const App = (() => {
   function openCustTagModal(customerId, customerName) {
     openModal('custTag', { customerId, customerName });
   }
+
+  // v4.6 顾客详情
+  async function openCustomerDetail(customerId) {
+    state.customerDetailLoading = true;
+    state.customerDetail = null;
+    openModal('customerDetail');
+    try {
+      const data = await api('/api/admin/customers/' + encodeURIComponent(customerId));
+      state.customerDetail = data;
+      // 重新打开 modal 内容（保留 modal 显示）
+      if (state.modal && state.modal.kind === 'customerDetail') {
+        const root = $('#modalRoot');
+        root.innerHTML = customerDetailModal();
+      }
+    } catch (e) {
+      showToast('加载顾客详情失败：' + e.message, 'error');
+      closeModal();
+    } finally {
+      state.customerDetailLoading = false;
+    }
+  }
+
+  // v4.6 转人工已处理
+  async function resolveHandoff(handoffID, note) {
+    try {
+      const body = {};
+      if (note) body.note = note;
+      const r = await api(`/api/admin/handoffs/${handoffID}/resolve`, { method: 'POST', body });
+      // 更新本地缓存
+      state.handoffsResolved[handoffID] = {
+        resolved_at: r.resolved_at,
+        resolved_by: r.resolved_by,
+        note: note || '',
+      };
+      if (state.view === 'handoffs') render();
+      // 刷新 badge
+      loadHandoffsBadge();
+      showToast('已标记为处理 ✓', 'success');
+    } catch (e) {
+      showToast('操作失败：' + e.message, 'error');
+    }
+  }
+
+  function openHandoffResolveModal(handoffID, customerID) {
+    openModal('handoffResolve', { handoffID, customerID });
+  }
+
+  async function submitHandoffResolve(handoffID) {
+    const note = $('#handoffResolveNote')?.value.trim() || '';
+    const errEl = $('#handoffResolveErr');
+    if (errEl) errEl.classList.add('hidden');
+    if (note.length > 256) {
+      if (errEl) { errEl.textContent = '备注长度上限 256 字'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    closeModal();
+    await resolveHandoff(handoffID, note);
+  }
   async function submitCustTag() {
     const m = state.modal.data;
     const tag = $('#custTagSelect')?.value;
@@ -2690,6 +3418,193 @@ const App = (() => {
       if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
     }
   }
+
+  // v4.6 服务批量导入
+  function openServiceImportModal() {
+    state._importPreview = null;
+    openModal('serviceImport');
+  }
+
+  function onServiceImportFile(ev) {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target.result;
+      const rows = parseServiceCSV(text);
+      state._importPreview = rows;
+      renderServiceImportPreview(rows);
+      const submitBtn = $('#svcImportSubmit');
+      if (submitBtn) submitBtn.disabled = !(rows && rows.valid.length > 0);
+    };
+    reader.onerror = () => showToast('读取文件失败：' + reader.error, 'error');
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  // 简单 CSV 解析：支持双引号转义、换行符、首行表头
+  function parseServiceCSV(text) {
+    const result = { valid: [], invalid: [], headers: [] };
+    if (!text) return result;
+    const lines = [];
+    let cur = '';
+    let inQuote = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === '"') {
+        if (inQuote && text[i + 1] === '"') { cur += '"'; i++; }
+        else inQuote = !inQuote;
+      } else if ((c === '\n' || c === '\r') && !inQuote) {
+        if (cur.length > 0 || lines.length === 0) lines.push(cur);
+        cur = '';
+        if (c === '\r' && text[i + 1] === '\n') i++;
+      } else {
+        cur += c;
+      }
+    }
+    if (cur.length > 0) lines.push(cur);
+
+    if (lines.length === 0) return result;
+    // 解析表头
+    const headerLine = lines.shift();
+    const headers = headerLine.split(',').map(s => s.trim().toLowerCase());
+    result.headers = headers;
+    const idxName = headers.findIndex(h => h === 'name' || h === '服务名' || h === '名称');
+    const idxMin = headers.findIndex(h => h === 'estimated_min' || h === 'estimated' || h === 'min' || h === '预估时长' || h === '时长');
+    const idxPrice = headers.findIndex(h => h === 'price_range' || h === 'price' || h === '价格');
+    if (idxName === -1) {
+      result.invalid.push({ line: 0, reason: '缺少 name / 服务名列', raw: headerLine });
+      return result;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      const parts = splitCsvLine(line);
+      const name = (parts[idxName] || '').trim();
+      const minStr = (parts[idxMin] || '').trim();
+      const price = (parts[idxPrice] || '').trim();
+      const min = parseInt(minStr, 10);
+      if (!name) {
+        result.invalid.push({ line: i + 2, reason: '服务名空', raw: line });
+        continue;
+      }
+      if (!min || min < 1 || min > 480) {
+        result.invalid.push({ line: i + 2, reason: '预估时长必须在 1-480', raw: line });
+        continue;
+      }
+      result.valid.push({ name, estimated_min: min, price_range: price });
+    }
+    return result;
+  }
+
+  function splitCsvLine(line) {
+    const out = [];
+    let cur = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuote = !inQuote;
+      } else if (c === ',' && !inQuote) {
+        out.push(cur);
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function renderServiceImportPreview(rows) {
+    const host = $('#svcImportPreview');
+    const reportHost = $('#svcImportReport');
+    if (!host) return;
+    if (!rows || (rows.valid.length === 0 && rows.invalid.length === 0)) {
+      host.innerHTML = '';
+      if (reportHost) reportHost.innerHTML = '';
+      return;
+    }
+    const total = rows.valid.length + rows.invalid.length;
+    const summaryCls = rows.invalid.length === 0 ? 'ok' : (rows.valid.length === 0 ? 'fail' : 'partial');
+    const summaryText = `共 ${total} 行 · 有效 ${rows.valid.length} · 无效 ${rows.invalid.length}`;
+
+    let html = `<div class="import-report ${summaryCls}">${summaryText}</div>`;
+    if (rows.invalid.length > 0) {
+      html += '<ul style="font-size: 12px; color: var(--ink-muted); margin: 8px 0 0 18px;">';
+      for (const inv of rows.invalid.slice(0, 5)) {
+        html += `<li>第 ${inv.line} 行：${esc(inv.reason)} <span class="text-mono">${esc(inv.raw.slice(0, 50))}</span></li>`;
+      }
+      if (rows.invalid.length > 5) {
+        html += `<li>…还有 ${rows.invalid.length - 5} 行无效</li>`;
+      }
+      html += '</ul>';
+    }
+    if (rows.valid.length > 0) {
+      html += `<div style="margin-top: 12px; max-height: 200px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px;">`;
+      html += '<table class="table" style="margin: 0;"><thead><tr><th>服务名</th><th>预估时长</th><th>价格区间</th></tr></thead><tbody>';
+      for (const v of rows.valid.slice(0, 20)) {
+        html += `<tr><td>${esc(v.name)}</td><td class="num">${v.estimated_min} 分钟</td><td>${esc(v.price_range || '—')}</td></tr>`;
+      }
+      if (rows.valid.length > 20) {
+        html += `<tr><td colspan="3" class="text-muted" style="text-align: center;">…还有 ${rows.valid.length - 20} 条</td></tr>`;
+      }
+      html += '</tbody></table></div>';
+    }
+    host.innerHTML = html;
+  }
+
+  async function submitServiceImport() {
+    const rows = state._importPreview;
+    if (!rows || rows.valid.length === 0) {
+      showToast('没有可导入的有效行', 'error');
+      return;
+    }
+    const replace = $('#svcImportReplace')?.checked || false;
+    const submitBtn = $('#svcImportSubmit');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '导入中…'; }
+    try {
+      const r = await api('/api/admin/services/import', {
+        method: 'POST',
+        body: {
+          services: rows.valid,
+          replace: replace,
+        },
+      });
+      const cls = r.failed_count === 0 ? 'ok' : (r.success_count === 0 ? 'fail' : 'partial');
+      let msg = `<strong>${r.success_count}</strong> 条导入成功`;
+      if (r.skipped_count > 0) msg += ` · <strong>${r.skipped_count}</strong> 条同名跳过`;
+      if (r.failed_count > 0) msg += ` · <strong>${r.failed_count}</strong> 条失败`;
+      if (r.replaced_count > 0) msg += ` · 已软下架 <strong>${r.replaced_count}</strong> 条旧服务`;
+      const reportHost = $('#svcImportReport');
+      if (reportHost) {
+        reportHost.innerHTML = `<div class="import-report ${cls}" style="margin-top:12px;">${msg}</div>`;
+      }
+      showToast(`导入完成：${r.success_count} 成功 / ${r.failed_count} 失败`, r.failed_count === 0 ? 'success' : 'info');
+      // 刷新服务列表
+      await loadServices();
+      // 禁用提交按钮（已导入）
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '已导入 ✓'; }
+    } catch (e) {
+      showToast('导入失败：' + e.message, 'error');
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '确认导入'; }
+    }
+  }
+
+  function downloadServiceTemplate() {
+    const csv = 'name,estimated_min,price_range\n剪发,30,30-50\n烫发,90,180-380\n染发,90,180-480\n洗吹,30,20-40\n护理,60,80-150\n造型,45,60-120\n美甲,60,80-150\n';
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '服务目录模板.csv';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    showToast('已下载模板', 'success');
+  }
+
   function deactivateService(id, name) {
     openModal('confirm', {
       title: '下架服务？',
@@ -2903,6 +3818,10 @@ const App = (() => {
           loadCustomers();
         }
       }
+      // v4.6 ESC 关闭 modal
+      if (e.key === 'Escape' && state.modal) {
+        if (state.modal.kind !== 'confirm') closeModal();
+      }
     });
     // initial load
     bootstrap();
@@ -2914,10 +3833,13 @@ const App = (() => {
     openModal, closeModal,
     openLeaveModal,
     openCustTagModal, openServiceModal, openRenewModal, openShopEditModal,
+    openCustomerDetail, openHandoffResolveModal, openServiceImportModal,
     submitNewBarber, submitLeave, submitChangePassword,
     submitCustTag, removeCustTag,
     submitService, deactivateService, activateService,
     submitRenew, submitShopEdit,
+    submitHandoffResolve, submitServiceImport, onServiceImportFile, downloadServiceTemplate,
+    resolveHandoff, switchChainWindow, toggleResolvedHandoffs,
     deleteBarber, activateBarber,
     markCompleted, markCancelled,
     loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain,

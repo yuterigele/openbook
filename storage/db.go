@@ -79,6 +79,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&ShopAdmin{},
 		&BarberLeave{}, // P4 理发师请假（2026-06-21）
 		&Service{},     // v4.4 服务目录（2026-06-22）
+		&RolePermission{}, // v4.7 RBAC：role → permission 映射表
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
@@ -104,6 +105,11 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 	// v4.4 服务目录默认种子：每个店没有 service 时建一组通用项
 	if err := seedDefaultServices(ctx, db); err != nil {
 		log.Printf("[storage] seedDefaultServices 警告: %v", err)
+	}
+
+	// v4.7 RBAC 默认 role → permission 映射（只在表空时跑，不覆盖运营在线调整）
+	if err := SeedDefaultRolePermissions(ctx); err != nil {
+		log.Printf("[storage] SeedDefaultRolePermissions 警告: %v", err)
 	}
 
 	DB = db

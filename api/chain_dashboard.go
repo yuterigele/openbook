@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/auth"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/auth"
+	"github.com/yuterigele/openbook/storage"
 	"github.com/cloudwego/hertz/pkg/app"
 )
 

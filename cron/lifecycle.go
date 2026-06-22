@@ -22,9 +22,9 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/notify"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
+	"github.com/yuterigele/openbook/notify"
+	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/wecom"
 )
 
 // LifecycleTrigger 续费漏斗节点触发器

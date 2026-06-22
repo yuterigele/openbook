@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 func TestBarberLeave_InfoMentionsReason(t *testing.T) {

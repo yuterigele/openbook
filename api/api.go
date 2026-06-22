@@ -17,8 +17,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	hserver "github.com/cloudwego/hertz/pkg/app/server"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/auth"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/auth"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // AdminConfig 配置
@@ -43,6 +43,11 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	// 注入 handler 共享依赖
 	notifSender = cfg.NotifSender
 
+	// v4.7 RBAC：把 storage.AdminHasPermission 注入 auth 包（auth 不直接依赖 storage）
+	auth.SetHasPermissionFunc(func(ctx context.Context, adminID uint64, perm string) (bool, error) {
+		return storage.AdminHasPermission(ctx, adminID, perm)
+	})
+
 	// 公开：登录
 	h.POST("/api/auth/login", loginHandler)
 
@@ -54,58 +59,76 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 
 	// 需要鉴权：商户后台
 	protected := h.Group("/api/admin", authChain(cfg.LegacyToken))
-	protected.POST("/appointment/complete", completeAppointmentHandler)
-	protected.POST("/appointment/cancel", adminCancelHandler)
-	protected.POST("/subscription/renew", renewSubscriptionHandler)
-	protected.GET("/events", listEventsHandler)
-	protected.GET("/me", meHandler)
-	protected.POST("/change-password", changePasswordHandler)
-	protected.POST("/logout", logoutHandler)
-	// P4 理发师请假（RESTful 路径：/barber/:id/leave*）
-	protected.POST("/barber/:id/leave", createBarberLeaveHandler)
-	protected.DELETE("/barber/:id/leave/:leaveID", cancelBarberLeaveHandler)
-	protected.GET("/barber/:id/leaves", listBarberLeavesHandler)
-	// P5 理发师管理（CRUD）
-	//   - /barbers          GET  列表（含 inactive）
-	//   - /barbers          POST 创建
-	//   - /barbers/:id      DELETE 软删除（有未来预约时拒绝）
-	//   - /barbers/:id/activate POST 重新激活
-	protected.GET("/barbers", listBarbersHandler)
-	protected.POST("/barbers", createBarberHandler)
-	protected.DELETE("/barbers/:id", softDeleteBarberHandler)
-	protected.POST("/barbers/:id/activate", activateBarberHandler)
-	// P4 备用接口（barber_id / leave_id 在 body，便于跨理发师聚合查询 + 后台管理）
-	protected.POST("/leave/create", createLeaveHandler)
-	protected.POST("/leave/cancel", cancelLeaveHandler)
-	protected.GET("/leave/list", listLeavesHandler)
-	// v4.0 P2 跨店看板（连锁品牌 owner 用）
-	//   - 任何已登录 admin 都能访问（role != ""），不限制到 platform_admin
-	//   - 原因：当前 ShopAdmin 只有 owner/staff 两种，没有 platform_admin 概念；
-	//     真实场景中连锁 owner 通常也是某家店 owner，所以默认放行
-	//   - 后续要做细粒度控制：role="platform_admin" 限定（待产品定义）
-	protected.GET("/chain/dashboard", chainDashboardHandler)
 
-	// v4.4 补全：5 个新模块（PRD §5 §9.2 + 服务目录管理）
-	//   - 店铺设置   /shop        GET/PUT
-	//   - 转人工列表 /handoffs    GET
-	//   - 顾客管理   /customers   GET + /customers/tag POST/DELETE
-	//   - 续费管理   /subscription GET
-	//   - 服务目录   /services    GET/POST/PUT/DELETE/activate
-	protected.GET("/shop", getShopHandler)
-	protected.PUT("/shop", updateShopHandler)
-	protected.GET("/handoffs", listHandoffsHandler)
-	protected.GET("/customers", listCustomersHandler)
-	protected.POST("/customers/tag", addCustomerTagHandler)
-	protected.DELETE("/customers/tag", removeCustomerTagHandler)
-	protected.GET("/subscription", listSubscriptionsHandler)
-	protected.GET("/services", listServicesHandler)
-	protected.POST("/services", createServiceHandler)
-	protected.PUT("/services/:id", updateServiceHandler)
-	protected.DELETE("/services/:id", deactivateServiceHandler)
-	protected.POST("/services/:id/activate", activateServiceHandler)
-	// v4.3 周报预览（数据已在 storage，UI 一直缺；现在补 2 个端点）
-	protected.GET("/weekly-report", getWeeklyReportHandler)
-	protected.GET("/weekly-report/chain", getChainWeeklyReportHandler)
+	// v4.7 RBAC：所有 endpoint 都用 auth.RequirePerm(perm) 包一层
+	//
+	// 权限矩阵（详见 storage/permissions.go）：
+	//   - owner：全 15 个权限
+	//   - staff：view:* + 业务操作（不可改店铺/服务/订阅/成员）
+	//
+	// 注释里加 [perm] 标注，方便以后 grep 找。
+
+	// ===== 自身 / 全员可用 =====
+	protected.GET("/me", meHandler) // 任何登录 admin 都能看自己
+	protected.POST("/change-password", auth.RequirePerm(storage.PermChangeOwnPassword), changePasswordHandler)
+	protected.POST("/logout", logoutHandler)
+
+	// ===== 看板 / 预约 / 顾客 / 转人工 / 师傅 / 事件 =====
+	// （staff 可用）
+	protected.GET("/alerts", auth.RequirePerm(storage.PermViewDashboard), getAlertsHandler) // 看板用
+	protected.POST("/appointment/complete", auth.RequirePerm(storage.PermEditAppointments), completeAppointmentHandler)
+	protected.POST("/appointment/cancel", auth.RequirePerm(storage.PermEditAppointments), adminCancelHandler)
+	protected.GET("/customers", auth.RequirePerm(storage.PermViewCustomers), listCustomersHandler)
+	protected.GET("/customers/:id", auth.RequirePerm(storage.PermViewCustomers), getCustomerDetailHandler)
+	protected.POST("/customers/tag", auth.RequirePerm(storage.PermEditCustomers), addCustomerTagHandler)
+	protected.DELETE("/customers/tag", auth.RequirePerm(storage.PermEditCustomers), removeCustomerTagHandler)
+	protected.GET("/handoffs", auth.RequirePerm(storage.PermViewHandoffs), listHandoffsHandler)
+	protected.POST("/handoffs/:id/resolve", auth.RequirePerm(storage.PermResolveHandoff), resolveHandoffHandler)
+	protected.GET("/barber/:id/leaves", auth.RequirePerm(storage.PermViewBarbers), listBarberLeavesHandler)
+	protected.POST("/barber/:id/leave", auth.RequirePerm(storage.PermCreateBarberLeave), createBarberLeaveHandler)
+	protected.DELETE("/barber/:id/leave/:leaveID", auth.RequirePerm(storage.PermCreateBarberLeave), cancelBarberLeaveHandler)
+	protected.GET("/barbers", auth.RequirePerm(storage.PermViewBarbers), listBarbersHandler)
+	protected.GET("/events", auth.RequirePerm(storage.PermViewEvents), listEventsHandler)
+
+	// ===== owner-only =====
+	// 师傅管理：staff 只看不能改（避免误删活师傅）
+	protected.POST("/barbers", auth.RequirePerm(storage.PermEditBarbers), createBarberHandler)
+	protected.DELETE("/barbers/:id", auth.RequirePerm(storage.PermEditBarbers), softDeleteBarberHandler)
+	protected.POST("/barbers/:id/activate", auth.RequirePerm(storage.PermEditBarbers), activateBarberHandler)
+	protected.POST("/leave/create", auth.RequirePerm(storage.PermCreateBarberLeave), createLeaveHandler)
+	protected.POST("/leave/cancel", auth.RequirePerm(storage.PermCreateBarberLeave), cancelLeaveHandler)
+	protected.GET("/leave/list", auth.RequirePerm(storage.PermViewBarbers), listLeavesHandler)
+
+	// 店铺设置
+	protected.GET("/shop", auth.RequirePerm(storage.PermEditShop), getShopHandler) // 设为 owner-only 防止 staff 误读敏感字段
+	protected.PUT("/shop", auth.RequirePerm(storage.PermEditShop), updateShopHandler)
+
+	// 跨店看板（连锁）
+	protected.GET("/chain/dashboard", auth.RequirePerm(storage.PermViewChainDashboard), chainDashboardHandler)
+
+	// 周报
+	protected.GET("/weekly-report", auth.RequirePerm(storage.PermViewWeeklyReport), getWeeklyReportHandler)
+	protected.GET("/weekly-report/chain", auth.RequirePerm(storage.PermViewChainDashboard), getChainWeeklyReportHandler)
+
+	// 订阅
+	protected.GET("/subscription", auth.RequirePerm(storage.PermViewSubscription), listSubscriptionsHandler)
+	protected.POST("/subscription/renew", auth.RequirePerm(storage.PermManageSubscription), renewSubscriptionHandler)
+
+	// 服务目录
+	protected.GET("/services", auth.RequirePerm(storage.PermViewServices), listServicesHandler)
+	protected.POST("/services", auth.RequirePerm(storage.PermEditServices), createServiceHandler)
+	protected.PUT("/services/:id", auth.RequirePerm(storage.PermEditServices), updateServiceHandler)
+	protected.DELETE("/services/:id", auth.RequirePerm(storage.PermEditServices), deactivateServiceHandler)
+	protected.POST("/services/:id/activate", auth.RequirePerm(storage.PermEditServices), activateServiceHandler)
+	protected.POST("/services/import", auth.RequirePerm(storage.PermEditServices), importServicesHandler)
+
+	// 成员管理（v4.7 RBAC 新增）
+	protected.GET("/members", auth.RequirePerm(storage.PermManageMembers), listMembersHandler)
+	protected.POST("/members", auth.RequirePerm(storage.PermManageMembers), createMemberHandler)
+	protected.PUT("/members/:id/role", auth.RequirePerm(storage.PermManageMembers), changeMemberRoleHandler)
+	protected.POST("/members/:id/reset-password", auth.RequirePerm(storage.PermManageMembers), resetMemberPasswordHandler)
+	protected.DELETE("/members/:id", auth.RequirePerm(storage.PermManageMembers), disableMemberHandler)
+	protected.GET("/roles", auth.RequirePerm(storage.PermManageMembers), listRolesHandler)
 
 	// 静态：商户后台页面
 	h.GET("/admin", func(ctx context.Context, c *app.RequestContext) {
@@ -197,6 +220,11 @@ func loginHandler(ctx context.Context, c *app.RequestContext) {
 	admin, err := storage.FindAdminByUsername(ctx, req.Username)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, map[string]string{"error": "用户名或密码错误"})
+		return
+	}
+	// v4.7 RBAC:已停用账号禁止登录
+	if admin.Status == "disabled" {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "账号已停用，请联系店主"})
 		return
 	}
 	if !storage.VerifyAdminPassword(admin, req.Password) {

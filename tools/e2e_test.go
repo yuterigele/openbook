@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // ===================== 场景 S1：首次预约 =====================

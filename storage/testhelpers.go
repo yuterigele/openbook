@@ -18,6 +18,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -58,11 +59,18 @@ func SetupTestDB(t *testing.T) {
 		&EventLog{},
 		&BarberLeave{},
 		&Service{}, // v4.4 服务目录
+		&RolePermission{}, // v4.7 RBAC 权限表
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
 
 	DB = db
+	// v4.7 RBAC: 测试 DB 也需要 seed 默认 role-permission 映射
+	// （生产 InitDB 会跑，测试 SetupTestDB 也要跑）
+	if err := SeedDefaultRolePermissions(context.Background()); err != nil {
+		t.Fatalf("SeedDefaultRolePermissions: %v", err)
+	}
+
 	t.Cleanup(func() {
 		if DB != nil {
 			if sqlDB, err := DB.DB(); err == nil && sqlDB != nil {
@@ -178,4 +186,30 @@ func MakeBarberLeave(t *testing.T, shopID, barberID string, startAt, endAt time.
 		t.Fatalf("create barber leave: %v", err)
 	}
 	return l
+}
+
+// MakeAdminWithRole creates a ShopAdmin with bcrypt password "testpass"（v4.7 RBAC 测试用）
+//
+//   - 默认 status=active
+//   - 不会跟 MakeShop 的固定 ID 撞（ID 用 t.Name() 区分）
+//   - PasswordHash 是真实 bcrypt hash，能用 VerifyAdminPassword 校验
+func MakeAdminWithRole(t *testing.T, shopID, username, role string) *ShopAdmin {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("testpass"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	a := &ShopAdmin{
+		ShopID:       shopID,
+		Username:     username,
+		PasswordHash: string(hash),
+		Role:         role,
+		Status:       "active",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := DB.Create(a).Error; err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	return a
 }

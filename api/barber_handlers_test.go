@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 // barber_handlers_test.go
 //
@@ -26,7 +26,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // =====================================================================

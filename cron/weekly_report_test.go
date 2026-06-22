@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/notify"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/notify"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // ---- Setter / 默认值 ----

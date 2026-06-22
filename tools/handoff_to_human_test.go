@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // handoffEventRows 读出指定 shop 的所有 handoff 事件行

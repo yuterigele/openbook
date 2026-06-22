@@ -11,8 +11,8 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/lock"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/lock"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // ctxKeyShopID 注入 ctx 的 shop_id key

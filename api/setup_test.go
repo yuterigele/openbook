@@ -27,8 +27,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol"
 	"github.com/cloudwego/hertz/pkg/route/param"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/auth"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/auth"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // setupAPITestDB wires storage.DB to a fresh in-memory sqlite.
@@ -47,6 +47,18 @@ func adminClaims(shopID string) *auth.Claims {
 		ShopID:  shopID,
 		Role:    "owner",
 	}
+}
+
+// setClaimsForAdmin 直接给 ctx 装任意 admin 的 claims（v4.7 RBAC 测试用）
+//
+//   - 跟 withClaims(adminClaims(shop)) 区别：后者固定 AdminID=1/Role=owner
+//   - 这个能指定任意 AdminID/Role，便于测 staff 路径
+func setClaimsForAdmin(c *app.RequestContext, adminID uint64, shopID, role string) {
+	c.Set("auth_claims", &auth.Claims{
+		AdminID: adminID,
+		ShopID:  shopID,
+		Role:    role,
+	})
 }
 
 // ctxOption is a functional option for newAPIContext.
@@ -155,9 +167,33 @@ func newAPIContext(t *testing.T, method, path string, body []byte, opts ...ctxOp
 
 // runHandler invokes handler(ctx, c) with a fresh background context and returns
 // (status, body) so tests can assert. Body comes from c.Response.Body().
+// init v4.7 RBAC: 测试里也要把 storage.AdminHasPermission 注入到 auth 包
+// （生产环境由 api.RegisterRoutes 完成；测试不走 RegisterRoutes）
+func init() {
+	auth.SetHasPermissionFunc(func(ctx context.Context, adminID uint64, perm string) (bool, error) {
+		return storage.AdminHasPermission(ctx, adminID, perm)
+	})
+}
+
 func runHandler(t *testing.T, handler func(ctx context.Context, c *app.RequestContext), ctx *app.RequestContext) (int, string) {
 	t.Helper()
 	handler(context.Background(), ctx)
+	return ctx.Response.StatusCode(), string(ctx.Response.Body())
+}
+
+// runWithPerm 模拟 Hertz 中间件链：先跑 RequirePerm(perm)，放行则跑业务 handler
+//
+// 真实 router 自动串起中间件；测试里手动模拟：
+//   - middleware 调 c.Abort() → response 已被写 → 直接返回
+//   - middleware 不 abort → 我们手动调 handler
+//
+// 用途：测试 v4.7 RBAC 中间件对 endpoint 的拦截行为
+func runWithPerm(t *testing.T, perm string, handler func(ctx context.Context, c *app.RequestContext), ctx *app.RequestContext) (int, string) {
+	t.Helper()
+	auth.RequirePerm(perm)(context.Background(), ctx)
+	if !ctx.IsAborted() {
+		handler(context.Background(), ctx)
+	}
 	return ctx.Response.StatusCode(), string(ctx.Response.Body())
 }
 

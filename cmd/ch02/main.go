@@ -27,9 +27,9 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/chatmodel"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/helpers"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
+	"github.com/yuterigele/openbook/chatmodel"
+	"github.com/yuterigele/openbook/helpers"
+	"github.com/yuterigele/openbook/msgops"
 )
 
 func main() {

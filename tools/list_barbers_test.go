@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // runListBarbers 跑一次 list_barbers 工具，shop_id 通过 ctx 注入

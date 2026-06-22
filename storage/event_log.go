@@ -41,6 +41,14 @@ const (
 	//   - meta.reason = Agent 给出的转人工原因（"无法识别意图" / "顾客明确要求" / "业务超出 Agent 能力"）
 	//   - meta.last_user_message = 顾客最后一条原文（让商户知道转接上下文）
 	EventHandoffToHuman = "handoff_to_human"
+	// EventHandoffResolved 商户在后台把转人工标为已处理（v4.6 增量）
+	//   - ref_id = 商户后台用户名（或 admin id）
+	//   - meta.resolved_from = 关联的 handoff_to_human event_log.id
+	//   - meta.customer_id = 顾客标识（便于反查）
+	//   - meta.note = 可选备注（商户留的一句话说明）
+	//   - 配套 handoff_to_human: 一个 handoff 可以被"已处理"多次（不强制 1:1），
+	//     前端 UI 把 resolved event 关联回原 handoff，按"已解决"过滤。
+	EventHandoffResolved = "handoff_resolved"
 )
 
 // TrackEvent 写入一条埋点（no-op 当 DB 未初始化）

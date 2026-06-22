@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // ShopCrypto per-shop 加解密实例（每个店铺 CorpID 独立 Token/AESKey）

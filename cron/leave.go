@@ -25,7 +25,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // LeaveExpirer 理发师请假过期扫描器

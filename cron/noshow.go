@@ -15,8 +15,8 @@ import (
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/wecom"
+	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/wecom"
 )
 
 // NoShowScanner 爽约扫描器

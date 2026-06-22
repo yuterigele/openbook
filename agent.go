@@ -26,10 +26,10 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/chatmodel"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/helpers"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/rag"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/tools"
+	"github.com/yuterigele/openbook/chatmodel"
+	"github.com/yuterigele/openbook/helpers"
+	"github.com/yuterigele/openbook/rag"
+	"github.com/yuterigele/openbook/tools"
 )
 
 // buildAgentTyped 构造美发预约助手 Agent

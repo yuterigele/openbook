@@ -54,9 +54,9 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/cloudwego/eino-examples/adk/common/tool/graphtool"
-	"github.com/cloudwego/eino-examples/compose/batch/batch"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/msgops"
+	"github.com/yuterigele/openbook/internal/einocommon/batch"
+	"github.com/yuterigele/openbook/internal/einocommon/graphtool"
+	"github.com/yuterigele/openbook/msgops"
 )
 
 // Input is the tool call argument struct. Its JSON tags are used by utils.InferTool

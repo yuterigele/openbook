@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/storage"
+	"github.com/yuterigele/openbook/storage"
 )
 
 // Sender 邮件发送接口（v4.2）

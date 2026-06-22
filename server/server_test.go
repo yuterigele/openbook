@@ -27,9 +27,9 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 
-	adkstore "github.com/cloudwego/eino-examples/adk/common/store"
-	commontool "github.com/cloudwego/eino-examples/adk/common/tool"
-	"github.com/cloudwego/eino-examples/quickstart/chatwitheino/mem"
+	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
+	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
+	"github.com/yuterigele/openbook/mem"
 )
 
 // ---------------------------------------------------------------------------
