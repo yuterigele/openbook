@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -90,21 +91,8 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 	}
 
 	// 种子数据：从 .env 构建默认店铺 + 默认 admin（多店场景下也可走这个种子）
-	if err := seedShopFromEnv(ctx, db); err != nil {
-		log.Printf("[storage] seedShopFromEnv 警告: %v", err)
-	}
-	if err := seedBarbers(ctx, db); err != nil {
-		log.Printf("[storage] seedBarbers 警告: %v", err)
-	}
-
-	// 老数据兜底：barber.shop_id 为空的，统一填到第一家店
-	if err := ensureBarberShopIDs(ctx); err != nil {
-		log.Printf("[storage] ensureBarberShopIDs 警告: %v", err)
-	}
-
-	// v4.4 服务目录默认种子：每个店没有 service 时建一组通用项
-	if err := seedDefaultServices(ctx, db); err != nil {
-		log.Printf("[storage] seedDefaultServices 警告: %v", err)
+	if err := SeedDefaultData(ctx); err != nil {
+		log.Printf("[storage] SeedDefaultData 警告: %v", err)
 	}
 
 	// v4.7 RBAC 老数据兜底：admin.role 为空/NULL 的统一填 owner
@@ -341,4 +329,36 @@ func seedDefaultServices(ctx context.Context, db *gorm.DB) error {
 // uuidNewString 包内统一的 ID 生成器（uuid v4）
 func uuidNewString() string {
 	return uuidGenerate()
+}
+
+// SeedDefaultData 导出 InitDB 内部的所有 seed 步骤（cmd/migrate 用）
+//
+// 用途：手动迁移脚本可以单独跑这些 seed，不依赖重启服务。
+// InitDB 启动时也会调（保持向后兼容）。
+//
+// 内容：
+//   - seedShopFromEnv（默认店铺 + 默认 admin + 默认 platform_admin，v4.9 增量）
+//   - seedBarbers（默认理发师）
+//   - ensureBarberShopIDs（老 barber 数据兜底）
+//   - seedDefaultServices（每个店没有 service 时建一组通用项）
+//
+// 幂等：每个 seed 内部都按"已存在则跳过"实现，重复调用 0 副作用。
+func SeedDefaultData(ctx context.Context) error {
+	db := DB
+	if db == nil {
+		return errors.New("DB 未初始化；请先调 InitDB")
+	}
+	if err := seedShopFromEnv(ctx, db); err != nil {
+		log.Printf("[storage] seedShopFromEnv 警告: %v", err)
+	}
+	if err := seedBarbers(ctx, db); err != nil {
+		log.Printf("[storage] seedBarbers 警告: %v", err)
+	}
+	if err := ensureBarberShopIDs(ctx); err != nil {
+		log.Printf("[storage] ensureBarberShopIDs 警告: %v", err)
+	}
+	if err := seedDefaultServices(ctx, db); err != nil {
+		log.Printf("[storage] seedDefaultServices 警告: %v", err)
+	}
+	return nil
 }
