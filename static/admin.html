@@ -3312,6 +3312,7 @@ const App = (() => {
     try {
       const data = await api('/api/admin/customers/' + encodeURIComponent(customerId));
       state.customerDetail = data;
+      state.customerDetailLoading = false; // ⚠️ 必须在重渲染前设 false，否则 customerDetailModal() 看到 loading=true 还是返回骨架屏
       // 重新打开 modal 内容（保留 modal 显示）
       if (state.modal && state.modal.kind === 'customerDetail') {
         const root = $('#modalRoot');
@@ -3320,7 +3321,6 @@ const App = (() => {
     } catch (e) {
       showToast('加载顾客详情失败：' + e.message, 'error');
       closeModal();
-    } finally {
       state.customerDetailLoading = false;
     }
   }
