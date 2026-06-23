@@ -111,10 +111,29 @@ func IsPlatformAdmin(role string) bool {
 //
 // 调整这里就等于调整系统默认权限。运营也可通过 /api/admin/roles/:role/permissions 在线改
 // 持久化到 DB（重 InitDB 不会被覆盖——seed 仅在表为空时跑一次）
+//
+// 三个 role 的设计哲学：
+//   - owner         ：店主，看本店所有数据 + 可改店铺/服务/订阅/成员
+//   - staff         ：店员，看 + 业务操作（不能改店铺/服务/订阅/成员，避免误删）
+//   - platform_admin：跨店超管，全平台所有数据（v4.9 新增，多店连锁场景）
+//
+// staff 故意禁掉的 7 个权限（理由）：
+//   - view:weekly_report / view:chain_dashboard → 经营数据敏感，不给店员
+//   - edit:shop                               → 改营业时间/午休，误操作影响大
+//   - edit:services                           → 改服务目录/价格，敏感
+//   - view:subscription / manage:subscription → 订阅信息敏感
+//   - manage:members                          → 成员管理（建/改 role/重置密码）必须有 owner 权限
+//
+// 加新权限的步骤：
+//  1. 在 storage/permissions.go 加 PermXxx 常量 + AllPermissions 追加
+//  2. 这里给 owner / staff 显式列（owner 默认 AllPermissions 可不写）
+//  3. platform_admin 不需要列（默认全权限）
+//  4. 重启服务，让 seed 写 DB
+//  5. 写单测覆盖 owner/staff 边界
 var defaultRolePermissions = map[string][]string{
 	RoleOwner: AllPermissions, // owner 全权限
 	RoleStaff: {
-		// 看 + 业务操作
+		// 看 + 业务操作（不允许 manage:* / edit:shop / edit:services）
 		PermViewDashboard,
 		PermViewAppointments, PermEditAppointments,
 		PermViewCustomers, PermEditCustomers,
@@ -123,8 +142,6 @@ var defaultRolePermissions = map[string][]string{
 		PermViewEvents,
 		PermViewServices,
 		PermChangeOwnPassword,
-		// 不含：view:weekly_report / view:chain_dashboard / edit:shop / edit:services
-		//       / view:subscription / manage:subscription / manage:members
 	},
 	RolePlatformAdmin: AllPermissions, // 超管全权限（v4.9 新增）
 }

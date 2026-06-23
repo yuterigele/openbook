@@ -213,17 +213,30 @@ func CreateAppointmentWithShop(shopID, barberName, customer, date, timeStr, serv
 	return CreateAppointmentFull(shopID, barberName, customer, "", "", "", date, timeStr, service)
 }
 
-// CreateAppointmentFull 完整版：带 wecom openID/externalUserID，事务里 FindOrCreateCustomer
+// CreateAppointmentFull 完整版：带 wecom openID/externalUserID + phone，事务里 upsert 顾客档案
 //
-// 行为：
-//   - openID 和 externalUserID 都为空 → 按 customer 名字查找/创建（兜底）
-//   - 至少有 openID 或 externalUserID → 优先用这俩匹配已有顾客，匹配不到再新建
-//   - 顾客档案一定会在 appointment 创建前/后落到 customers 表
-//   - appointment.customer_id 会被填上，方便 listCustomersHandler / getCustomerDetailHandler 查到
+// 调用链路（v4.8 / v4.9.3 关键链路）：
 //
-// 修 v4.8 顾客档案缺失 bug：之前 CreateAppointmentWithShop 不建顾客档案，
-// 导致 admin 顾客列表空、详情 404。
-// v4.9.3: 加 phone 入参；新建/复用顾客时把 phone 写进 customers.phone
+//	企业微信回调 (server.go:handleWeComMessageWithOpenKfID)
+//	   ↓ 注入 ctx：WithShopID + WithOpenID + WithExternalUserID
+//	tools/create_appointment.go:CreateAppointmentTool.InvokableRun
+//	   ↓ ValidatePhone（11 位、1 开头） + 调 storage.CreateAppointmentFull
+//	CreateAppointmentFull（事务）
+//	   ↓ upsertCustomerInTx（按 phone → openID → external_user_id → name 顺序查重）
+//	   ↓ tx.Create(&Appointment{CustomerID: cust.ID, ...})
+//
+// 关键设计点：
+//   - 顾客档案必须在事务里查到/建好，appointment.customer_id 必须填上
+//   - 否则 admin 顾客列表空、详情 404、reminder cron 找不到人
+//   - phone 是 v4.9.3 必填项（工具层 ValidatePhone 校验），是查重最稳的键
+//
+// 历史 bug（修过的）：
+//   - v4.8: CreateAppointmentWithShop 不建顾客档案，admin 顾客列表空
+//     → 修法：拆出 CreateAppointmentFull，事务里 upsert 顾客
+//   - v4.9.3: openID/externalUserID 漏透传，reminder cron 找不到人
+//     → 修法：tools 加 WithOpenID / WithExternalUserID ctx 透传，server.go 注入
+//   - v4.9.3: phone 没收集，老顾客档案无法补全
+//     → 修法：工具必填 phone + ValidatePhone 严格校验
 func CreateAppointmentFull(shopID, barberName, customer, phone, openID, externalUserID, date, timeStr, service string) (*Appointment, error) {
 	if service == "" {
 		service = "剪发"
@@ -293,16 +306,35 @@ func CreateAppointmentFull(shopID, barberName, customer, phone, openID, external
 
 // upsertCustomerInTx 在事务里查找/创建顾客档案
 //
+// 业务背景：
+//   - 顾客档案是预约链路的核心，所有 cron（reminder / leave notify）都靠 customers 表反查 wecom ID
+//   - 一个顾客可能有多个标识：手机号、微信 openID、企业微信 external_user_id、姓名
+//   - 不同顾客可能重名；同一人可能换设备（openID 变）；同一人可能加多个微信
+//   - 所以查重要按"最稳的标识"优先
+//
 // 查找顺序（命中即返回，不再继续）：
-//  1. phone == phone（v4.9.3 优先：手机号是最稳的查重键）
+//  1. phone == phone（v4.9.3 最优先）
+//     - 手机号最稳：换微信号/换姓名都不会影响
+//     - 11 位数字、1 开头已在 tools.ValidatePhone 校验过
+//     - 只要匹配 → 命中 → 自动回填缺的 openID / external_user_id
 //  2. wechat_open_id == openID（且非空）
+//     - 兜底：老顾客 backfill 时没 phone，但有 openID
+//     - 命中后顺手回填 phone（新预约传进来的）
 //  3. external_user_id == externalUserID（且非空）
+//     - 企业微信外部联系人场景，比 openID 更稳（客服消息走的 external_user_id）
 //  4. name == customer（兜底，匹配同名老顾客）
+//     - 最后兜底：保证"老顾客没 openID 也没 phone 但预约过"也能命中
+//     - 命中后把所有缺的字段都补上
 //
 // 全部 miss → 用 phone/openID/externalUserID/name 新建一条
 //
-// 顺带：命中第 1/2/3 条但 phone / wechat_open_id / external_user_id 是空时，
-// 会回填缺失字段（让后续匹配更准）。
+// 顺带：命中任一分支但 phone / wechat_open_id / external_user_id 是空时，
+// 会回填缺失字段（让后续匹配更准，避免重复建档案）。
+//
+// 重要：所有 SQL 在事务里（tx），并发安全。
+// 重要：phone 没在事务里做 unique 检查，靠 MySQL index 兜底；并发极端情况下
+//        可能出现两个顾客同 phone 的瞬间，第二个 INSERT 会失败（unique key 冲突），
+//        由 caller 决定是否重试。
 func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string) (*Customer, error) {
 	if name == "" {
 		return nil, errors.New("顾客姓名不能为空")

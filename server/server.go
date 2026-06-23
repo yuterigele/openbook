@@ -1282,10 +1282,27 @@ const defaultAgentHistoryMaxChars = 12000
 
 // trimHistory 按"条数上限 + 字符预算"双约束截断历史，从最新往旧取
 //
+// 历史背景：
+//   - 老版本（v4.9.2 之前）：硬编码 `if len > 10 { start = len-10 }`，只按条数砍
+//   - 问题 1：单条 message 长（工具返回大量数据）也会爆 token，条数限制防不住
+//   - 问题 2：不可配置，全平台统一 10 条，不同模型/不同场景可能不够灵活
+//
 // 行为：
-//   - 先按 maxMessages 砍（取最后 N 条）
-//   - 再按 maxChars 砍（从最新往旧累加，超出预算就停）
-//   - 保证 assistant 完整：永远从 user/assistant 配对边界切，不会切到半条
+//   - 先按 maxMessages 砍（取最后 N 条，默认 6）→ 控制平均 token
+//   - 再按 maxChars 砍（从最新往旧累加，超出预算就停）→ 兜底防爆 token
+//   - 严格"超出就砍"：第 i 条加上后超 maxChars → 砍掉 [0, i]（保留 i+1 起）
+//
+// env 配置：
+//   - AGENT_HISTORY_LIMIT     条数上限（默认 6）
+//   - AGENT_HISTORY_MAX_CHARS 字符预算（默认 12000 ≈ 3-6k token）
+//
+// 字符预算为啥用"字符"而非"token"？
+//   - 不引入 tokenizer 依赖，零额外成本
+//   - 粗粒度足够：中文 1 字符 ≈ 1 token，英文 4 字符 ≈ 1 token
+//   - 偏差 30% 也比"没限制爆掉"好
+//
+// 测试覆盖：TestTrimHistory_LimitByMessageCount / TestTrimHistory_LimitByCharBudget /
+//            TestTrimHistory_BothLimitsApply / TestTrimHistory_Empty / msgLen 单测
 func trimHistory[M adk.MessageType](history []M, maxMessages, maxChars int) []M {
 	if len(history) == 0 {
 		return history

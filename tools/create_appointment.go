@@ -21,7 +21,13 @@ type ctxKeyShopID struct{}
 // ctxKeyOpenID 注入 ctx 的微信 openID（v4.8 给 CreateAppointmentFull 透传顾客档案用）
 type ctxKeyOpenID struct{}
 
-// ctxKeyExternalUserID 注入 ctx 的 external_user_id（v4.9.3 给 cron reminder 用）
+// ctxKeyExternalUserID 注入 ctx 的 external_user_id
+//
+// v4.9.3 加这个 key 的原因：
+//   - reminder / leave notify cron 都靠 customers.external_user_id 反查 wecom ID 发送消息
+//   - 之前只透传 openID，external_user_id 字段永远是空 → cron 全失败
+//   - 加这个 key 后，server.go 在处理 wecom 消息时同时注入 openID + externalUserID
+//   - 工具调 storage.CreateAppointmentFull 时透传，顾客档案完整
 type ctxKeyExternalUserID struct{}
 
 // WithShopID 把 shop_id 放进 ctx（Agent 工具从 ctx 拿）
@@ -59,12 +65,22 @@ func ExternalUserIDFromCtx(ctx context.Context) string {
 
 // ValidatePhone 严格校验中国大陆手机号（v4.9.3）
 //
+// 业务背景：手机号是顾客档案最稳的查重键
+//   - 微信 openID 会随换设备/重装 app 变 → 不稳
+//   - external_user_id 主要用于客服消息 → 不通用
+//   - 姓名可能重 → 不可靠
+//   - 手机号：11 位数字，1 开头，几乎终身不变 → 唯一稳的标识
+//   - 所以预约链路必填手机号，写进 customers.phone，后续所有 cron（reminder /
+//     leave notify / 营销推送）都靠 phone 反查 wecom ID
+//
 // 规则：11 位数字、1 开头
 //   - 不接国际号码（+86 前缀）：工具不支持境外顾客，简化
 //   - 不接座机 / 400 / 800：业务场景全是个人手机
 //   - 拒绝空字符串：必填项，没收到让 LLM 回去问顾客
 //
 // 返回的 error 是 friendly 话术，LLM 看到后会直接转给顾客。
+//
+// 复用：cmd/fix-customers 也 import 这个函数，保证手动补 phone 和工具流程校验规则一致。
 func ValidatePhone(phone string) error {
 	if phone == "" {
 		return fmt.Errorf("手机号必填，请顾客提供 11 位手机号（如 13812345678）")

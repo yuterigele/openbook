@@ -28,16 +28,33 @@ import (
 
 // RequirePerm 鉴权中间件：要求当前 admin 拥有指定 permission
 //
-// 失败：
-//   - 无 claims → 401 unauthorized
-//   - admin 已被停用 → 403 forbidden
-//   - role 缺该 perm → 403 forbidden
+// 失败响应：
+//   - 无 claims / 未登录        → 401 unauthorized
+//   - admin 已被停用             → 403 forbidden
+//   - role 缺该 perm             → 403 forbidden（返回 permission 字段方便前端定位）
+//   - 权限检查 DB 出错           → 500 internal error
 //
 // 成功：c.Next(ctx) 继续
 //
-// 特殊：platform_admin 角色 → 直接放行（v4.9 跨店超管）。
-// 这是设计选择：超管的权限矩阵虽然默认是 AllPermissions，但某些跨店接口可能仍需要绕过
-// perm 检查直接查询全平台数据；统一在中间件层短路，比每个 handler 自己写判断更安全。
+// ────────────────────────────────────────────────────────────────────────
+// 特殊：platform_admin 角色 → 直接放行（不论接口要求什么 perm）
+// ────────────────────────────────────────────────────────────────────────
+//
+// 设计原因（v4.9 新增）：
+//   - platform_admin 是"跨店超管"，看全平台所有数据
+//   - 权限矩阵虽然默认是 AllPermissions，但跨店接口的设计常常需要绕过 perm 检查
+//     直接查询全平台数据（例：listServicesHandler 根据 role 走不同 SQL）
+//   - 如果不在中间件层短路，每个跨店 handler 都要写一遍 `if IsPlatformAdmin(c)`
+//     既冗余又容易漏（新加 handler 忘了判 → 超管被自己权限挡）
+//
+// 实现位置选择：
+//   - 这里（中间件层）而非 handler 层：避免漏写
+//   - 用 role 字符串硬比对而非查权限矩阵：避免每次进 DB 查（超管操作频次低，但 DB 调用）
+//
+// 注意：
+//   - 超管仍走 authChain 校验登录态（未登录 → 401），不会绕过登录
+//   - 超管绕过的是"具体 perm 检查"，不是"鉴权"本身
+//   - 后续要新加 role（比如 'data_analyst'）也走这里加判断
 func RequirePerm(perm string) app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		cl := GetClaims(c)
