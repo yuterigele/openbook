@@ -210,7 +210,7 @@ func CreateAppointment(barberName, customer, date, timeStr, service string) (*Ap
 //   - shopID 为空时使用 barber 默认所属店铺
 //   - shopID 与 barber.ShopID 不一致时拒绝（防跨店预约错误）
 func CreateAppointmentWithShop(shopID, barberName, customer, date, timeStr, service string) (*Appointment, error) {
-	return CreateAppointmentFull(shopID, barberName, customer, "", "", date, timeStr, service)
+	return CreateAppointmentFull(shopID, barberName, customer, "", "", "", date, timeStr, service)
 }
 
 // CreateAppointmentFull 完整版：带 wecom openID/externalUserID，事务里 FindOrCreateCustomer
@@ -223,7 +223,8 @@ func CreateAppointmentWithShop(shopID, barberName, customer, date, timeStr, serv
 //
 // 修 v4.8 顾客档案缺失 bug：之前 CreateAppointmentWithShop 不建顾客档案，
 // 导致 admin 顾客列表空、详情 404。
-func CreateAppointmentFull(shopID, barberName, customer, openID, externalUserID, date, timeStr, service string) (*Appointment, error) {
+// v4.9.3: 加 phone 入参；新建/复用顾客时把 phone 写进 customers.phone
+func CreateAppointmentFull(shopID, barberName, customer, phone, openID, externalUserID, date, timeStr, service string) (*Appointment, error) {
 	if service == "" {
 		service = "剪发"
 	}
@@ -260,8 +261,9 @@ func CreateAppointmentFull(shopID, barberName, customer, openID, externalUserID,
 			return err
 		}
 
-		// 顾客档案：优先按 openID / externalUserID 查，没有再按名字查，最后再新建
-		cust, custErr := upsertCustomerInTx(tx, openID, externalUserID, customer)
+		// 顾客档案：优先按 phone / openID / externalUserID 查，没有再按名字查，最后再新建
+		// v4.9.3: phone 排第一——最稳的查重键（wechat ID 可能换设备，名字可能重）
+		cust, custErr := upsertCustomerInTx(tx, phone, openID, externalUserID, customer)
 		if custErr != nil {
 			return custErr
 		}
@@ -292,46 +294,90 @@ func CreateAppointmentFull(shopID, barberName, customer, openID, externalUserID,
 // upsertCustomerInTx 在事务里查找/创建顾客档案
 //
 // 查找顺序（命中即返回，不再继续）：
-//  1. wechat_open_id == openID（且非空）
-//  2. external_user_id == externalUserID（且非空）
-//  3. name == customer（兜底，匹配同名老顾客）
+//  1. phone == phone（v4.9.3 优先：手机号是最稳的查重键）
+//  2. wechat_open_id == openID（且非空）
+//  3. external_user_id == externalUserID（且非空）
+//  4. name == customer（兜底，匹配同名老顾客）
 //
-// 全部 miss → 用 openID/externalUserID/name 新建一条
+// 全部 miss → 用 phone/openID/externalUserID/name 新建一条
 //
-// 顺带：命中第 1/2 条但 wechat_open_id / external_user_id 是空时，
+// 顺带：命中第 1/2/3 条但 phone / wechat_open_id / external_user_id 是空时，
 // 会回填缺失字段（让后续匹配更准）。
-func upsertCustomerInTx(tx *gorm.DB, openID, externalUserID, name string) (*Customer, error) {
+func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string) (*Customer, error) {
 	if name == "" {
 		return nil, errors.New("顾客姓名不能为空")
 	}
 	var c Customer
 
-	// 1) 按 openID 查
-	if openID != "" {
-		if err := tx.Where("wechat_open_id = ?", openID).First(&c).Error; err == nil {
-			if c.ExternalUserID == "" && externalUserID != "" {
-				tx.Model(&c).Update("external_user_id", externalUserID)
-				c.ExternalUserID = externalUserID
-			}
-			return &c, nil
-		}
-	}
-
-	// 2) 按 externalUserID 查
-	if externalUserID != "" {
-		if err := tx.Where("external_user_id = ?", externalUserID).First(&c).Error; err == nil {
+	// 1) 按 phone 查（v4.9.3：手机号是最稳的查重键，优先级最高）
+	//   - phone 唯一索引已经在 db.go AutoMigrate 加了（customers.phone index）
+	//   - 用手机号匹配保证"同一人不同微信号/不同名"也能合并到一条档案
+	if phone != "" {
+		if err := tx.Where("phone = ?", phone).First(&c).Error; err == nil {
+			// 命中 → 把缺的字段补上（让后续匹配更准）
+			updates := map[string]string{}
 			if c.WechatOpenID == "" && openID != "" {
-				tx.Model(&c).Update("wechat_open_id", openID)
+				updates["wechat_open_id"] = openID
 				c.WechatOpenID = openID
 			}
+			if c.ExternalUserID == "" && externalUserID != "" {
+				updates["external_user_id"] = externalUserID
+				c.ExternalUserID = externalUserID
+			}
+			if len(updates) > 0 {
+				tx.Model(&c).Updates(updates)
+			}
 			return &c, nil
 		}
 	}
 
-	// 3) 按 name 兜底（同名老顾客复用档案，不重复建）
+	// 2) 按 openID 查
+	if openID != "" {
+		if err := tx.Where("wechat_open_id = ?", openID).First(&c).Error; err == nil {
+			// 顺便回填 phone / external_user_id
+			updates := map[string]string{}
+			if c.Phone == "" && phone != "" {
+				updates["phone"] = phone
+				c.Phone = phone
+			}
+			if c.ExternalUserID == "" && externalUserID != "" {
+				updates["external_user_id"] = externalUserID
+				c.ExternalUserID = externalUserID
+			}
+			if len(updates) > 0 {
+				tx.Model(&c).Updates(updates)
+			}
+			return &c, nil
+		}
+	}
+
+	// 3) 按 externalUserID 查
+	if externalUserID != "" {
+		if err := tx.Where("external_user_id = ?", externalUserID).First(&c).Error; err == nil {
+			updates := map[string]string{}
+			if c.Phone == "" && phone != "" {
+				updates["phone"] = phone
+				c.Phone = phone
+			}
+			if c.WechatOpenID == "" && openID != "" {
+				updates["wechat_open_id"] = openID
+				c.WechatOpenID = openID
+			}
+			if len(updates) > 0 {
+				tx.Model(&c).Updates(updates)
+			}
+			return &c, nil
+		}
+	}
+
+	// 4) 按 name 兜底（同名老顾客复用档案，不重复建）
 	if err := tx.Where("name = ?", name).First(&c).Error; err == nil {
-		// 顺便把缺的 openID / externalUserID 补上
+		// 顺便把缺的字段都补上
 		updates := map[string]string{}
+		if c.Phone == "" && phone != "" {
+			updates["phone"] = phone
+			c.Phone = phone
+		}
 		if c.WechatOpenID == "" && openID != "" {
 			updates["wechat_open_id"] = openID
 			c.WechatOpenID = openID
@@ -346,9 +392,10 @@ func upsertCustomerInTx(tx *gorm.DB, openID, externalUserID, name string) (*Cust
 		return &c, nil
 	}
 
-	// 4) 全 miss，新建
+	// 5) 全 miss，新建
 	c = Customer{
 		ID:             uuid.NewString(),
+		Phone:          phone,
 		WechatOpenID:   openID,
 		ExternalUserID: externalUserID,
 		Name:           name,

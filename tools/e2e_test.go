@@ -56,7 +56,7 @@ func TestE2E_S1_FirstAppointment(t *testing.T) {
 	// 3) 顾客说"帮我约 14:00" → 调 create_appointment
 	apptOut, err := (&CreateAppointmentTool{}).InvokableRun(
 		WithShopID(context.Background(), shop.ID),
-		`{"barber_name":"Tony","customer":"Alice","date":"`+date+`","time":"14:00","service":"剪发"}`)
+		`{"barber_name":"Tony","customer":"Alice","phone":"13800000001","date":"`+date+`","time":"14:00","service":"剪发"}`)
 	if err != nil || !strings.Contains(apptOut, "成功") {
 		t.Fatalf("create_appointment 失败: %v / %s", err, apptOut)
 	}
@@ -89,7 +89,7 @@ func TestE2E_S2_CancelAppointment(t *testing.T) {
 	date := time.Now().In(shanghaiLoc()).AddDate(0, 0, 1).Format("2006-01-02")
 	_, err := (&CreateAppointmentTool{}).InvokableRun(
 		WithShopID(context.Background(), shop.ID),
-		`{"barber_name":"Tony","customer":"Bob","date":"`+date+`","time":"14:00","service":"剪发"}`)
+		`{"barber_name":"Tony","customer":"Bob","phone":"13800000002","date":"`+date+`","time":"14:00","service":"剪发"}`)
 	if err != nil {
 		t.Fatalf("创建失败: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestE2E_S3_LeaveBlocksAppointment(t *testing.T) {
 	// 4) 顾客坚持约 14:00 → 应被拒（场景化话术）
 	_, err = (&CreateAppointmentTool{}).InvokableRun(
 		WithShopID(context.Background(), shop.ID),
-		`{"barber_name":"Tony","customer":"Carol","date":"`+date+`","time":"14:00","service":"剪发"}`)
+		`{"barber_name":"Tony","customer":"Carol","phone":"13800000003","date":"`+date+`","time":"14:00","service":"剪发"}`)
 	if err == nil {
 		t.Fatal("请假时段应被拒")
 	}
@@ -252,7 +252,7 @@ func TestE2E_S6_HolidayBlocksAppointment(t *testing.T) {
 	// create_appointment 也应被拒
 	_, err = (&CreateAppointmentTool{}).InvokableRun(
 		WithShopID(context.Background(), shop.ID),
-		`{"barber_name":"Tony","customer":"Eve","date":"`+date+`","time":"14:00","service":"剪发"}`)
+		`{"barber_name":"Tony","customer":"Eve","phone":"13800000004","date":"`+date+`","time":"14:00","service":"剪发"}`)
 	if err == nil {
 		t.Fatal("节假日应拒绝预约")
 	}
@@ -282,7 +282,7 @@ func TestE2E_S7_DBUnavailable_GracefulDegradation(t *testing.T) {
 	// 2) create_appointment
 	_, err = (&CreateAppointmentTool{}).InvokableRun(
 		context.Background(),
-		`{"barber_name":"Tony","customer":"X","date":"2026-07-01","time":"14:00","service":"剪发"}`)
+		`{"barber_name":"Tony","customer":"X","phone":"13800000005","date":"2026-07-01","time":"14:00","service":"剪发"}`)
 	if err == nil {
 		t.Fatal("DB 未就绪应返回 error")
 	}

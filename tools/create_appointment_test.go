@@ -20,6 +20,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -44,8 +46,10 @@ func buildApptArgs(customer, barberName string, hoursFromNow float64) (date, tim
 	at = snapUpToValidSlot(at)
 	date = at.Format("2006-01-02")
 	timeStr = at.Format("15:04")
+	// v4.9.3: phone 必填（11 位、1 开头）
+	phone := "138" + fmt.Sprintf("%08d", rand.Intn(100000000))
 	argsJSON = `{"customer":"` + customer + `","barber_name":"` + barberName +
-		`","date":"` + date + `","time":"` + timeStr + `","service":"剪发"}`
+		`","phone":"` + phone + `","date":"` + date + `","time":"` + timeStr + `","service":"剪发"}`
 	return
 }
 

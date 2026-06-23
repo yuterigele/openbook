@@ -57,6 +57,32 @@ func ExternalUserIDFromCtx(ctx context.Context) string {
 	return v
 }
 
+// ValidatePhone 严格校验中国大陆手机号（v4.9.3）
+//
+// 规则：11 位数字、1 开头
+//   - 不接国际号码（+86 前缀）：工具不支持境外顾客，简化
+//   - 不接座机 / 400 / 800：业务场景全是个人手机
+//   - 拒绝空字符串：必填项，没收到让 LLM 回去问顾客
+//
+// 返回的 error 是 friendly 话术，LLM 看到后会直接转给顾客。
+func ValidatePhone(phone string) error {
+	if phone == "" {
+		return fmt.Errorf("手机号必填，请顾客提供 11 位手机号（如 13812345678）")
+	}
+	if len(phone) != 11 {
+		return fmt.Errorf("手机号必须是 11 位（当前 %d 位：「%s」）", len(phone), phone)
+	}
+	if phone[0] != '1' {
+		return fmt.Errorf("手机号必须以 1 开头（当前：「%s」）", phone)
+	}
+	for i, c := range phone {
+		if c < '0' || c > '9' {
+			return fmt.Errorf("手机号必须全是数字（第 %d 位不是数字：「%s」）", i+1, phone)
+		}
+	}
+	return nil
+}
+
 // CreateAppointmentTool 创建预约工具
 type CreateAppointmentTool struct{}
 
@@ -64,17 +90,19 @@ type CreateAppointmentTool struct{}
 func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "create_appointment",
-		Desc: "为顾客创建一个新的预约。需要提供理发师姓名、顾客姓名、日期、时间，可选择服务项目。\n" +
+		Desc: "为顾客创建一个新的预约。需要提供理发师姓名、顾客姓名、手机号、日期、时间，可选择服务项目。\n" +
 			"\n" +
 			"【调用时机】\n" +
 			"  - 顾客明确说「帮我约一下」「我要预约」、说出具体理发师/时间时；\n" +
 			"  - 调用前**先调 query_schedule 确认该时段真空闲**（避免顾客告诉你一个时间，你不去查就盲下）；\n" +
 			"  - 调用前**确认 date 参数**：顾客说「明天」就转成 today+1 的 YYYY-MM-DD；说「3 号」就转成 YYYY-MM-03。\n" +
+			"  - 调用前**必填手机号**：顾客没主动给手机号时**主动问一次**（如「方便留个手机号吗，到店前我们提醒你~」），不要凭空编。\n" +
 			"\n" +
 			"【业务规则】\n" +
 			"  - 同一理发师的同一时段只能有一个预约；并发请求会被 Redis 锁挡掉；\n" +
 			"  - 如果理发师在所选时段请假（P4），会返回错误，需要换理发师或换时间；\n" +
-			"  - 不接过去时间（已过时刻）、22:00 之后、节假日。\n" +
+			"  - 不接过去时间（已过时刻）、22:00 之后、节假日；\n" +
+			"  - 手机号必须 11 位数字、1 开头（如 13812345678）。工具会严格校验。\n" +
 			"\n" +
 			"【回复要求】\n" +
 			"  - 成功后用自然语气确认：「好的，已帮你约好 Tony 师傅 6 月 22 日 15:00，到店报名字就行~」；\n" +
@@ -88,6 +116,9 @@ func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 			},
 			"customer": {
 				Type: "string", Desc: "顾客姓名", Required: true,
+			},
+			"phone": {
+				Type: "string", Desc: "顾客手机号，11 位数字、1 开头（用于后续到店提醒/通知）。**必填**——顾客没主动给时主动问一次。", Required: true,
 			},
 			"date": {
 				Type: "string", Desc: "预约日期，格式：YYYY-MM-DD，例如：2026-06-20", Required: true,
@@ -110,12 +141,19 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		Date       string `json:"date"`
 		Time       string `json:"time"`
 		Service    string `json:"service"`
+		Phone      string `json:"phone"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &params); err != nil {
 		return "", FriendlyError(ctx, err, "参数解析失败", "create_appointment.unmarshal")
 	}
 	if params.BarberName == "" || params.Customer == "" || params.Date == "" || params.Time == "" {
 		return "", fmt.Errorf("barber_name / customer / date / time 均不能为空")
+	}
+	// v4.9.3 手机号严格验证（11 位数字、1 开头）
+	//   - 工具不能凭空给顾客编手机号，没收到就拒绝，让 LLM 回去问顾客
+	//   - 校验失败返回 error → LLM 看到后会主动跟顾客要
+	if err := ValidatePhone(params.Phone); err != nil {
+		return "", err
 	}
 	if err := EnsureDB("create_appointment"); err != nil {
 		return "", err
@@ -192,6 +230,7 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		ShopIDFromCtx(ctx),
 		params.BarberName,
 		params.Customer,
+		params.Phone,               // v4.9.3: 手机号（已 ValidatePhone 校验）
 		OpenIDFromCtx(ctx),         // v4.8: 透传微信 openID，让 storage 自动建顾客档案
 		ExternalUserIDFromCtx(ctx), // v4.9.3: 透传 external_user_id，reminder cron 需要
 		params.Date,

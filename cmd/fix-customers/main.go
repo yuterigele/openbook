@@ -26,11 +26,13 @@ import (
 
 	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/storage"
+	"github.com/yuterigele/openbook/tools"
 )
 
 func main() {
 	attempt := flag.Bool("attempt", false, "尝试从 wecom_message_logs 反推 openID")
 	set := flag.String("set", "", "手动设一个顾客：格式 'cust-id,openID,externalUserID'")
+	setPhone := flag.String("set-phone", "", "手动补手机号：格式 'cust-id,phone'（11 位数字、1 开头）")
 	flag.Parse()
 
 	chatmodel.LoadEnv()
@@ -51,6 +53,12 @@ func main() {
 			log.Fatalf("-set 格式: 'cust-id,openID,externalUserID'")
 		}
 		setOne(ctx, parts[0], parts[1], parts[2])
+	case *setPhone != "":
+		parts := strings.SplitN(*setPhone, ",", 2)
+		if len(parts) != 2 {
+			log.Fatalf("-set-phone 格式: 'cust-id,phone'")
+		}
+		setPhoneOne(ctx, parts[0], parts[1])
 	case *attempt:
 		attemptBackfill(ctx)
 	default:
@@ -161,19 +169,50 @@ func attemptBackfill(ctx context.Context) {
 
 // setOne 手动设一个顾客的 openID / external_user_id
 func setOne(ctx context.Context, custID, openID, externalUserID string) {
+	updates := map[string]interface{}{}
+	if openID != "" {
+		updates["wechat_open_id"] = openID
+	}
+	if externalUserID != "" {
+		updates["external_user_id"] = externalUserID
+	}
+	if len(updates) == 0 {
+		log.Fatalf("至少要给一个字段（openID 或 externalUserID）")
+	}
 	res := storage.DB.WithContext(ctx).Model(&storage.Customer{}).
 		Where("id = ?", custID).
-		Updates(map[string]interface{}{
-			"wechat_open_id":   openID,
-			"external_user_id": externalUserID,
-		})
+		Updates(updates)
 	if res.Error != nil {
 		log.Fatalf("update: %v", res.Error)
 	}
 	if res.RowsAffected == 0 {
 		log.Fatalf("顾客 %s 不存在", custID)
 	}
-	fmt.Printf("✅ 顾客 %s 已绑定 openID=%s externalUserID=%s\n", custID, openID, externalUserID)
+	fmt.Printf("✅ 顾客 %s 已绑定:\n", custID)
+	if openID != "" {
+		fmt.Printf("   openID           = %s\n", openID)
+	}
+	if externalUserID != "" {
+		fmt.Printf("   external_user_id = %s\n", externalUserID)
+	}
 	fmt.Println("   下次 cron 提醒就能找到他了")
 	_ = os.Getenv("DUMMY") // 防 unused
+}
+
+// setPhoneOne 手动补手机号（v4.9.3 必填）
+func setPhoneOne(ctx context.Context, custID, phone string) {
+	// 复用 tools.ValidatePhone 校验（一致性）
+	if err := tools.ValidatePhone(phone); err != nil {
+		log.Fatalf("手机号校验失败: %v", err)
+	}
+	res := storage.DB.WithContext(ctx).Model(&storage.Customer{}).
+		Where("id = ?", custID).
+		Update("phone", phone)
+	if res.Error != nil {
+		log.Fatalf("update: %v", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		log.Fatalf("顾客 %s 不存在", custID)
+	}
+	fmt.Printf("✅ 顾客 %s 已绑定手机号 %s\n", custID, phone)
 }
