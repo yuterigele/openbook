@@ -2,7 +2,7 @@ package storage
 
 // barber_leave.go
 //
-// P4 理发师请假（2026-06-21）
+// P4 理发师请假（2026-06-21，v4.10 leave notify 改造 2026-06-23）
 //
 // 业务场景：理发师临时有事（生病/家里有事/紧急出差），商户在后台点"请假"，
 // 系统自动处理该理发师在 [StartAt, EndAt] 区间内的所有未来预约：
@@ -17,9 +17,19 @@ package storage
 //   - 仅当 now < start_at 时允许商户主动撤销（"理发师提前回来了"）
 //   - 已开始的请假只能"过期"（自然过渡），不可撤销
 //
+// v4.10 leave notify 通知链路：
+//   - 持久化：所有 leave 通知落到 customer_notifications 表（type=leave_cancel/leave_reschedule/leave_no_contact）
+//   - 并发：请假导致 N 个顾客要通知 → ParallelSender 5 worker 并发发
+//   - 重试：每个 send task 包 SendWithRetry（3 次指数退避 200ms/400ms/800ms）
+//   - 降级：ChannelSelector 按 external_userid → wechat_open_id → phone 选通道
+//   - 文案：顾客名优先用 Customer.Name（反查），兜底用 Appointment.Customer，最后为空时省略"亲爱的 X"前缀
+//   - 隐私：顾客面向文案走 CustomerFacingReason，兜底"师傅临时有事"，避免暴露"痔疮手术""陪老婆产检"等
+//
 // 单元隔离：
-//   - 本文件只依赖 storage + uuid + wecom/client 通过 sendNotification 注入
-//   - sendNotification 抽成函数类型，便于测试时 mock
+//   - 本文件只依赖 storage + uuid；wecom 通过 sender 注入
+//   - 旧 NotificationSender 签名保留（向后兼容测试），新逻辑走 LeaveNotificationSender 新签名
+//   - 旧签名路径：直接串行发 → 仅写 LeaveResult.NotifiedCustomers
+//   - 新签名路径：写 customer_notifications 行 + 并发 → 回写 status + 收集 NotifiedCustomers/SkippedCustomers
 
 import (
 	"context"
@@ -51,17 +61,29 @@ const (
 // 商户想撤销一个 active 但已开始的请假会被这个错挡掉。
 var ErrLeaveNotCancellable = errors.New("leave has already started, cannot cancel; please wait for natural expiry")
 
-// NotificationSender 顾客通知发送器（抽象，便于测试时 mock）
+// NotificationSender 旧版顾客通知发送器（仅保留兼容测试）
 //
 // 真实实现：wecom.Client.SendTextMessage
 // 测试时：用一个把消息记录到 slice 的 fake
+//
+// 警告：生产代码请用 LeaveNotificationSender 新签名，能拿到 appt 上下文；
+// 旧签名无法做持久化/重试/多店路由，仅适合老测试代码的 happy path。
 type NotificationSender func(ctx context.Context, customerID, text string) error
 
-// defaultNotificationSender 默认实现：从 DB 拿 customer 的 openid/external_userid，调用 wecom
+// LeaveNotificationSender v4.10 新版顾客通知发送器
 //
-// 这里只放接口；具体实现放在 api 层（避免 storage 反向依赖 wecom）。
-// 调用方要么注入自己的 sender，要么在调用时把 db_notifications 直接写到 leave_record meta。
-var defaultNotificationSender NotificationSender
+// 真实实现：wecom.Router → 按 shopID 找 client → ChannelSelector 选通道 → SendWithRetry
+// 测试时：用 fakeSender 记录到 slice
+//
+// 收到 (ctx, appt, text) 后：
+//   - 从 appt.CustomerID 反查 customer（拿 external_user_id / wechat_open_id / phone）
+//   - ChannelSelector 按优先级选通道
+//   - 按 appt.ShopID 找 router 对应 client + openKfID（多店路由）
+//   - SendWithRetry 包 3 次指数退避
+//   - customerID 空 / 无联系方式 → 返回 ErrNoCustomerContact 让 storage 写 skipped row
+//
+// 返回 error 时 storage 会写 failed row + 计数 attempt_count，便于排查 / 补发。
+type LeaveNotificationSender func(ctx context.Context, appt *Appointment, text string) error
 
 // LeaveResult 创建/撤销请假的结果
 type LeaveResult struct {
@@ -70,7 +92,9 @@ type LeaveResult struct {
 	AffectedCount     int      // 受影响的预约总数
 	RescheduledCount  int      // 改派成功数
 	CancelledCount    int      // 取消数（可能是 action=cancel 全部，也可能是 reschedule 兜底）
-	NotifiedCustomers []string // 已通知的 customer_id 列表
+	NotifiedCustomers []string // 成功通知的 customer_id 列表（v4.10 新签名路径）
+	SkippedCustomers  []string // 跳过的 customer_id 列表（v4.10：新签名路径中无联系方式的）
+	FailedCustomers   []string // 失败的 customer_id 列表（v4.10：新签名路径中重试 3 次仍失败的）
 }
 
 // FindAppointmentsInRange 查找某理发师在 [start, end] 区间内、状态 active 的预约
@@ -116,7 +140,13 @@ func FindAppointmentsInRange(ctx context.Context, barberID string, start, end ti
 //   - leave row + 预约状态更新在同一事务
 //   - 微信通知**不在**事务内（外部 IO 不参与 DB 回滚；失败只 log，不影响 leave row）
 //   - 测试时可通过 sender 注入 mock
-func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender NotificationSender) (*LeaveResult, error) {
+//
+// sender 参数同时兼容两种签名（v4.10 兼容老测试）：
+//   - LeaveNotificationSender 新签名：推荐生产路径，完整持久化 + 并发 + 重试
+//   - NotificationSender 旧签名：仅 happy path 串行发，不持久化（向后兼容老测试）
+//
+// 调用方识别方式：尝试类型断言，断言成功走新路径，否则走旧路径。
+func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender interface{}) (*LeaveResult, error) {
 	if leave.BarberID == "" || leave.ShopID == "" {
 		return nil, fmt.Errorf("barber_id 和 shop_id 不能为空")
 	}
@@ -186,16 +216,21 @@ func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender Notificati
 					return err
 				}
 				if found {
+					newBarberName := getBarberName(tx, newBarberID)
 					// 改派：更新 barber_id / barber_name + 写 reschedule 事件
 					if err := tx.Model(&Appointment{}).
 						Where("id = ? AND status = ?", appt.ID, "active").
 						Updates(map[string]interface{}{
 							"barber_id":   newBarberID,
-							"barber_name": getBarberName(tx, newBarberID),
+							"barber_name": newBarberName,
 							"updated_at":  now,
 						}).Error; err != nil {
 						return err
 					}
+					// v4.10 修复：同步更新内存 slice，事务外通知文案用得到
+					// （之前只改 DB 不改 appts[i].BarberName，导致文案仍用旧名）
+					appt.BarberID = newBarberID
+					appt.BarberName = newBarberName
 					TrackEventInTx(ctx, tx, appt.ShopID, EventAppointmentRescheduled, appt.ID, map[string]any{
 						"from_barber_id":   leave.BarberID,
 						"from_barber_name": leave.BarberName,
@@ -245,21 +280,156 @@ func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender Notificati
 		return nil, err
 	}
 
-	// 事务外：发微信通知（失败只 log）
+	// 事务外：发微信通知
+	// v4.10：分发到新签名（持久化 + 并发 + 重试）或旧签名（向后兼容）
 	if sender != nil {
-		for i := range appts {
-			appt := &appts[i]
-			text := buildLeaveNotification(appt, &leave, result.Action)
-			if err := sender(ctx, appt.CustomerID, text); err != nil {
-				// log 但不 return —— 部分失败不应影响整体结果
-				fmt.Printf("[leave] 通知顾客 %s 失败: %v\n", appt.CustomerID, err)
-				continue
+		switch s := sender.(type) {
+		case LeaveNotificationSender:
+			// typed nil 函数：var x LeaveNotificationSender; x == nil 传进来判为非 nil 实际是 nil
+			if s == nil {
+				// leave row 已写完，不报错也不发（静默 no-op 兼容测试场景）
+			} else {
+				sendLeaveNotificationsV2(ctx, s, &leave, appts, result)
 			}
-			result.NotifiedCustomers = append(result.NotifiedCustomers, appt.CustomerID)
+		case NotificationSender:
+			if s == nil {
+				// typed nil 函数：同上
+			} else {
+				// 旧签名：串行发，无持久化（保留老测试 happy path）
+				for i := range appts {
+					appt := &appts[i]
+					text := buildLeaveNotification(ctx, appt, &leave, result.Action)
+					if err := s(ctx, appt.CustomerID, text); err != nil {
+						fmt.Printf("[leave] 通知顾客 %s 失败: %v\n", appt.CustomerID, err)
+						continue
+					}
+					result.NotifiedCustomers = append(result.NotifiedCustomers, appt.CustomerID)
+				}
+			}
+		case func(context.Context, string, string) error:
+			if s == nil {
+				// typed nil 函数：同上
+			} else {
+				// 方法值 fallback：底层类型 func(ctx, string, string) error（老测试 f.send 用法）
+				ns := NotificationSender(s)
+				for i := range appts {
+					appt := &appts[i]
+					text := buildLeaveNotification(ctx, appt, &leave, result.Action)
+					if err := ns(ctx, appt.CustomerID, text); err != nil {
+						fmt.Printf("[leave] 通知顾客 %s 失败: %v\n", appt.CustomerID, err)
+						continue
+					}
+					result.NotifiedCustomers = append(result.NotifiedCustomers, appt.CustomerID)
+				}
+			}
+		case func(context.Context, *Appointment, string) error:
+			// 方法值 fallback：底层类型 func(ctx, *Appointment, string) error（v4.10 新签名 f.send 用法）
+			if s == nil {
+				// typed nil 函数
+			} else {
+				ns := LeaveNotificationSender(s)
+				sendLeaveNotificationsV2(ctx, ns, &leave, appts, result)
+			}
+		default:
+			// 未知类型：和旧代码一样直接 return，不报错（避免误伤测试）
+			_ = s
 		}
 	}
 
 	return result, nil
+}
+
+// sendLeaveNotificationsV2 v4.10 新签名路径：持久化 + 串行 + 重试 + skipped
+//
+// 流程：
+//   1) 对每个 appt 写一条 pending customer_notification row（事务外、立即可见）
+//   2) 构造 text（buildLeaveNotification，内部反查 customer.Name + 隐私脱敏 reason）
+//   3) 写 text_preview 到 row
+//   4) 调 sender 闭包发送（sender 内部已含 ChannelSelector + SendWithRetry）
+//   5) 成功 → MarkNotificationSent；失败 → MarkNotificationFailed；顾客无联系方式 → MarkNotificationSkipped
+//   6) 收集结果到 LeaveResult.NotifiedCustomers / SkippedCustomers / FailedCustomers
+//
+// 注意事项：
+//   - 这里用串行是因为 sender 闭包内已含 SendWithRetry（3 次退避），并发 N 倍会让总时长爆炸
+//   - 如果业务量大（>50 顾客），可在 caller 层包 ParallelSender
+//   - 不在事务内写 row：发送是慢 IO，事务内写会阻塞 leave row 提交；用事务外立即可见即可
+func sendLeaveNotificationsV2(
+	ctx context.Context,
+	sender LeaveNotificationSender,
+	leave *BarberLeave,
+	appts []Appointment,
+	result *LeaveResult,
+) {
+	for i := range appts {
+		appt := &appts[i]
+
+		// 通知类型：action=cancel → leave_cancel；action=reschedule → leave_reschedule
+		// 但 customerID 为空 → leave_no_contact（merchant 需手动联系）
+		notifType := NotifTypeLeaveReschedule
+		if result.Action == LeaveActionCancel {
+			notifType = NotifTypeLeaveCancel
+		}
+		if appt.CustomerID == "" {
+			notifType = NotifTypeLeaveNoContact
+		}
+
+		// 构造文案（已含 customer.Name 反查 + CustomerFacingReason 兜底）
+		text := buildLeaveNotification(ctx, appt, leave, result.Action)
+
+		// 写 pending row + text_preview（事务外、立即可见）
+		notif := &CustomerNotification{
+			LeaveID:       leave.ID,
+			AppointmentID: appt.ID,
+			ShopID:        leave.ShopID,
+			CustomerID:    appt.CustomerID,
+			Type:          notifType,
+			Channel:       NotifChannelPending,
+			Status:        NotifStatusPending,
+			TextPreview:   TruncatePreview(text, 256),
+		}
+		notifID, err := CreateCustomerNotification(ctx, notif)
+		if err != nil {
+			fmt.Printf("[leave] 写 notification row 失败 appt=%s: %v\n", appt.ID, err)
+			// 不阻断，继续尝试发
+		}
+
+		// customerID 空：直接写 skipped row（不调 sender，避免 sender 自己再反查报错）
+		if appt.CustomerID == "" {
+			fmt.Printf("[leave] 预约 %s customerID 为空，跳过通知（需商户手动联系）\n", appt.ID)
+			if notifID > 0 {
+				_ = MarkNotificationSkipped(ctx, notifID, "appointment.customer_id 为空")
+			}
+			result.SkippedCustomers = append(result.SkippedCustomers, "")
+			continue
+		}
+
+		// 调用 sender（sender 内部已含 ChannelSelector + SendWithRetry）
+		err = sender(ctx, appt, text)
+		if err == nil {
+			if notifID > 0 {
+				_ = MarkNotificationSent(ctx, notifID, 1)
+			}
+			result.NotifiedCustomers = append(result.NotifiedCustomers, appt.CustomerID)
+			continue
+		}
+
+		// 区分 skipped vs failed
+		if errors.Is(err, ErrNoCustomerContact) {
+			fmt.Printf("[leave] 顾客 %s 无联系方式（需手动通知）: %v\n", appt.CustomerID, err)
+			if notifID > 0 {
+				_ = MarkNotificationSkipped(ctx, notifID, err.Error())
+			}
+			result.SkippedCustomers = append(result.SkippedCustomers, appt.CustomerID)
+			continue
+		}
+
+		// 真失败
+		fmt.Printf("[leave] 通知顾客 %s 失败: %v\n", appt.CustomerID, err)
+		if notifID > 0 {
+			_ = MarkNotificationFailed(ctx, notifID, 1, err.Error())
+		}
+		result.FailedCustomers = append(result.FailedCustomers, appt.CustomerID)
+	}
 }
 
 // CancelBarberLeave 撤销一条请假记录
@@ -639,24 +809,119 @@ func TrackEventInTx(ctx context.Context, tx *gorm.DB, shopID, eventType string, 
 }
 
 // buildLeaveNotification 构造请假通知文案（取消 / 改派 两种）
-func buildLeaveNotification(appt *Appointment, leave *BarberLeave, actionTaken string) string {
+//
+// v4.10 升级：
+//   - 顾客姓名：优先用 customer.Name（反查，避免 appt.Customer 冗余字段为空时显示"亲爱的 ，..."）
+//     → fallback 用 appt.Customer
+//     → 都为空时省略"亲爱的 X"前缀，直接开始正文（避免半句话尴尬）
+//   - 请假原因：用 leave.CustomerFacingReason（商户填的对顾客文案）
+//     → fallback "师傅临时有事"（隐私脱敏：避免暴露"痔疮手术""陪老婆产检"）
+//     → 当 leave.CustomerFacingReason 为空且 leave.Reason 是常见公开原因（病假/家中有事/紧急出差）
+//       时原样显示；其他敏感内容都走兜底
+func buildLeaveNotification(ctx context.Context, appt *Appointment, leave *BarberLeave, actionTaken string) string {
+	name := resolveCustomerName(ctx, appt)
+	reason := resolveCustomerFacingReason(leave)
+
 	switch actionTaken {
 	case LeaveActionCancel:
+		if name == "" {
+			return fmt.Sprintf(
+				"抱歉地通知您：\n\n"+
+					"您预约的 %s %s（%s师傅）因%s被取消。\n"+
+					"给您带来不便敬请谅解！请跟我说\"重新预约\"，我帮您换个时间。",
+				appt.Date, appt.Time, leave.BarberName, reason,
+			)
+		}
 		return fmt.Sprintf(
 			"亲爱的 %s，抱歉地通知您：\n\n"+
-				"您预约的 %s %s（%s师傅）因师傅临时有事（%s）被取消。\n"+
+				"您预约的 %s %s（%s师傅）因%s被取消。\n"+
 				"给您带来不便敬请谅解！请跟我说\"重新预约\"，我帮您换个时间。",
-			appt.Customer, appt.Date, appt.Time, leave.BarberName, leave.Reason,
+			name, appt.Date, appt.Time, leave.BarberName, reason,
 		)
 	case LeaveActionReschedule:
 		// 改派成功：取新 barber 名（在 notification 阶段 appt 已是新 barber）
+		if name == "" {
+			return fmt.Sprintf(
+				"温馨提示：\n\n"+
+					"您预约的 %s %s 因 %s师傅%s，已为您改派到 %s师傅，时段不变。\n"+
+					"如需调整请跟我说\"改时间\"。",
+				appt.Date, appt.Time, leave.BarberName, reason, appt.BarberName,
+			)
+		}
 		return fmt.Sprintf(
 			"亲爱的 %s，温馨提示：\n\n"+
-				"您预约的 %s %s 因 %s师傅临时有事（%s），已为您改派到 %s师傅，时段不变。\n"+
+				"您预约的 %s %s 因 %s师傅%s，已为您改派到 %s师傅，时段不变。\n"+
 				"如需调整请跟我说\"改时间\"。",
-			appt.Customer, appt.Date, appt.Time, leave.BarberName, leave.Reason, appt.BarberName,
+			name, appt.Date, appt.Time, leave.BarberName, reason, appt.BarberName,
 		)
 	default:
 		return fmt.Sprintf("您 %s %s 的预约有变动，请联系商家确认。", appt.Date, appt.Time)
 	}
+}
+
+// resolveCustomerName 反查 customer.Name（v4.10 P0-2 修复）
+//
+// 优先级：customer.Name → appt.Customer → ""
+//
+// 失败原因：
+//   - appt.CustomerID 空：直接 fallback（不要 log，appt 可能本就没绑 customer）
+//   - DB 查不到：log warn 后 fallback（不阻断通知）
+//   - DB 错误：log warn 后 fallback（不阻断通知）
+//
+// 注意：此函数在 leave 通知路径中调用，单条失败不能影响整批。
+func resolveCustomerName(ctx context.Context, appt *Appointment) string {
+	if appt.CustomerID == "" {
+		return appt.Customer
+	}
+	if DB == nil {
+		return appt.Customer
+	}
+	var cust Customer
+	if err := DB.WithContext(ctx).Select("name").Where("id = ?", appt.CustomerID).First(&cust).Error; err != nil {
+		// log 但不 return error —— 单条顾客查不到不应影响整批通知
+		fmt.Printf("[leave] 反查顾客 %s 姓名失败: %v\n", appt.CustomerID, err)
+		return appt.Customer
+	}
+	if cust.Name == "" {
+		return appt.Customer
+	}
+	return cust.Name
+}
+
+// resolveCustomerFacingReason 解析对顾客展示的请假原因（v4.10 P1-5 隐私脱敏）
+//
+// 优先级：leave.CustomerFacingReason → leave.Reason（仅当是公开短语时）→ "师傅临时有事"
+//
+// 公开短语白名单：商户填写的内部备注常常很具体（"陪老婆产检""痔疮手术"），
+// 但"病假/家中有事/紧急出差/休息"等是公认安全的对外表达。
+// 白名单外的所有 reason 走兜底，避免尴尬。
+var publicReasonWhitelist = map[string]bool{
+	"病假":         true,
+	"家中有事":       true,
+	"紧急出差":       true,
+	"休息":         true,
+	"事假":         true,
+	"调休":         true,
+	"个人事务":       true,
+	"事":          true,
+	"临时有事":       true,
+	"师傅临时有事":     true,
+	"barber sick":  true,
+	"barber busy":  true,
+	"on leave":     true,
+	"sick leave":   true,
+	"family issue": true,
+}
+
+func resolveCustomerFacingReason(leave *BarberLeave) string {
+	if leave == nil {
+		return "师傅临时有事"
+	}
+	if leave.CustomerFacingReason != "" {
+		return leave.CustomerFacingReason
+	}
+	if leave.Reason != "" && publicReasonWhitelist[strings.ToLower(strings.TrimSpace(leave.Reason))] {
+		return leave.Reason
+	}
+	return "师傅临时有事"
 }

@@ -22,6 +22,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -83,6 +84,57 @@ func RequirePerm(perm string) app.HandlerFunc {
 			return
 		}
 		c.Next(ctx)
+	}
+}
+
+// RequireRole 鉴权中间件：要求当前 admin 的 role 在白名单里（v4.10.1）
+//
+// 跟 RequirePerm 的区别：
+//   - RequirePerm：粒度细，按 permission 检查（每条接口具体要啥 perm）
+//   - RequireRole：粒度粗，按 role 检查（整个 role 级别才允许）
+//
+// 适用场景：
+//   - 跨店/平台级接口（多店看板、跨店周报、平台统计）——"只有 platform_admin 才能进"
+//   - 任何 role=白名单的 admin 直接放行（不论 perm 矩阵里有啥）
+//
+// 行为：
+//   - 无 claims            → 401 unauthorized
+//   - role 不在白名单      → 403 forbidden（返回 required_role 方便前端定位）
+//   - role 命中            → c.Next(ctx)
+//
+// 设计原因：
+//   - 之前 v4.0 MVP 留的"任何 admin 都能看多店看板"是权限泄漏
+//   - 用 RequireRole 比 RequirePerm 更直接：多店接口**只**给 platform_admin
+//   - 配合权限矩阵的 owner 显式列（不含 view:chain_dashboard），双层防御
+//     即使权限矩阵配错，handler 层也挡
+//
+// 注意：
+//   - 跟 RequirePerm 一样，超管（platform_admin）放行逻辑在 RequirePerm 里就有
+//     但 RequireRole 是直接比对 role，**不**走 RequirePerm，所以这里**不再**短路超管
+//   - 调用方传白名单：RequireRole("platform_admin") 或 RequireRole("owner", "platform_admin")
+func RequireRole(allowedRoles ...string) app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		cl := GetClaims(c)
+		if cl == nil || cl.AdminID == 0 {
+			c.JSON(http.StatusUnauthorized, map[string]string{"error": "未登录"})
+			c.Abort()
+			return
+		}
+		// 命中白名单
+		for _, r := range allowedRoles {
+			if cl.Role == r {
+				c.Next(ctx)
+				return
+			}
+		}
+		// 未命中
+		required := strings.Join(allowedRoles, ",")
+		c.JSON(http.StatusForbidden, map[string]string{
+			"error":         "无权限: 需要 role 之一: " + required,
+			"required_role": required,
+			"actual_role":   cl.Role,
+		})
+		c.Abort()
 	}
 }
 

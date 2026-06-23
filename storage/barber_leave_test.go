@@ -1328,4 +1328,413 @@ func TestFindAlternateBarber_ServiceEmpty_AllTiersSkipped(t *testing.T) {
 	if got != bob.ID {
 		t.Errorf("got = %q, want %q (Service 空 → Tier2 兜底 Bob)", got, bob.ID)
 	}
+}// ===================== v4.10 leave notify 升级测试 =====================
+//   - 覆盖文案兜底（customer.Name 反查 / CustomerFacingReason 隐私脱敏）
+//   - 覆盖 customer_notification 持久化（sent / failed / skipped 三种状态）
+//   - 覆盖 text_preview 记录 + leave_no_contact 类型
+//
+// 注意：这些测试用新签名 LeaveNotificationSender 而不是老 sender.send，
+// 走 sendLeaveNotificationsV2 路径。
+
+// fakeLeaveSender v4.10 新签名版本的 sender（接 appt + text）
+type fakeLeaveSender struct {
+	mu       sync.Mutex
+	calls    []leaveSentCall
+	failOn   string // customerID 命中则返回 errToRet
+	failWith error
+	errOn    func(appt *Appointment) error // 可选的按 appt 动态决策错误
+}
+
+type leaveSentCall struct {
+	ApptID     string
+	CustomerID string
+	Text       string
+}
+
+func (f *fakeLeaveSender) send(ctx context.Context, appt *Appointment, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, leaveSentCall{ApptID: appt.ID, CustomerID: appt.CustomerID, Text: text})
+	if f.errOn != nil {
+		if err := f.errOn(appt); err != nil {
+			return err
+		}
+	}
+	if f.failOn != "" && f.failOn == appt.CustomerID {
+		return f.failWith
+	}
+	return nil
+}
+
+// ---- buildLeaveNotification 文案兜底 ----
+
+func TestBuildLeaveNotification_PrefersCustomerName(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// 顾客：customers 表 Name='Alice'，appt.Customer='alice 小姐'（不一致）
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "alice 小姐", barber.Name, date, tm)
+
+	leave := &BarberLeave{
+		BarberName: "Tony",
+		Reason:     "病假",
+	}
+
+	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+
+	if !strings.Contains(text, "亲爱的 Alice") {
+		t.Errorf("文案应优先使用 customer.Name='Alice'，但 got: %s", text)
+	}
+	if strings.Contains(text, "亲爱的 alice 小姐") {
+		t.Errorf("文案不应使用 appt.Customer='alice 小姐'，但 got: %s", text)
+	}
+}
+
+func TestBuildLeaveNotification_FallbackToAppointmentCustomer(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// customer.Name 为空（手工设置空名覆盖默认）
+	cust := MakeCustomer(t, "Placeholder", 0, 0)
+	DB.Model(cust).Update("name", "")
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "alice 小姐", barber.Name, date, tm)
+
+	leave := &BarberLeave{BarberName: "Tony", Reason: "病假"}
+	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+
+	if !strings.Contains(text, "亲爱的 alice 小姐") {
+		t.Errorf("customer.Name 为空时应 fallback 到 appt.Customer，got: %s", text)
+	}
+}
+
+func TestBuildLeaveNotification_NoNameOmitsPrefix(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "", 0, 0) // name 空
+	DB.Model(cust).Update("name", "")
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "", barber.Name, date, tm)
+
+	leave := &BarberLeave{BarberName: "Tony", Reason: "病假"}
+	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+
+	if strings.Contains(text, "亲爱的 ,") || strings.Contains(text, "亲爱的  ") {
+		t.Errorf("顾客名为空时不应有\"亲爱的 X\"前缀，got: %s", text)
+	}
+	if !strings.HasPrefix(text, "抱歉地通知您") {
+		t.Errorf("无名字时应直接以正文开头，got prefix: %s", text[:min(30, len(text))])
+	}
+}
+
+func TestBuildLeaveNotification_CustomerFacingReason(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	leave := &BarberLeave{
+		BarberName:           "Tony",
+		Reason:               "陪老婆产检",               // 内部原因（敏感）
+		CustomerFacingReason: "师傅家中有事，需请假一天", // 对顾客文案
+	}
+	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+
+	if strings.Contains(text, "陪老婆产检") {
+		t.Errorf("文案不应暴露内部原因\"陪老婆产检\"，got: %s", text)
+	}
+	if !strings.Contains(text, "师傅家中有事") {
+		t.Errorf("文案应使用 CustomerFacingReason，got: %s", text)
+	}
+}
+
+func TestBuildLeaveNotification_SensitiveReasonFallback(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	// 没填 CustomerFacingReason，但 Reason 是敏感内容 → fallback
+	leave := &BarberLeave{BarberName: "Tony", Reason: "痔疮手术"}
+	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+
+	if strings.Contains(text, "痔疮手术") {
+		t.Errorf("敏感原因\"痔疮手术\"不应暴露给顾客，got: %s", text)
+	}
+	if !strings.Contains(text, "师傅临时有事") {
+		t.Errorf("敏感原因应 fallback 到\"师傅临时有事\"，got: %s", text)
+	}
+}
+
+func TestBuildLeaveNotification_PublicReasonAllowed(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	// "病假" 是公开短语白名单内 → 原样展示
+	leave := &BarberLeave{BarberName: "Tony", Reason: "病假"}
+	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+
+	if !strings.Contains(text, "病假") {
+		t.Errorf("公开短语\"病假\"应原样展示，got: %s", text)
+	}
+}
+
+// ---- CreateBarberLeave + 新签名 sender：持久化 ----
+
+func TestCreateLeaveV2_NotificationPersistedAsSent(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	sender := &fakeLeaveSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barber.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Reason: "病假", Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if len(res.NotifiedCustomers) != 1 || res.NotifiedCustomers[0] != cust.ID {
+		t.Errorf("NotifiedCustomers = %v, want [%s]", res.NotifiedCustomers, cust.ID)
+	}
+	if len(res.FailedCustomers) != 0 || len(res.SkippedCustomers) != 0 {
+		t.Errorf("应有 0 failed / 0 skipped，got failed=%v skipped=%v", res.FailedCustomers, res.SkippedCustomers)
+	}
+
+	// 验证 customer_notification row 写入了 + status=sent
+	list, err := ListNotificationsByLeave(WithCtx(), res.LeaveID)
+	if err != nil {
+		t.Fatalf("ListNotificationsByLeave: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 notification row, got %d", len(list))
+	}
+	n := list[0]
+	if n.Status != NotifStatusSent {
+		t.Errorf("Status = %q, want sent", n.Status)
+	}
+	if n.CustomerID != cust.ID {
+		t.Errorf("CustomerID = %q, want %q", n.CustomerID, cust.ID)
+	}
+	if n.AppointmentID != appt.ID {
+		t.Errorf("AppointmentID = %q, want %q", n.AppointmentID, appt.ID)
+	}
+	if n.Type != NotifTypeLeaveCancel {
+		t.Errorf("Type = %q, want %q", n.Type, NotifTypeLeaveCancel)
+	}
+	if n.TextPreview == "" {
+		t.Errorf("TextPreview should be populated")
+	}
+	if !strings.Contains(n.TextPreview, "Alice") {
+		t.Errorf("TextPreview should contain customer name 'Alice', got: %s", n.TextPreview)
+	}
+	if !strings.Contains(n.TextPreview, "病假") {
+		t.Errorf("TextPreview should contain reason '病假', got: %s", n.TextPreview)
+	}
+}
+
+func TestCreateLeaveV2_FailedNotificationPersisted(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	// sender 让这个顾客失败
+	sender := &fakeLeaveSender{
+		failOn:   cust.ID,
+		failWith: errors.New("wechat api 95004 限流"),
+	}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barber.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Reason: "病假", Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if len(res.FailedCustomers) != 1 || res.FailedCustomers[0] != cust.ID {
+		t.Errorf("FailedCustomers = %v, want [%s]", res.FailedCustomers, cust.ID)
+	}
+	if len(res.NotifiedCustomers) != 0 {
+		t.Errorf("应有 0 notified，got %v", res.NotifiedCustomers)
+	}
+
+	list, _ := ListNotificationsByLeave(WithCtx(), res.LeaveID)
+	if len(list) != 1 || list[0].Status != NotifStatusFailed {
+		t.Fatalf("expected 1 failed row, got %+v", list)
+	}
+	if !strings.Contains(list[0].ErrorMessage, "95004") {
+		t.Errorf("ErrorMessage 应记录错误原因，got %q", list[0].ErrorMessage)
+	}
+}
+
+func TestCreateLeaveV2_NoCustomerContactSkipped(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// 顾客有 customerID 但完全无联系方式（外部用户ID/微信ID/电话都空）
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	DB.Model(cust).Updates(map[string]interface{}{
+		"wechat_open_id":   "",
+		"external_user_id": "",
+		"phone":            "",
+	})
+	date, tm := buildApptTime(t, 2)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	// sender 收到 ErrNoCustomerContact → storage 标 skipped
+	sender := &fakeLeaveSender{
+		failOn:   cust.ID,
+		failWith: ErrNoCustomerContact,
+	}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barber.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Reason: "病假", Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if len(res.SkippedCustomers) != 1 {
+		t.Errorf("SkippedCustomers = %v, want 1", res.SkippedCustomers)
+	}
+	if len(res.FailedCustomers) != 0 {
+		t.Errorf("ErrNoCustomerContact 不应算 failed，got %v", res.FailedCustomers)
+	}
+
+	list, _ := ListNotificationsByLeave(WithCtx(), res.LeaveID)
+	if len(list) != 1 || list[0].Status != NotifStatusSkipped {
+		t.Fatalf("expected 1 skipped row, got %+v", list)
+	}
+	if !strings.Contains(list[0].ErrorMessage, "no external_userid") {
+		t.Errorf("ErrorMessage 应记录 skipped 原因，got %q", list[0].ErrorMessage)
+	}
+}
+
+func TestCreateLeaveV2_NilCustomerIDSkipped(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	// 预约完全没绑 customer（CustomerID 空）
+	date, tm := buildApptTime(t, 2)
+	MakeAppointment(t, shop.ID, "", "Anonymous", barber.Name, date, tm)
+
+	sender := &fakeLeaveSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barber.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Reason: "病假", Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+
+	// leave 应能创建成功（admin 路径，事务不阻断）
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if len(res.SkippedCustomers) != 1 {
+		t.Errorf("SkippedCustomers = %v, want 1 (含空 customerID)", res.SkippedCustomers)
+	}
+
+	// sender 不应被调用
+	if len(sender.calls) != 0 {
+		t.Errorf("customerID 空时不应调 sender，got %d calls", len(sender.calls))
+	}
+
+	// row 应该是 skipped
+	list, _ := ListNotificationsByLeave(WithCtx(), res.LeaveID)
+	if len(list) != 1 || list[0].Status != NotifStatusSkipped {
+		t.Fatalf("expected 1 skipped row, got %+v", list)
+	}
+	if !strings.Contains(list[0].ErrorMessage, "customer_id 为空") {
+		t.Errorf("ErrorMessage 应说明 customer_id 为空，got %q", list[0].ErrorMessage)
+	}
+
+	// 类型应是 leave_no_contact（区分手动联系 vs 其他类型）
+	if list[0].Type != NotifTypeLeaveNoContact {
+		t.Errorf("Type = %q, want %q", list[0].Type, NotifTypeLeaveNoContact)
+	}
+}
+
+func TestCreateLeaveV2_RescheduleTypeAndSenderGetsText(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barberA := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	barberB := MakeBarber(t, "barber-Kevin", shop.ID, "Kevin")
+	setBarberSkills(t, barberB.ID, "剪发,染发")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barberA.Name, date, tm)
+
+	sender := &fakeLeaveSender{}
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barberA.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Reason: "家中有事", Action: LeaveActionReschedule,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, sender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if res.RescheduledCount != 1 {
+		t.Errorf("RescheduledCount = %d, want 1", res.RescheduledCount)
+	}
+
+	// notification row 应该是 leave_reschedule 类型
+	list, _ := ListNotificationsByLeave(WithCtx(), res.LeaveID)
+	if len(list) != 1 || list[0].Type != NotifTypeLeaveReschedule {
+		t.Errorf("expected leave_reschedule notification, got %+v", list)
+	}
+	// text 应包含新 barber 名（Kevin）
+	if !strings.Contains(sender.calls[0].Text, "Kevin") {
+		t.Errorf("改派文案应包含新 barber 名 'Kevin'，got: %s", sender.calls[0].Text)
+	}
+}
+
+// 兼容：老测试 fakeSender.send（func(ctx, customerID, text) error）应继续走旧路径，不持久化
+func TestCreateLeaveV2_OldSenderSignature_NotPersisted(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-1", "")
+	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	date, tm := buildApptTime(t, 2)
+	MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
+
+	oldSender := &fakeSender{} // 用老方法签名 func(ctx, customerID, text) error
+	leave := BarberLeave{
+		ShopID: shop.ID, BarberID: barber.ID,
+		StartAt: futureTime(1), EndAt: futureTime(4),
+		Reason: "病假", Action: LeaveActionCancel,
+	}
+	res, err := CreateBarberLeave(WithCtx(), leave, oldSender.send)
+	if err != nil {
+		t.Fatalf("CreateBarberLeave: %v", err)
+	}
+	if len(res.NotifiedCustomers) != 1 {
+		t.Errorf("NotifiedCustomers = %v, want 1", res.NotifiedCustomers)
+	}
+	// 旧签名路径不应写 customer_notification row
+	list, _ := ListNotificationsByLeave(WithCtx(), res.LeaveID)
+	if len(list) != 0 {
+		t.Errorf("老签名路径不应写 notification row，got %d", len(list))
+	}
 }

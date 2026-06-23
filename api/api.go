@@ -26,17 +26,19 @@ type AdminConfig struct {
 	// 兼容旧版：保留单一 ADMIN_TOKEN（用 env 注入），非空时启用 fallback 鉴权
 	LegacyToken string
 
-	// NotifSender 顾客通知发送器（PRD §11.7 P4 理发师请假通知顾客用）
+	// NotifSender 顾客通知发送器（PRD §11.7 P4 理发师请假通知顾客用，v4.10 多店+重试）
 	//
-	// 签名：(ctx, customerID, text) -> error
+	// 签名：(ctx, appt, text) -> error
 	// 由 main.go 注入；为 nil 时请假设无通知能力（不影响 leave row 写入，只是不发微信）。
-	NotifSender func(ctx context.Context, customerID, text string) error
+	// 推荐实现：wecom.Router 多店路由 + ChannelSelector 通道降级 + SendWithRetry 3 次退避。
+	// storage.CreateBarberLeave 接 interface{}，可同时兼容新签名（推荐）和老签名（向后兼容测试）。
+	NotifSender storage.LeaveNotificationSender
 }
 
 // notifSender 包级 handler 访问点（在 RegisterRoutes 时赋值一次）
 //
 // 不放 ctx；调用方负责传 ctx。
-var notifSender func(ctx context.Context, customerID, text string) error
+var notifSender storage.LeaveNotificationSender
 
 // RegisterRoutes 注册 /api/* + /admin 路由
 func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
@@ -90,6 +92,14 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/barbers", auth.RequirePerm(storage.PermViewBarbers), listBarbersHandler)
 	protected.GET("/events", auth.RequirePerm(storage.PermViewEvents), listEventsHandler)
 
+	// 通知中心（v4.10.1）—— admin 后台看 leave notify 发送结果 + 补发失败
+	//   - GET 列：view:notifications
+	//   - POST 补发：retry:notifications
+	//   - retry-batch 也在 view+retry 范围内
+	protected.GET("/notifications", auth.RequirePerm(storage.PermViewNotifications), listNotificationsHandler)
+	protected.POST("/notifications/:id/retry", auth.RequirePerm(storage.PermRetryNotifications), retryNotificationHandler)
+	protected.POST("/notifications/retry-batch", auth.RequirePerm(storage.PermRetryNotifications), retryAllFailedNotificationsHandler)
+
 	// ===== owner-only =====
 	// 师傅管理：staff 只看不能改（避免误删活师傅）
 	protected.POST("/barbers", auth.RequirePerm(storage.PermEditBarbers), createBarberHandler)
@@ -103,16 +113,25 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/shop", auth.RequirePerm(storage.PermEditShop), getShopHandler) // 设为 owner-only 防止 staff 误读敏感字段
 	protected.PUT("/shop", auth.RequirePerm(storage.PermEditShop), updateShopHandler)
 
-	// 跨店看板（连锁）
-	protected.GET("/chain/dashboard", auth.RequirePerm(storage.PermViewChainDashboard), chainDashboardHandler)
+	// 跨店看板（连锁）—— v4.10.1：只给 platform_admin 看
+	// 之前用 RequirePerm + owner 默认有 AllPermissions → 单店 owner 也能看全平台所有店（权限泄漏）
+	// 现在改 RequireRole 强约束：只有 platform_admin 角色才能进
+	// 配合 storage 层 owner 默认矩阵里不列 view:chain_dashboard，双层防御
+	protected.GET("/chain/dashboard", auth.RequireRole(storage.RolePlatformAdmin), chainDashboardHandler)
 
-	// 周报
+	// 周报（v4.10.1：单店 / 跨店权限分离）
+	//   - 单店周报：owner / staff 都能看（看自己店经营数据）
+	//   - 跨店周报：只 platform_admin（看全平台所有店）
+	//   - 数据本身在 handler 内部通过 shopFromClaims 拿本店 shopID → 天然多店隔离
 	protected.GET("/weekly-report", auth.RequirePerm(storage.PermViewWeeklyReport), getWeeklyReportHandler)
-	protected.GET("/weekly-report/chain", auth.RequirePerm(storage.PermViewChainDashboard), getChainWeeklyReportHandler)
+	protected.GET("/weekly-report/chain", auth.RequireRole(storage.RolePlatformAdmin), getChainWeeklyReportHandler)
 
-	// 订阅
-	protected.GET("/subscription", auth.RequirePerm(storage.PermViewSubscription), listSubscriptionsHandler)
-	protected.POST("/subscription/renew", auth.RequirePerm(storage.PermManageSubscription), renewSubscriptionHandler)
+	// 订阅（v4.10.1：整个订阅模块归 platform_admin）
+	//   - 商户不需要关心订阅状态——订阅是平台/运营层的事
+	//   - 列表 + 续费都用 RequireRole 强约束
+	//   - 商户后台 subscription nav-item 前端会按 role 隐藏
+	protected.GET("/subscription", auth.RequireRole(storage.RolePlatformAdmin), listSubscriptionsHandler)
+	protected.POST("/subscription/renew", auth.RequireRole(storage.RolePlatformAdmin), renewSubscriptionHandler)
 
 	// 服务目录
 	protected.GET("/services", auth.RequirePerm(storage.PermViewServices), listServicesHandler)
@@ -1171,4 +1190,187 @@ func currentOperator(c *app.RequestContext) string {
 		return ""
 	}
 	return fmt.Sprintf("admin#%d", cl.AdminID)
+}
+
+// ============================================================
+// 通知中心（v4.10.1 PRD §11.7 P4 配套：admin 后台看 leave notify 发送结果 + 补发）
+// ============================================================
+//
+// 路由：
+//   - GET    /api/admin/notifications?status=&type=&leave_id=&limit=
+//   - POST   /api/admin/notifications/:id/retry          单条补发
+//   - POST   /api/admin/notifications/retry-batch        一键补发本店所有 failed leave 通知
+//
+// 多店隔离：所有 list / retry 都用 shopFromClaims 拿当前 admin 的 shopID，
+// 强制只读 / 只改本店通知，避免越权访问其他店铺数据。
+//
+// 安全：
+//   - 单条 retry 调 storage.RetryNotification，发送走同一个 sender（多店路由 + 重试 + 通道降级）
+//   - 已 sent 的拒绝 retry（避免重复打扰顾客，storage 内部硬约束）
+//   - retry-batch 串行跑，N 条 × 3 次重试 = 可能 5-15 秒；UI 上需要 loading 态
+
+// listNotificationsHandler 列本店通知（v4.10.1 admin 后台"通知中心"用）
+//
+// Query 参数（都可空）：
+//   - status:  pending / sent / failed / skipped（空 = 全部）
+//   - type:    leave_cancel / leave_reschedule / leave_no_contact（空 = 全部）
+//   - leave_id: 按 leave_id 精确匹配（空 = 全部），用于"查看某次请假的所有通知"
+//   - limit:   1-500，默认 200
+//
+// 排序：created_at DESC
+func listNotificationsHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	status := c.Query("status")
+	notifType := c.Query("type")
+	leaveID := c.Query("leave_id")
+	limitStr := c.Query("limit")
+	limit := 200
+	if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 500 {
+		limit = v
+	}
+
+	// 校验 status 是已知值（不挡错别字，给前端更明确的反馈）
+	if status != "" && !isKnownNotifStatus(status) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "status 必须是 pending / sent / failed / skipped 之一"})
+		return
+	}
+	if notifType != "" && !isKnownNotifType(notifType) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "type 必须是 leave_cancel / leave_reschedule / leave_no_contact 之一"})
+		return
+	}
+
+	notifs, err := storage.ListNotificationsForShop(ctx, shopID, status, notifType, leaveID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// 始终返回 array（避免前端处理 null）
+	if notifs == nil {
+		notifs = []storage.CustomerNotification{}
+	}
+	c.JSON(http.StatusOK, notifs)
+}
+
+// retryNotificationHandler 单条补发（admin 后台"补发"按钮）
+//
+// POST /api/admin/notifications/:id/retry
+// 行为：
+//   - 200 + { new_status }  重发成功（status=sent）
+//   - 200 + { new_status: "failed" }  重发仍失败（attempt_count 已累加）
+//   - 200 + { new_status: "skipped" } 顾客仍无联系方式（ErrNoCustomerContact）
+//   - 409 + { error }  通知已 sent 成功（拒绝重发避免重复打扰）
+//   - 404 + { error }  通知 id 不存在
+//   - 500  其他错误（DB / sender 错）
+//
+// 重要：通知必须属于当前 admin 的 shop（多店隔离硬约束）。
+func retryNotificationHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "id 必须是正整数"})
+		return
+	}
+
+	// 多店隔离：先验证这条通知属于本店
+	n, ok, err := storage.GetNotificationByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "通知不存在"})
+		return
+	}
+	if n.ShopID != shopID {
+		// 不泄露存在性，对外只说 forbidden
+		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的通知"})
+		return
+	}
+
+	// 调 storage 重发（内部已含 SendWithRetry + 通道降级）
+	res, err := storage.RetryNotification(ctx, id, notifSender)
+	if err != nil {
+		switch {
+		case errors.Is(err, storage.ErrNotificationNotFound):
+			c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		case errors.Is(err, storage.ErrNotificationAlreadySent):
+			// 409：业务上不允许，但前端可能因竞态（点 retry 按钮的瞬间 row 状态变了）
+			// 返回 200 + new_status 也能接受；这里选 409 让前端能区分"已成功" vs "重发了"
+			c.JSON(http.StatusConflict, map[string]string{
+				"error":      err.Error(),
+				"new_status": res.NewStatus,
+			})
+		default:
+			// 重发失败（sender 内部 error） → 200 + new_status=failed，让前端能继续展示
+			// 这里选择 200 + { new_status, error } 而非 5xx：业务上 row 已更新，UI 应当刷新
+			c.JSON(http.StatusOK, map[string]any{
+				"id":         id,
+				"new_status": res.NewStatus,
+				"error":      err.Error(),
+			})
+		}
+		return
+	}
+
+	// 成功
+	c.JSON(http.StatusOK, map[string]any{
+		"id":         id,
+		"new_status": res.NewStatus,
+	})
+}
+
+// retryAllFailedNotificationsHandler 一键补发本店所有 failed leave 通知
+//
+// POST /api/admin/notifications/retry-batch
+// Body: 空（不需要参数，从 claims 拿 shopID）
+//
+// 行为：串行遍历所有 status=failed + type in (leave_*) 的通知，逐一 RetryNotification
+//
+// 返回：
+//   - 200 + { succeeded, failed, total }
+//
+// 注意：单条 send 已含 3 次退避，串行 N 条可能跑 5-15 秒（API 端），UI 上需要转圈
+func retryAllFailedNotificationsHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	suc, fail, err := storage.RetryShopFailedNotifications(ctx, shopID, notifSender)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"total":     suc + fail,
+		"succeeded": suc,
+		"failed":    fail,
+	})
+}
+
+// isKnownNotifStatus 校验 status 是合法值（防前端错别字 500）
+func isKnownNotifStatus(s string) bool {
+	switch s {
+	case storage.NotifStatusPending, storage.NotifStatusSent, storage.NotifStatusFailed, storage.NotifStatusSkipped:
+		return true
+	}
+	return false
+}
+
+// isKnownNotifType 校验 type 是合法值
+func isKnownNotifType(t string) bool {
+	switch t {
+	case storage.NotifTypeLeaveCancel, storage.NotifTypeLeaveReschedule, storage.NotifTypeLeaveNoContact:
+		return true
+	}
+	return false
 }

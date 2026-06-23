@@ -325,10 +325,11 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	api.RegisterRoutes(srv.EnsureHertz(), api.AdminConfig{
 		LegacyToken: os.Getenv("ADMIN_TOKEN"), // 兼容旧版；非空时作为 fallback
 
-		// P4 理发师请假通知：构造一个 sender 把 (customerID, text) 映射到企业微信发送
+		// P4 理发师请假通知：构造一个 sender 把 (appt, text) 映射到企业微信发送
 		//
+		// v4.10：传 router + fallbackClient，sender 内部按 shopID 多店路由 + 通道降级 + 3 次重试
 		// 缺失/未配置 wecom 时 sender = nil，leave row 仍会写，顾客不会收到微信通知（管理员需另行沟通）。
-		NotifSender: buildLeaveNotificationSender(wecomClient),
+		NotifSender: buildLeaveNotificationSender(wecomRouter, wecomClient),
 	})
 
 	log.Printf("starting server on http://localhost:%s", port)
@@ -356,48 +357,124 @@ func parseRecipients(raw string) []string {
 	return out
 }
 
-// buildLeaveNotificationSender 构造请假通知发送器（P4，v4.9.3 修复 81013）
+// buildLeaveNotificationSender 构造请假通知发送器（P4，v4.10 多店 + 重试 + 通道降级）
 //
-// 历史 bug：
-//   - 之前不管 customer 的 external_user_id 来源，都调 SendTextMessage（企业应用消息 API）
-//   - 但 KF 场景下 external_user_id 是 KF 客服场景的外部用户 ID，**不属于**任何应用的可见范围
-//   - 调 SendTextMessage 会报 81013（userid 不在该应用可见范围）
-//   - 错误码跟 IP 白名单无关，加 IP 白名单没用
-//
-// v4.9.3 修法：按 customer 字段自动选接口：
-//   - 有 external_user_id（KF / 外部联系人）→ SendKfTextMessage（KF 接口，+ openKfID）
-//   - 只有 wechat_open_id（企业应用成员）→ SendTextMessage（应用消息）
-//   - 都没有 → 返回 error，log 提示商户手工通知
+// 历史 bug 链：
+//   - v4.9.3 修：按 external_user_id / wechat_open_id 自动选 SendKfTextMessage / SendTextMessage（修 81013）
+//   - v4.10 修：多店路由（之前全平台用 DefaultOpenKfID，A 店顾客发到 B 店 KF 会 93001900）
+//   - v4.10 修：按 shopID 反查 client + openKfID
+//   - v4.10 修：ChannelSelector 选通道，phone-only 顾客走 skipped 而非报 err
+//   - v4.10 修：SendWithRetry 3 次指数退避，单次抖动不丢消息
+//   - v4.10 修：返回 storage.ErrNoCustomerContact 让 storage 写 skipped row
 //
 // 行为：
-//   - wecomClient == nil：返回 nil（通知能力缺失，但不影响 leave row 写入）
-//   - customerID 为空：no-op
-//   - 失败只 log，不返回 error 给上层（避免一个顾客失败影响整个 leave）
+//   - router 和 fallbackClient 都 nil：返回 nil（通知能力缺失，但不影响 leave row 写入）
+//   - customerID 空 / 无联系方式：返回 storage.ErrNoCustomerContact
+//   - 顾客所在 shop 未注册到 router 且 fallbackClient 也是 nil：返回 error
+//   - 失败：sender 闭包返回 error，storage 写 failed row + 计数 attempt
 //
 // 注意：这里直接用 storage.DB 是为了保持简单；不抽 repo 是不想为这个一次性通知路径多写一层。
-func buildLeaveNotificationSender(wecomClient *wecom.Client) func(ctx context.Context, customerID, text string) error {
-	if wecomClient == nil {
+func buildLeaveNotificationSender(router *wecom.Router, fallbackClient *wecom.Client) storage.LeaveNotificationSender {
+	if router == nil && fallbackClient == nil {
 		return nil
 	}
-	return func(ctx context.Context, customerID, text string) error {
-		if customerID == "" {
-			return nil
-		}
-		var cust storage.Customer
-		if err := storage.DB.WithContext(ctx).Where("id = ?", customerID).First(&cust).Error; err != nil {
-			return fmt.Errorf("顾客 %s 不存在: %w", customerID, err)
+	return func(ctx context.Context, appt *storage.Appointment, text string) error {
+		if appt.CustomerID == "" {
+			return storage.ErrNoCustomerContact
 		}
 
-		// v4.9.3：按字段自动选接口（关键修复 81013）
-		// 优先 external_user_id（KF / 外部联系人）→ 用 KF 接口
-		if cust.ExternalUserID != "" {
-			// DefaultOpenKfID 是兜底——实际生产应该按 customer 所属的客服账号动态选
-			return wecomClient.SendKfTextMessage(ctx, cust.ExternalUserID, wecom.DefaultOpenKfID, text)
+		// 1) 查 customer（拿联系方式）
+		var cust storage.Customer
+		if err := storage.DB.WithContext(ctx).Where("id = ?", appt.CustomerID).First(&cust).Error; err != nil {
+			return fmt.Errorf("顾客 %s 不存在: %w", appt.CustomerID, err)
 		}
-		// fallback：只有 wechat_open_id（企业应用成员）→ 用应用消息
-		if cust.WechatOpenID != "" {
-			return wecomClient.SendTextMessage(ctx, cust.WechatOpenID, text)
+
+		// 2) ChannelSelector 选通道
+		decision := storage.SelectChannel(&cust)
+		if !decision.HasContact {
+			return storage.ErrNoCustomerContact
 		}
-		return fmt.Errorf("顾客 %s 无 external_userid / wechat_open_id（无法自动选发送接口）", customerID)
+
+		// 3) 按 shopID 找 client + openKfID（多店路由核心）
+		client, openKfID, err := resolveWecomForShop(ctx, router, fallbackClient, appt.ShopID, decision.Channel)
+		if err != nil {
+			return err
+		}
+
+		// 4) 包 sender（带 SendWithRetry）
+		var sender storage.WeComSender
+		switch decision.Channel {
+		case storage.NotifChannelWeComKF:
+			kfID := openKfID
+			if kfID == "" {
+				// shop 没配 openKfID → fallback 到全局默认（仅单店部署兼容）
+				kfID = wecom.DefaultOpenKfID
+				log.Printf("[leave] 店铺 %s 未配置 open_kf_id，临时使用 DefaultOpenKfID（多店场景下应填正确的）", appt.ShopID)
+			}
+			sender = storage.WeComSenderFunc(func(ctx context.Context, target, content string) error {
+				return client.SendKfTextMessage(ctx, target, kfID, content)
+			})
+		case storage.NotifChannelWeComApp:
+			sender = storage.WeComSenderFunc(func(ctx context.Context, target, content string) error {
+				return client.SendTextMessage(ctx, target, content)
+			})
+		case storage.NotifChannelSMS:
+			// SMS 暂未实现（预留接口）；phone-only 顾客走 skipped（由 caller 处理）
+			return fmt.Errorf("SMS 通道未实现（顾客 %s）", appt.CustomerID)
+		default:
+			return fmt.Errorf("未知通道 %q", decision.Channel)
+		}
+
+		// 5) 重试 + 发送
+		return storage.SendWithRetry(ctx, sender, decision.Target, text, storage.SendOptions{
+			MaxAttempts:    3,
+			InitialBackoff: 200 * time.Millisecond,
+			MaxBackoff:     1 * time.Second,
+			Context:        ctx,
+		})
 	}
+}
+
+// resolveWecomForShop 按 shopID 找对应的 wecom client + openKfID（多店路由）
+//
+// 查找顺序：
+//   1. router.LookupByShopID(shopID) → 找到就用该 client
+//   2. 没找到 → fallback 到 fallbackClient（兼容单店 .env 部署）
+//   3. 都 nil → 返回 error
+//
+// openKfID 从 storage.Shop.OpenKfID 字段查（多店场景下每个店铺独立配置）
+func resolveWecomForShop(ctx context.Context, router *wecom.Router, fallbackClient *wecom.Client, shopID, channel string) (*wecom.Client, string, error) {
+	var client *wecom.Client
+
+	// 1) router 查
+	if router != nil {
+		if sc, ok := router.LookupByShopID(shopID); ok && sc != nil && sc.Client != nil {
+			client = sc.Client
+		}
+	}
+
+	// 2) fallback 兼容
+	if client == nil {
+		client = fallbackClient
+	}
+
+	if client == nil {
+		return nil, "", fmt.Errorf("店铺 %s 未配置 wecom client（既不在 router 也无 fallback）", shopID)
+	}
+
+	// 3) openKfID 仅 KF 通道需要
+	if channel != storage.NotifChannelWeComKF {
+		return client, "", nil
+	}
+
+	// 从 shop 表读 openKfID
+	var openKfID string
+	if storage.DB != nil && shopID != "" {
+		var shop storage.Shop
+		if err := storage.DB.WithContext(ctx).Select("open_kf_id").Where("id = ?", shopID).First(&shop).Error; err == nil {
+			openKfID = shop.OpenKfID
+		}
+		// 查不到不报错——可能 shop 行不存在；fallback 由 caller 处理
+	}
+	return client, openKfID, nil
 }

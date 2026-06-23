@@ -704,9 +704,10 @@ func getWeeklyReportHandler(ctx context.Context, c *app.RequestContext) {
 
 // getChainWeeklyReportHandler GET /api/admin/weekly-report/chain?as_of=YYYY-MM-DD
 //
-// 跨店周报（连锁 owner 用）。权限沿用 chainDashboardHandler：已登录即可。
-//   - 原因：当前 ShopAdmin 只有 owner/staff 两种角色；连锁 owner 本身也是某店 owner
-//   - 后续要做细粒度：role="platform_admin" 限定
+// 跨店周报（连锁/平台用）。权限：
+//   - 路由层用 auth.RequireRole(RolePlatformAdmin) 强约束
+//   - 之前 v4.0 MVP 留的"已登录即可"是权限泄漏——单店 owner 能看全平台周报
+//   - 修复后：单店 owner 路由层就 403
 func getChainWeeklyReportHandler(ctx context.Context, c *app.RequestContext) {
 	if storage.DB == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})

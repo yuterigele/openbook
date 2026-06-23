@@ -81,6 +81,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&BarberLeave{}, // P4 理发师请假（2026-06-21）
 		&Service{},     // v4.4 服务目录（2026-06-22）
 		&RolePermission{}, // v4.7 RBAC：role → permission 映射表
+		&CustomerNotification{}, // v4.10 leave notify 持久化（2026-06-23）
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
@@ -110,6 +111,10 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 	if err := SeedDefaultRolePermissions(ctx); err != nil {
 		log.Printf("[storage] SeedDefaultRolePermissions 警告: %v", err)
 	}
+
+	// 注意：v4.10.1 加新 perm 后，老店铺不会自动收到（Seed 只在表空时跑）。
+	// 解决方案：跑 `go run ./cmd/admin-tool perms reconcile` 手动补全（不删任何现有记录）。
+	// 详见 cmd/admin-tool/README。
 
 	// v4.8 顾客档案自愈：appointments 有 customer_id 为空 + customer 名字非空的，
 	// 按名字去 customers 表查（没有就建），回填 appointment.customer_id。

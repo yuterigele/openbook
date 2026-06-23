@@ -60,6 +60,7 @@ func SetupTestDB(t *testing.T) {
 		&BarberLeave{},
 		&Service{}, // v4.4 服务目录
 		&RolePermission{}, // v4.7 RBAC 权限表
+		&CustomerNotification{}, // v4.10 leave notify 持久化
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

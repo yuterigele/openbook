@@ -196,3 +196,55 @@ func TestConcatChunksAgenticPreservesReasoning(t *testing.T) {
 		t.Fatalf("assistant text not preserved: %#v", got.ContentBlocks[1])
 	}
 }
+
+// ===================== v4.10.1 RoleOf helper =====================
+
+func TestRoleOf_LegacyMessage(t *testing.T) {
+	t.Setenv("MESSAGE_KIND", "message")
+	cases := []struct {
+		role schema.RoleType
+		want string
+	}{
+		{schema.User, "user"},
+		{schema.Assistant, "assistant"},
+		{schema.Tool, "tool"},
+		{schema.System, "system"},
+	}
+	for _, tc := range cases {
+		msg := &schema.Message{Role: tc.role, Content: "x"}
+		if got := RoleOf[*schema.Message](msg); got != tc.want {
+			t.Errorf("RoleOf(role=%v) = %q, want %q", tc.role, got, tc.want)
+		}
+	}
+}
+
+func TestRoleOf_AgenticMessage(t *testing.T) {
+	t.Setenv("MESSAGE_KIND", "agentic")
+	// 注意：AgenticMessage 只有 System / User / Assistant 三种顶层 role
+	//   - "tool" 在 AgenticMessage 里表示为 ContentBlock（FunctionToolResult），不是顶层 role
+	cases := []struct {
+		role schema.AgenticRoleType
+		want string
+	}{
+		{schema.AgenticRoleTypeUser, "user"},
+		{schema.AgenticRoleTypeAssistant, "assistant"},
+		{schema.AgenticRoleTypeSystem, "system"},
+	}
+	for _, tc := range cases {
+		msg := &schema.AgenticMessage{Role: tc.role}
+		if got := RoleOf[*schema.AgenticMessage](msg); got != tc.want {
+			t.Errorf("RoleOf(role=%v) = %q, want %q", tc.role, got, tc.want)
+		}
+	}
+}
+
+func TestRoleOf_NilSafe(t *testing.T) {
+	t.Setenv("MESSAGE_KIND", "message")
+	if got := RoleOf[*schema.Message](nil); got != "" {
+		t.Errorf("RoleOf(nil *Message) = %q, want empty", got)
+	}
+	t.Setenv("MESSAGE_KIND", "agentic")
+	if got := RoleOf[*schema.AgenticMessage](nil); got != "" {
+		t.Errorf("RoleOf(nil *AgenticMessage) = %q, want empty", got)
+	}
+}

@@ -674,6 +674,26 @@ func (s *Server[M]) makePrepareAgent() func(ctx context.Context, loop *adk.TurnL
 	}
 }
 
+// shouldPersistIntermediate 决定一个 intermediate message 是否该 append 到 session history
+//
+// v4.10.1 新增：过滤掉"纯文本 assistant"中间 chatter
+//   - DeepAgent run 一次可能产生多个 assistant block：
+//     1) "我帮您查一下" → 调 query_schedule → 2) "已为您预约明天 10 点" → 调 list_barbers → 3) "还有别的需要吗"
+//   - 如果全 append 到 history，下次 LLM 看到自己之前的 chatter → 重复 / 不相干
+//   - 现在只 append：tool_calls 的 assistant + tool result + user 消息
+//   - 纯文本 assistant 由 caller 用 lastContent 补一条 NewAssistant 作为最终回复
+//
+// 返回 true 表示"该 persist"
+func shouldPersistIntermediate[M adk.MessageType](msg M) bool {
+	role := msgops.RoleOf(msg)
+	hasTC := len(msgops.ToolCalls(msg)) > 0
+	// 跳过"纯文本 assistant"中间 chatter
+	if role == "assistant" && !hasTC {
+		return false
+	}
+	return true
+}
+
 // makeOnAgentEvents returns the OnAgentEvents callback — the bridge between
 // the TurnLoop and the HTTP handler.
 func (s *Server[M]) makeOnAgentEvents(sess *mem.Session[M], sessionID string) func(ctx context.Context, tc *adk.TurnContext[*ChatItem, M], events *adk.AsyncIterator[*adk.TypedAgentEvent[M]]) error {
@@ -707,12 +727,47 @@ func (s *Server[M]) makeOnAgentEvents(sess *mem.Session[M], sessionID string) fu
 			return ctx.Err()
 		}
 
-		// Persist all intermediate messages (assistant text+tool calls, tool results).
-		// The intermediates already include the final assistant text message if any,
-		// so we don't need to persist lastContent separately.
+		// Persist messages to session history（v4.10.1 关键修复：去重 + 单一最终回复）
+		//
+		// 之前逻辑：intermediates 全部 append → session history 里会有"中间 chatter"
+		//   block 1（"我帮您查一下"）+ tool result + block 2（"好的，已为您预约明天 10 点"） + ...
+		//   下次 LLM 看到自己之前的 chatter → "接着说" → 重复 / 不相干
+		//
+		// 现在逻辑（v4.10.1）：
+		//   - 跳过"纯文本 assistant"消息（中间 chatter，role=assistant 且无 tool_calls）
+		//   - 保留 tool_calls 的 assistant + tool result
+		//   - 末尾用 lastContent 补一条 NewAssistant 作为最终回复
+		//   - 效果：session history 变成"user 消息 + tool calls + tool results + 最终回复"
+		//     下次 LLM 不会重复 / 不会因历史 chatter 偏题
+		persistedCount := 0
 		for _, msg := range result.intermediates {
+			// v4.10.1：过滤掉"纯文本 assistant"中间 chatter（详见 shouldPersistIntermediate 注释）
+			if !shouldPersistIntermediate(msg) {
+				log.Printf("[persist] skip chatter assistant: %d chars", len(msgops.AssistantText(msg)))
+				continue
+			}
 			if appendErr := sess.Append(msg); appendErr != nil {
 				log.Printf("warn: failed to persist intermediate message: %v", appendErr)
+				continue
+			}
+			persistedCount++
+		}
+		log.Printf("[persist] session=%s persisted=%d skipped_chatter=%d lastContent=%d chars",
+			sessionID, persistedCount, len(result.intermediates)-persistedCount, len(result.lastContent))
+
+		// 补最终回复（如果 lastContent 非空，且 intermediates 里没已经存过的相同内容）
+		if result.lastContent != "" {
+			alreadyFinal := false
+			msgs := sess.GetMessages()
+			if n := len(msgs); n > 0 {
+				if msgops.RoleOf(msgs[n-1]) == "assistant" && msgops.AssistantText(msgs[n-1]) == result.lastContent {
+					alreadyFinal = true
+				}
+			}
+			if !alreadyFinal {
+				if err := sess.Append(msgops.NewAssistant[M](result.lastContent, nil)); err != nil {
+					log.Printf("warn: failed to persist final assistant: %v", err)
+				}
 			}
 		}
 		if result.interruptID != "" {

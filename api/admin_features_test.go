@@ -585,3 +585,78 @@ func extractField(body, key string) string {
 	}
 	return rest[:j]
 }
+
+// ===================== v4.10.1 chain 接口 role 约束 =====================
+//
+// 之前 v4.0 MVP 留的"任何已登录 admin 都能看多店看板"是权限泄漏——单店 owner
+// 能看全平台所有店。v4.10.1 改用 auth.RequireRole(RolePlatformAdmin) 强约束。
+// 配合 storage 层 owner 默认矩阵里不列 view:chain_dashboard，双层防御。
+
+func TestChainWeeklyReport_OwnerIsForbidden_403(t *testing.T) {
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report/chain", nil,
+		withClaims(adminClaims("shop-1")), // role=owner
+	)
+	status, body := runWithRole(t, []string{storage.RolePlatformAdmin}, getChainWeeklyReportHandler, ctx)
+	if status != statusForbidden {
+		t.Errorf("owner 应返回 403，got %d body=%s", status, body)
+	}
+}
+
+func TestChainWeeklyReport_PlatformAdminOK_200(t *testing.T) {
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report/chain", nil)
+	setClaimsForAdmin(ctx, 99, "shop-1", storage.RolePlatformAdmin)
+	status, body := runWithRole(t, []string{storage.RolePlatformAdmin}, getChainWeeklyReportHandler, ctx)
+	if status != statusOK {
+		t.Errorf("platform_admin 应返回 200，got %d body=%s", status, body)
+	}
+}
+
+// ===================== v4.10.1 单店周报 owner / staff 都能看（跨店周报仍只 platform_admin）=====================
+
+func TestWeeklyReport_OwnerCanView_200(t *testing.T) {
+	// v4.10.1：单店周报 owner 该看自己店经营数据 → 200
+	setupAPITestDB(t)
+	shopID := newShopID()
+	storage.MakeShop(t, shopID, "")
+	admin := storage.MakeAdminWithRole(t, shopID, "owner1", storage.RoleOwner)
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report", nil)
+	setClaimsForAdmin(ctx, admin.ID, shopID, storage.RoleOwner)
+	status, body := runWithPerm(t, storage.PermViewWeeklyReport, getWeeklyReportHandler, ctx)
+	if status != statusOK {
+		t.Errorf("owner 列表单店周报应返回 200，got %d body=%s", status, body)
+	}
+}
+
+func TestWeeklyReport_StaffIsForbidden_403(t *testing.T) {
+	// v4.10.1：staff 默认没 view:weekly_report（经营数据敏感，staff 故意禁掉）
+	setupAPITestDB(t)
+	shopID := newShopID()
+	storage.MakeShop(t, shopID, "")
+	admin := storage.MakeAdminWithRole(t, shopID, "staff1", storage.RoleStaff)
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report", nil)
+	setClaimsForAdmin(ctx, admin.ID, shopID, storage.RoleStaff)
+	status, body := runWithPerm(t, storage.PermViewWeeklyReport, getWeeklyReportHandler, ctx)
+	if status != statusForbidden {
+		t.Errorf("staff 列表单店周报应返回 403（staff 没 view:weekly_report），got %d body=%s", status, body)
+	}
+}
+
+func TestWeeklyReport_PlatformAdminCanView_200(t *testing.T) {
+	// v4.10.1：platform_admin 也能看单店周报
+	setupAPITestDB(t)
+	shopID := newShopID()
+	storage.MakeShop(t, shopID, "")
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report", nil)
+	setClaimsForAdmin(ctx, 99, shopID, storage.RolePlatformAdmin)
+	status, body := runWithPerm(t, storage.PermViewWeeklyReport, getWeeklyReportHandler, ctx)
+	if status != statusOK {
+		t.Errorf("platform_admin 列表单店周报应返回 200，got %d body=%s", status, body)
+	}
+}
+
+// 跨店周报（/weekly-report/chain）继续走 RequireRole(platform_admin)
+// 已有 TestChainWeeklyReport_OwnerIsForbidden_403 / TestChainWeeklyReport_PlatformAdminOK_200 覆盖

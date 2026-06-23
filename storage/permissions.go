@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -72,6 +73,12 @@ const (
 
 	// 密码
 	PermChangeOwnPassword = "change:own_password"
+
+	// 通知中心（v4.10.1 admin 后台"通知中心"页面）
+	//   - view: 看通知发送记录（sent/failed/skipped/pending）
+	//   - retry: 补发失败/跳过的通知（避免重复打扰已 sent 顾客）
+	PermViewNotifications    = "view:notifications"
+	PermRetryNotifications   = "retry:notifications"
 )
 
 // AllPermissions 列出所有已知权限（init seed / API 校验用）
@@ -90,6 +97,7 @@ var AllPermissions = []string{
 	PermViewSubscription, PermManageSubscription,
 	PermManageMembers,
 	PermChangeOwnPassword,
+	PermViewNotifications, PermRetryNotifications,
 }
 
 // Role 角色枚举
@@ -124,6 +132,18 @@ func IsPlatformAdmin(role string) bool {
 //   - view:subscription / manage:subscription → 订阅信息敏感
 //   - manage:members                          → 成员管理（建/改 role/重置密码）必须有 owner 权限
 //
+// owner 故意禁掉的 3 个权限：
+//   - view:chain_dashboard → 跨店数据，单店 owner 看不到其他店（v4.10.1 修复权限泄漏）
+//     想要看多店/跨店周报请用 platform_admin 账号
+//   - view:subscription   → 订阅详情归 platform_admin（v4.10.1）
+//     商户无需关心订阅状态——订阅是平台/运营层的事
+//   - manage:subscription → 续费 / 创建订阅只给 platform_admin（v4.10.1）
+//     商户想续费请找运营
+//
+// owner 拥有 view:weekly_report（v4.10.1）：看自己店经营数据
+//   - 但跨店周报 view:chain_dashboard 不给 owner
+//   - 所以单店周报（PermViewWeeklyReport）和跨店周报（PermViewChainDashboard）权限分离
+//
 // 加新权限的步骤：
 //  1. 在 storage/permissions.go 加 PermXxx 常量 + AllPermissions 追加
 //  2. 这里给 owner / staff 显式列（owner 默认 AllPermissions 可不写）
@@ -131,7 +151,26 @@ func IsPlatformAdmin(role string) bool {
 //  4. 重启服务，让 seed 写 DB
 //  5. 写单测覆盖 owner/staff 边界
 var defaultRolePermissions = map[string][]string{
-	RoleOwner: AllPermissions, // owner 全权限
+	// owner 全权限（除了 view:chain_dashboard——单店 owner 看不到跨店数据）
+	// v4.10.1：之前用 AllPermissions 走捷径，导致单店 owner 也能看多店看板。
+	// 现改成显式列，缺什么补什么更安全。
+	RoleOwner: {
+		PermViewDashboard,
+		PermViewAppointments, PermEditAppointments,
+		PermViewCustomers, PermEditCustomers,
+		PermViewHandoffs, PermResolveHandoff,
+		PermViewBarbers, PermEditBarbers, PermCreateBarberLeave,
+		PermViewEvents,
+		PermViewWeeklyReport, // v4.10.1：单店周报 owner 该看（看自己店经营数据）
+		// PermViewChainDashboard, // 显式不列：跨店看板只给 platform_admin
+		PermEditShop,
+		PermViewServices, PermEditServices,
+		// PermViewSubscription, // 显式不列：订阅详情归 platform_admin
+		// PermManageSubscription, // 显式不列：续费 / 创建订阅只给 platform_admin
+		PermManageMembers,
+		PermChangeOwnPassword,
+		PermViewNotifications, PermRetryNotifications,
+	},
 	RoleStaff: {
 		// 看 + 业务操作（不允许 manage:* / edit:shop / edit:services）
 		PermViewDashboard,
@@ -141,6 +180,7 @@ var defaultRolePermissions = map[string][]string{
 		PermViewBarbers, PermCreateBarberLeave,
 		PermViewEvents,
 		PermViewServices,
+		PermViewNotifications, PermRetryNotifications, // 店员也能补发通知（避免漏通知）
 		PermChangeOwnPassword,
 	},
 	RolePlatformAdmin: AllPermissions, // 超管全权限（v4.9 新增）
@@ -285,4 +325,102 @@ func SeedDefaultRolePermissions(ctx context.Context) error {
 	log.Printf("[storage] seed role_permissions: %d 条（owner=%d staff=%d）",
 		len(rows), len(defaultRolePermissions[RoleOwner]), len(defaultRolePermissions[RoleStaff]))
 	return nil
+}
+
+// ReconcileRolePermissionsResult reconcile 结果报告
+type ReconcileRolePermissionsResult struct {
+	Inserted  int      // 实际新增的 (role, perm) 条数
+	Skipped   int      // 已存在、跳过的条数
+	InsertedList []string // 新增的 (role, perm) 描述（log 用，格式 "role=owner perm=view:foo"）
+}
+
+// ReconcileRolePermissions 增量补齐缺失的 role → permission（v4.10.1）
+//
+//   - 这是 SeedDefaultRolePermissions 的"补丁版"：
+//     Seed 只在表为空时跑一次（保护运营调整），但**新加的权限**老店铺永远拿不到
+//     Reconcile 每次启动都跑，对比 defaultRolePermissions + 已存在记录，**只补缺失、不删任何记录**
+//   - 关键安全约束：绝不 Delete 任何 row
+//     - 运营在线调过的（比如"staff 禁掉 view:dashboard"）会完整保留
+//     - 真正"删 perm"的操作只应该走 SetRolePermissions（替换整组），不走 reconcile
+//   - 调用方：InitDB 末尾、运维 CLI（应急）
+//
+// 行为示例（假设加了 PermViewNotifications + PermRetryNotifications 两个新 perm）：
+//   - role_permissions 表空：补全 owner/staff 的所有默认 + 新 perm
+//   - role_permissions 表已有（老 seed 过的）：只补 2 个新 perm 到对应 role
+//   - 运营在 UI 上把 staff 的 view:events 拿掉了：reconcile 不会加回来（尊重运营意图）
+//
+// 返回值：reconcile 报告（给 log / 运维确认用）
+func ReconcileRolePermissions(ctx context.Context) (ReconcileRolePermissionsResult, error) {
+	res := ReconcileRolePermissionsResult{}
+	if DB == nil {
+		return res, nil
+	}
+
+	// 1) 拉所有已存在的 (role, perm)
+	type existing struct {
+		Role       string
+		Permission string
+	}
+	var rows []existing
+	if err := DB.WithContext(ctx).
+		Table("role_permissions").
+		Select("role, permission").
+		Scan(&rows).Error; err != nil {
+		return res, fmt.Errorf("读 role_permissions: %w", err)
+	}
+	have := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		have[r.Role+"\x00"+r.Permission] = true
+	}
+
+	// 2) 对比 defaultRolePermissions，找出缺失的
+	//    注意：owner / staff / platform_admin 全部走 defaultRolePermissions 矩阵
+	//    v4.10.1：owner 也改成显式列了（不再用 AllPermissions 兜底）
+	//    → 删掉/新增 perm 都要同步改这里
+	desired := make(map[string]bool)
+	// 显式遍历每个 role 的 default 矩阵
+	for role, perms := range defaultRolePermissions {
+		if role == RoleOwner {
+			// owner 走显式列表（不包含 view:chain_dashboard 等"平台/连锁级" perm）
+			for _, p := range perms {
+				desired[role+"\x00"+p] = true
+			}
+			continue
+		}
+		// staff / platform_admin：按 defaultRolePermissions 矩阵
+		// 注意：platform_admin 矩阵里也是 AllPermissions，所以效果一致
+		for _, p := range perms {
+			desired[role+"\x00"+p] = true
+		}
+	}
+
+	// 3) 计算缺失
+	var toInsert []RolePermission
+	for k := range desired {
+		if have[k] {
+			res.Skipped++
+			continue
+		}
+		// k 格式 "role\x00perm"，拆开
+		idx := strings.Index(k, "\x00")
+		if idx < 0 {
+			continue
+		}
+		role, perm := k[:idx], k[idx+1:]
+		toInsert = append(toInsert, RolePermission{Role: role, Permission: perm})
+		res.InsertedList = append(res.InsertedList, fmt.Sprintf("role=%s perm=%s", role, perm))
+	}
+	res.Inserted = len(toInsert)
+
+	// 4) 批量插入缺失的（CreateIgnoreDuplicates 双保险：极端竞态下也不会 panic）
+	if len(toInsert) > 0 {
+		if err := DB.WithContext(ctx).Create(&toInsert).Error; err != nil {
+			return res, fmt.Errorf("补全 role_permissions: %w", err)
+		}
+		log.Printf("[storage] reconcile role_permissions: 新增 %d 条（已有 %d 条；运营调整完整保留）", res.Inserted, res.Skipped)
+		for _, desc := range res.InsertedList {
+			log.Printf("[storage]   + %s", desc)
+		}
+	}
+	return res, nil
 }

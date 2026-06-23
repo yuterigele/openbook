@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yuterigele/openbook/auth"
-	"github.com/yuterigele/openbook/storage"
 	"github.com/cloudwego/hertz/pkg/app"
+
+	"github.com/yuterigele/openbook/storage"
 )
 
 // ChainDashboardResponse 跨店看板响应（v4.0 PRD §11.10）
@@ -121,18 +121,14 @@ func resolveWindowBounds(now time.Time, window string) (time.Time, time.Time) {
 // Query 参数：
 //   - window：可选；默认 month；非法值返回 400
 //
-// 鉴权策略（v4.0 MVP，v4.1 不变）：
-//   - 当前实现：任何已登录的 admin 都能访问（role != ""）
-//   - 后续要做细粒度控制：要求 role="platform_admin"（待产品定义清晰后）
-//   - 文档里写明这一权衡，避免后续误以为"默认是 owner 限定"
+// 鉴权策略（v4.10.1 修复）：
+//   - 路由层用 auth.RequireRole(RolePlatformAdmin) 强约束，只放行 platform_admin
+//   - 之前 v4.0 MVP 留的"任何已登录的 admin 都能看"是权限泄漏——单店 owner 能看全平台
+//   - 现在已经修复：单店 owner 路由层就 403
+//   - 路由层 RequireRole 已经覆盖"未登录 + 角色不对"两种情况，handler 内不再重复校验
 func chainDashboardHandler(ctx context.Context, c *app.RequestContext) {
 	if storage.DB == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})
-		return
-	}
-	cl := auth.GetClaims(c)
-	if cl == nil || cl.Role == "" {
-		c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 	window := parseWindow(c.Query("window"))

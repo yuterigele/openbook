@@ -197,6 +197,19 @@ func runWithPerm(t *testing.T, perm string, handler func(ctx context.Context, c 
 	return ctx.Response.StatusCode(), string(ctx.Response.Body())
 }
 
+// runWithRole 模拟 Hertz 中间件链：先跑 RequireRole(...allowed)，放行则跑业务 handler
+//
+// v4.10.1 新增：用于测试"按 role 强约束"接口（多店看板等只给 platform_admin 的）
+// 跟 runWithPerm 一样手动模拟中间件链
+func runWithRole(t *testing.T, allowedRoles []string, handler func(ctx context.Context, c *app.RequestContext), ctx *app.RequestContext) (int, string) {
+	t.Helper()
+	auth.RequireRole(allowedRoles...)(context.Background(), ctx)
+	if !ctx.IsAborted() {
+		handler(context.Background(), ctx)
+	}
+	return ctx.Response.StatusCode(), string(ctx.Response.Body())
+}
+
 // jsonRaw is a tiny helper for clarity at call sites.
 func jsonRaw(s string) []byte {
 	if s == "" {

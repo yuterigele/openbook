@@ -97,6 +97,31 @@ func (r *Router) Lookup(corpID string) (*ShopCrypto, bool) {
 	return sc, ok
 }
 
+// LookupByShopID 按 ShopID 找 ShopCrypto（用于 leave notify 多店路由）
+//
+// 场景：某顾客来自 Shop A，但 router 是按 corpID 索引的；
+// appt/customer 拿到的是 shop_id，需要反查 CorpID → Client。
+//
+// 返回：
+//   - (*ShopCrypto, true)  找到
+//   - (nil, false)         未注册（多店架构下可能是新店未 ReloadFromDB）
+//
+// 注意：O(n) 复杂度，Router 不会很大（一家公司的店铺数有限），
+// 如需优化可以再开一个 shopID→corpID 的辅助 map。
+func (r *Router) LookupByShopID(shopID string) (*ShopCrypto, bool) {
+	if shopID == "" {
+		return nil, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, sc := range r.shops {
+		if sc.ShopID == shopID {
+			return sc, true
+		}
+	}
+	return nil, false
+}
+
 // LookupCorpIDByPtr 用 ShopCrypto 指针反查 corpID（O(n)）
 func (r *Router) LookupCorpIDByPtr(target *ShopCrypto) string {
 	if target == nil {

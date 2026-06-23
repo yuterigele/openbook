@@ -409,9 +409,36 @@ func TestChainEventFunnel_NormalizesIdleSlotPush(t *testing.T) {
 func TestChainDashboardHandler_NoClaims_401(t *testing.T) {
 	setupAPITestDB(t)
 	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil)
-	status, _ := runHandler(t, chainDashboardHandler, ctx)
+	// v4.10.1：路由用 RequireRole(RolePlatformAdmin)，无 claims → 401
+	status, body := runWithRole(t, []string{storage.RolePlatformAdmin}, chainDashboardHandler, ctx)
 	if status != statusUnauthorized {
-		t.Errorf("未登录应返回 401，got %d", status)
+		t.Errorf("未登录应返回 401，got %d body=%s", status, body)
+	}
+}
+
+func TestChainDashboardHandler_OwnerIsForbidden_403(t *testing.T) {
+	// v4.10.1：单店 owner 不能看多店看板（权限泄漏修复）
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil,
+		withClaims(adminClaims("shop-1")), // role=owner
+	)
+	status, body := runWithRole(t, []string{storage.RolePlatformAdmin}, chainDashboardHandler, ctx)
+	if status != statusForbidden {
+		t.Errorf("owner 应返回 403，got %d body=%s", status, body)
+	}
+}
+
+func TestChainDashboardHandler_PlatformAdminOK_200(t *testing.T) {
+	// v4.10.1：platform_admin 应该能进
+	setupAPITestDB(t)
+	storage.MakeShop(t, "shop-1", "")
+	// 注意：adminClaims 默认 role=owner；用 setClaimsForAdmin 覆盖
+	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil)
+	setClaimsForAdmin(ctx, 99, "shop-1", storage.RolePlatformAdmin)
+	status, body := runWithRole(t, []string{storage.RolePlatformAdmin}, chainDashboardHandler, ctx)
+	if status != statusOK {
+		t.Errorf("platform_admin 应返回 200，got %d body=%s", status, body)
 	}
 }
 
@@ -423,10 +450,10 @@ func TestChainDashboardHandler_HappyPath(t *testing.T) {
 	today := now.Format("2006-01-02")
 	seedAppointment(t, "shop-1", "Tony", today, "10:00", "completed")
 
-	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil,
-		withClaims(adminClaims("shop-1")),
-	)
-	status, body := runHandler(t, chainDashboardHandler, ctx)
+	// v4.10.1：走中间件模拟真实 HTTP 路径，用 platform_admin 才能进
+	ctx := newAPIContext(t, "GET", "/api/admin/chain/dashboard", nil)
+	setClaimsForAdmin(ctx, 99, "shop-1", storage.RolePlatformAdmin)
+	status, body := runWithRole(t, []string{storage.RolePlatformAdmin}, chainDashboardHandler, ctx)
 	if status != statusOK {
 		t.Fatalf("happy path 应返回 200，got %d, body=%s", status, body)
 	}

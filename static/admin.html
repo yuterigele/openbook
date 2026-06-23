@@ -199,6 +199,27 @@
     .badge-warning { background: #fffbeb; color: var(--amber); }
     .badge-info { background: #f0fdfa; color: var(--teal); }
 
+    /* v4.10.1 通知中心专用样式 */
+    .notif-table .row-failed {
+      background: rgba(254, 226, 226, 0.4);
+    }
+    .notif-table .row-failed:hover {
+      background: rgba(254, 226, 226, 0.7);
+    }
+    .btn-warning {
+      background: var(--amber);
+      color: #fff;
+      border-color: var(--amber);
+    }
+    .btn-warning:hover:not(:disabled) {
+      background: #b45309;
+      border-color: #b45309;
+    }
+    .btn-warning:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     .table {
       width: 100%; border-collapse: separate; border-spacing: 0;
       font-size: 13px;
@@ -1123,6 +1144,13 @@
         <span>请假管理</span>
         <span class="badge badge-warning" id="activeLeavesBadge" style="display:none;">0</span>
       </a>
+      <a class="nav-item" data-view="notifications" href="#notifications">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <span>通知中心</span>
+        <span class="badge badge-noshow" id="failedNotifsBadge" style="display:none;">0</span>
+      </a>
       <a class="nav-item" data-view="events" href="#events">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -1142,12 +1170,21 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/>
           <line x1="16" y1="2" x2="16" y2="6"/>
-          <line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="2"/>
           <line x1="3" y1="10" x2="21" y2="10"/>
           <line x1="8" y1="14" x2="16" y2="14"/>
           <line x1="8" y1="18" x2="13" y2="18"/>
         </svg>
-        <span>周报</span>
+        <span>单店周报</span>
+      </a>
+      <a class="nav-item" data-view="chain-weekly" href="#chain-weekly">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18M5 21V7l7-4 7 4v14"/>
+          <line x1="12" y1="9" x2="12" y2="9"/>
+          <line x1="12" y1="13" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12" y2="17"/>
+        </svg>
+        <span>跨店周报</span>
       </a>
       <a class="nav-item" data-view="customers" href="#customers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -1265,6 +1302,8 @@ const App = (() => {
     barbers: [],
     leaves: [],
     leavesByBarber: {},
+    notifications: [],     // v4.10.1 通知中心列表
+    notifFilter: { status: '', type: '', leave_id: '' },
     chainData: null,
     shop: null,           // v4.4 店铺信息
     handoffs: [],         // v4.4 转人工列表
@@ -1363,7 +1402,9 @@ const App = (() => {
       dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
       leaves: '请假管理', events: '事件日志', chain: '多店看板',
       handoffs: '转人工', customers: '顾客', services: '服务目录',
-      subscription: '订阅', shop: '店铺设置', weekly: '周报'
+      subscription: '订阅', shop: '店铺设置', weekly: '单店周报',
+      'chain-weekly': '跨店周报',
+      notifications: '通知中心'
     };
     $('#crumbView').textContent = labels[v] || v;
     render();
@@ -1383,6 +1424,8 @@ const App = (() => {
     else if (state.view === 'subscription') c.innerHTML = renderSubscription();
     else if (state.view === 'shop') c.innerHTML = renderShop();
     else if (state.view === 'weekly') c.innerHTML = renderWeekly();
+    else if (state.view === 'chain-weekly') c.innerHTML = renderChainWeekly();
+    else if (state.view === 'notifications') c.innerHTML = renderNotifications();
   }
 
   function renderEmpty(title, hint, iconName = 'inbox') {
@@ -2092,11 +2135,13 @@ const App = (() => {
 
   // ---------- Subscription view (v4.4) ----------
   function renderSubscription() {
+    // v4.10.1：只有 platform_admin 能进这个页面（前端 nav-item 已按 role 隐藏）
+    //   商户不需要看订阅详情，订阅是平台/运营层的事
     const list = state.subscription || [];
     const current = list.find(s => s.is_current);
     return `<div class="view-head">
       <h1>订阅</h1>
-      <p>当前订阅 + 历次续费记录</p>
+      <p>平台超管视图：当前订阅 + 历次续费记录</p>
     </div>
 
     ${current ? `<div class="card card-pad section">
@@ -2204,9 +2249,12 @@ const App = (() => {
 
   // ---------- Weekly report view (v4.3 PRD §11.12 增量) ----------
   function renderWeekly() {
+    // v4.10.1：拆成两个独立 view——renderWeekly（单店周报）+ renderChainWeekly（跨店周报）
+    // 单店周报 owner / staff 都能看（自己店经营数据）
+    // 跨店周报独立 nav-item，仅 platform_admin 可见
     return `<div class="view-head">
-      <h1>周报</h1>
-      <p>最近 7 天经营数据 + 周环比。跨店看底部"连锁汇总"。每周一 9:00 自动邮件到 REPORT_TO</p>
+      <h1>单店周报</h1>
+      <p>本店最近 7 天经营数据 + 周环比。跨店汇总请到「跨店周报」页（仅平台超管可见）</p>
     </div>
     <div class="filterbar">
       <div class="field">
@@ -2221,18 +2269,27 @@ const App = (() => {
 
     <div id="weeklyBody">
       ${state.weekly ? renderWeeklyBody(state.weekly) : '<div class="card card-pad">' + renderSkeleton(4) + '</div>'}
+    </div>`;
+  }
+
+  function renderChainWeekly() {
+    // v4.10.1：跨店周报独立页，仅 platform_admin 可见
+    return `<div class="view-head">
+      <h1>跨店周报</h1>
+      <p>全平台所有店铺本周合计 + 门店明细。平台超管视图</p>
+    </div>
+    <div class="filterbar">
+      <div class="field">
+        <label>截止日</label>
+        <input class="input" type="date" id="chainWeeklyAsOf" value="${esc(state.weeklyAsOf || todayStr())}" />
+      </div>
+      <button class="btn btn-primary" onclick="App.loadChainWeekly()">查询</button>
+      <span class="spacer"></span>
+      <span class="text-muted" id="chainWeeklyTs" style="font-size:12px;"></span>
     </div>
 
-    <div class="section" id="chainWeeklySection">
-      <div class="card">
-        <div class="section-head card-pad-sm" style="border-bottom:1px solid var(--line);">
-          <h2 style="font-size:14px;">连锁汇总</h2>
-          <span class="sub">所有店铺本周合计</span>
-        </div>
-        <div id="chainWeeklyBody" style="padding:16px;">
-          ${state.chainWeekly ? renderChainWeeklyBody(state.chainWeekly) : '<div class="text-muted" style="font-size:12px;">加载中…</div>'}
-        </div>
-      </div>
+    <div class="card card-pad">
+      ${state.chainWeekly ? renderChainWeeklyBody(state.chainWeekly) : '<div>' + renderSkeleton(4) + '</div>'}
     </div>`;
   }
 
@@ -2347,6 +2404,135 @@ const App = (() => {
       </table>`;
   }
 
+  // ---------- Notifications view (v4.10.1 PRD §11.7 P4 配套：admin 后台看 leave notify 发送结果 + 补发) ----------
+  //
+  // 列出本店所有 leave 通知（sent / failed / skipped / pending），带状态/类型/leave 过滤
+  // failed / pending / skipped 显示"补发"按钮
+  //
+  // 设计要点：
+  //   - 用 status / type / leave_id 三个下拉过滤，URL 也带 query 方便回链
+  //   - 顶部 "一键补发" 按钮只对 status=failed 的总数 > 0 时启用（避免空操作）
+  //   - 失败行高亮（红底）让商户一眼看到哪些没发出去
+  //   - 重发按钮 disabled while pending（防双击）
+
+  function renderNotifications() {
+    const list = state.notifications || [];
+    const f = state.notifFilter || {};
+    const failedCount = list.filter(n => n.status === 'failed').length;
+    const totalCount = list.length;
+
+    return `
+      <div class="view-head">
+        <h1>通知中心</h1>
+        <p>理发师请假通知顾客的发送记录 · 失败/跳过可一键补发</p>
+      </div>
+
+      <div class="filterbar">
+        <div class="field">
+          <label>状态</label>
+          <select class="select" id="notifStatus" onchange="App.loadNotifications()">
+            <option value="" ${f.status === '' ? 'selected' : ''}>全部</option>
+            <option value="failed" ${f.status === 'failed' ? 'selected' : ''}>失败 (failed)</option>
+            <option value="skipped" ${f.status === 'skipped' ? 'selected' : ''}>跳过 (skipped)</option>
+            <option value="sent" ${f.status === 'sent' ? 'selected' : ''}>成功 (sent)</option>
+            <option value="pending" ${f.status === 'pending' ? 'selected' : ''}>待发 (pending)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>类型</label>
+          <select class="select" id="notifType" onchange="App.loadNotifications()">
+            <option value="" ${f.type === '' ? 'selected' : ''}>全部</option>
+            <option value="leave_cancel" ${f.type === 'leave_cancel' ? 'selected' : ''}>请假·取消</option>
+            <option value="leave_reschedule" ${f.type === 'leave_reschedule' ? 'selected' : ''}>请假·改派</option>
+            <option value="leave_no_contact" ${f.type === 'leave_no_contact' ? 'selected' : ''}>请假·无联系方式</option>
+          </select>
+        </div>
+        <div class="field" style="min-width:220px;">
+          <label>关联请假 ID</label>
+          <input class="input" id="notifLeaveId" placeholder="可选 · 留空看全部" value="${esc(f.leave_id || '')}" />
+        </div>
+        <button class="btn btn-primary" onclick="App.loadNotifications()">查询</button>
+        <span class="spacer"></span>
+        ${failedCount > 0
+          ? `<button class="btn btn-warning" onclick="App.retryAllFailedNotifications()" id="retryAllBtn">一键补发 ${failedCount} 条失败</button>`
+          : `<button class="btn btn-ghost" disabled>无失败通知</button>`}
+        <span class="text-muted" id="notifTs" style="font-size:12px;"></span>
+      </div>
+
+      <div class="card">
+        <div style="overflow-x:auto;">
+          ${totalCount === 0
+            ? '<div style="padding:20px;">' + renderEmpty('还没有通知记录', '理发师请假时会自动写入；或调整上方筛选', 'bell') + '</div>'
+            : renderNotificationTable(list)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderNotificationTable(rows) {
+    // 状态徽章：sent=绿 / failed=红 / skipped=灰 / pending=黄
+    const statusBadge = (s) => {
+      switch (s) {
+        case 'sent': return '<span class="badge badge-completed">已发送</span>';
+        case 'failed': return '<span class="badge badge-noshow">失败</span>';
+        case 'skipped': return '<span class="badge badge-cancelled">跳过</span>';
+        case 'pending': return '<span class="badge badge-warning">待发</span>';
+        default: return '<span class="badge">' + esc(s) + '</span>';
+      }
+    };
+    // 通道徽章
+    const channelLabel = (c) => {
+      switch (c) {
+        case 'wecom_kf': return '微信客服';
+        case 'wecom_app': return '企业应用';
+        case 'sms': return '短信';
+        case 'pending': return '—';
+        default: return c || '—';
+      }
+    };
+    // 类型标签
+    const typeLabel = (t) => {
+      switch (t) {
+        case 'leave_cancel': return '<span class="badge">取消</span>';
+        case 'leave_reschedule': return '<span class="badge badge-info">改派</span>';
+        case 'leave_no_contact': return '<span class="badge badge-warning">无联系方式</span>';
+        default: return '<span class="badge">' + esc(t) + '</span>';
+      }
+    };
+    return `<table class="table notif-table">
+      <thead><tr>
+        <th>时间</th>
+        <th>类型</th>
+        <th>状态</th>
+        <th>通道</th>
+        <th>顾客</th>
+        <th>文案预览</th>
+        <th>尝试</th>
+        <th>错误</th>
+        <th class="num">操作</th>
+      </tr></thead>
+      <tbody>${rows.map(n => {
+        const canRetry = n.status === 'failed' || n.status === 'skipped' || n.status === 'pending';
+        const rowClass = n.status === 'failed' ? 'class="row-failed"' : '';
+        return `<tr ${rowClass}>
+          <td class="text-mono" style="white-space:nowrap;">${esc((n.created_at || '').slice(0, 19).replace('T', ' '))}</td>
+          <td>${typeLabel(n.type)}</td>
+          <td>${statusBadge(n.status)}</td>
+          <td style="font-size:12px;">${channelLabel(n.channel)}</td>
+          <td class="text-mono" style="font-size:11px;">${esc(n.customer_id || '—')}</td>
+          <td class="text-muted" style="max-width:280px;font-size:12px;line-height:1.5;">${esc((n.text_preview || '').slice(0, 80))}${(n.text_preview || '').length > 80 ? '…' : ''}</td>
+          <td class="text-mono" style="text-align:center;">${n.attempt_count || 0}</td>
+          <td class="text-muted" style="max-width:200px;font-size:11px;line-height:1.5;">${esc((n.error || '').slice(0, 100))}</td>
+          <td class="num" style="white-space:nowrap;">
+            ${canRetry
+              ? `<button class="btn btn-sm btn-warning" onclick="App.retryOneNotification(${n.id}, this)" id="retryBtn${n.id}">补发</button>`
+              : `<span class="text-muted" style="font-size:11px;">—</span>`}
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+
   // ---------- Icons ----------
   function icon(name, size = 18) {
     const s = size;
@@ -2362,6 +2548,8 @@ const App = (() => {
       user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
       building: '<path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/><line x1="9" y1="9" x2="9" y2="9"/><line x1="9" y1="12" x2="9" y2="12"/><line x1="9" y1="15" x2="9" y2="15"/><line x1="9" y1="18" x2="9" y2="18"/>',
       activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+      bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+      mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
     };
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="${c}">${paths[name] || ''}</svg>`;
   }
@@ -2924,9 +3112,40 @@ const App = (() => {
     $('#userAvatar').textContent = (shop.name || u.shop_id || 'A').slice(0, 1).toUpperCase();
     $('#crumbShop').textContent = shop.name || u.shop_id || '';
     $('#livePill').style.display = '';
+    // v4.10.1：按 role 隐藏 nav-item
+    //   - "多店看板" 只给 platform_admin（单店 owner 看不到自己管不到的其他店）
+    //   - 避免菜单显示但点击 403 的体验事故
+    applyRoleBasedNavVisibility(u.role || 'owner');
     setView('dashboard');
     refreshAll();
     startAutoRefresh();
+  }
+
+  // v4.10.1 按 role 控制 nav-item 可见性
+  //
+  // 设计：
+  //   - 后端用 auth.RequireRole 强约束（多店看板只给 platform_admin）
+  //   - 前端同步隐藏菜单项，避免显示但点击 403 的体验事故
+  //   - 加新 nav-item 时如果也有 role 约束，加到 ROLES_REQUIRED 字典里
+  //
+  // 约束：隐藏是单方向的——platform_admin 仍能看到所有 owner/staff 也能用的 nav-item
+  const ROLES_REQUIRED = {
+    'chain': ['platform_admin'],         // 多店看板：只 platform_admin
+    'subscription': ['platform_admin'],   // 订阅：只 platform_admin（v4.10.1 商户不需要看订阅）
+    'chain-weekly': ['platform_admin'],   // 跨店周报：只 platform_admin（v4.10.1）
+    // 'weekly' 不列：单店周报 owner / staff 都能看（v4.10.1 拆出来）
+  };
+  function applyRoleBasedNavVisibility(role) {
+    $$('.nav-item[data-view]').forEach(el => {
+      const view = el.dataset.view;
+      const required = ROLES_REQUIRED[view];
+      if (!required) return; // 没约束 → 所有人可见
+      if (required.includes(role)) {
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+      }
+    });
   }
 
   function startAutoRefresh() {
@@ -2953,6 +3172,7 @@ const App = (() => {
         loadUpcoming(silent),
         loadLeavesBadge(),
         loadHandoffsBadge(),
+        updateFailedNotifsBadge(),
         loadAlerts(silent),
       ]);
     } finally { state.loading = false; }
@@ -3110,6 +3330,83 @@ const App = (() => {
   function toggleResolvedHandoffs(show) {
     state.showResolvedHandoffs = show;
     if (state.view === 'handoffs') render();
+  }
+
+  // v4.10.1 通知中心
+  async function loadNotifications() {
+    // 同步 state（从 DOM 读 filter）
+    state.notifFilter = {
+      status:  $('#notifStatus')?.value || '',
+      type:    $('#notifType')?.value || '',
+      leave_id: $('#notifLeaveId')?.value || '',
+    };
+    if (state.view === 'notifications') render();
+    try {
+      const params = new URLSearchParams();
+      if (state.notifFilter.status) params.set('status', state.notifFilter.status);
+      if (state.notifFilter.type) params.set('type', state.notifFilter.type);
+      if (state.notifFilter.leave_id) params.set('leave_id', state.notifFilter.leave_id);
+      params.set('limit', '200');
+      const data = await api('/api/admin/notifications?' + params.toString());
+      state.notifications = Array.isArray(data) ? data : [];
+      const ts = $('#notifTs'); if (ts) ts.textContent = '最近刷新：' + new Date().toLocaleTimeString();
+      if (state.view === 'notifications') render();
+      // 同时刷新侧栏 badge
+      updateFailedNotifsBadge();
+    } catch (e) {
+      if (state.view === 'notifications') showToast('通知加载失败：' + e.message, 'error');
+    }
+  }
+
+  // 单条补发（admin 后台"补发"按钮）
+  async function retryOneNotification(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
+    try {
+      const res = await api(`/api/admin/notifications/${id}/retry`, { method: 'POST' });
+      // res 可能是 409 already sent（不会到这里因为后端已经预先把按钮禁掉了）
+      // 或者 200 { id, new_status }
+      const ns = res && res.new_status;
+      if (ns === 'sent') showToast('已补发成功', 'success');
+      else if (ns === 'skipped') showToast('顾客仍无联系方式，已标 skipped', 'info');
+      else if (ns === 'failed') showToast('补发仍失败：' + (res.error || '未知错误'), 'error');
+      else showToast('补发完成：' + (ns || '未知'), 'info');
+      await loadNotifications();
+    } catch (e) {
+      // 409 already sent 等
+      showToast('补发失败：' + e.message, 'error');
+      await loadNotifications();
+    }
+  }
+
+  // 一键补发本店所有 failed leave 通知
+  async function retryAllFailedNotifications() {
+    const btn = $('#retryAllBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '批量补发中…（可能 5-15 秒）'; }
+    showToast('开始批量补发…', 'info');
+    try {
+      const res = await api('/api/admin/notifications/retry-batch', { method: 'POST' });
+      const suc = res.succeeded || 0;
+      const fail = res.failed || 0;
+      if (fail === 0) showToast(`批量补发完成：${suc} 条全部成功`, 'success');
+      else showToast(`批量补发完成：成功 ${suc} · 仍失败 ${fail}`, fail > suc ? 'error' : 'info');
+      await loadNotifications();
+    } catch (e) {
+      showToast('批量补发失败：' + e.message, 'error');
+      await loadNotifications();
+    }
+  }
+
+  // 失败通知数 badge（侧栏）
+  async function updateFailedNotifsBadge() {
+    try {
+      const data = await api('/api/admin/notifications?status=failed&limit=1');
+      const list = Array.isArray(data) ? data : [];
+      // 拿不到真实条数（只查了 1 条），拿全量更好
+      const all = await api('/api/admin/notifications?status=failed&limit=500');
+      const n = Array.isArray(all) ? all.length : 0;
+      const b = $('#failedNotifsBadge');
+      if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+    } catch (_) { /* silent */ }
   }
 
   // v4.4 新增 loader
@@ -3271,33 +3568,44 @@ const App = (() => {
         else if (view === 'shop') loadShop();
         else if (view === 'appointments') loadAppointments();
         else if (view === 'customers') loadCustomers();
+        else if (view === 'notifications') loadNotifications();
       }, 50);
     }
   }
 
   // v4.3 周报
   async function loadWeekly() {
+    // v4.10.1：只拉单店周报；跨店周报拆到独立 view / loadChainWeekly
     const asOf = $('#weeklyAsOf')?.value || '';
     state.weeklyAsOf = asOf;
     const body = $('#weeklyBody');
-    const chainBody = $('#chainWeeklyBody');
     if (body) body.innerHTML = '<div class="card card-pad">' + renderSkeleton(4) + '</div>';
-    if (chainBody) chainBody.innerHTML = '<div class="text-muted" style="font-size:12px;">加载中…</div>';
     try {
       let url = '/api/admin/weekly-report';
       if (asOf) url += '?as_of=' + encodeURIComponent(asOf);
-      // 拉本周 + 跨店（并行）
-      const [r, cr] = await Promise.all([
-        api(url),
-        api('/api/admin/weekly-report/chain' + (asOf ? '?as_of=' + encodeURIComponent(asOf) : '')),
-      ]);
+      const r = await api(url);
       state.weekly = r;
-      state.chainWeekly = cr;
       const ts = $('#weeklyTs'); if (ts) ts.textContent = '最近刷新：' + new Date().toLocaleTimeString();
       if (body) body.innerHTML = renderWeeklyBody(r);
-      if (chainBody) chainBody.innerHTML = renderChainWeeklyBody(cr);
     } catch (e) {
       if (body) body.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  async function loadChainWeekly() {
+    // v4.10.1：跨店周报独立 loader（platform_admin 视图）
+    const asOf = $('#chainWeeklyAsOf')?.value || '';
+    state.weeklyAsOf = asOf;
+    const body = $('.card.card-pad');
+    if (body) body.innerHTML = renderSkeleton(4);
+    try {
+      const url = '/api/admin/weekly-report/chain' + (asOf ? '?as_of=' + encodeURIComponent(asOf) : '');
+      const r = await api(url);
+      state.chainWeekly = r;
+      const ts = $('#chainWeeklyTs'); if (ts) ts.textContent = '最近刷新：' + new Date().toLocaleTimeString();
+      if (body) body.innerHTML = renderChainWeeklyBody(r);
+    } catch (e) {
+      if (body) body.innerHTML = renderEmpty('加载失败：' + e.message, null, 'x');
     }
   }
 
@@ -3879,6 +4187,8 @@ const App = (() => {
     else if (state.view === 'subscription') loadSubscription();
     else if (state.view === 'shop') loadShop();
     else if (state.view === 'weekly') loadWeekly();
+    else if (state.view === 'chain-weekly') loadChainWeekly();
+    else if (state.view === 'notifications') loadNotifications();
   }
 
   // ---------- Init ----------
@@ -3900,6 +4210,8 @@ const App = (() => {
       else if (v === 'subscription') loadSubscription();
       else if (v === 'shop') loadShop();
       else if (v === 'weekly') loadWeekly();
+      else if (v === 'chain-weekly') loadChainWeekly();
+      else if (v === 'notifications') loadNotifications();
     }));
     // 顾客搜索回车支持（v4.4 轻打磨）
     document.addEventListener('keydown', e => {
@@ -3934,9 +4246,10 @@ const App = (() => {
     markCompleted, markCancelled,
     loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain,
     loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop,
-    loadWeekly, resetWeekly, loadAlerts, drillDown,
+    loadWeekly, loadChainWeekly, resetWeekly, loadAlerts, drillDown,
     resetCustFilters,
     refreshCurrent,
+    loadNotifications, retryOneNotification, retryAllFailedNotifications,
   };
 })();
 

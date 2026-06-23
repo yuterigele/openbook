@@ -192,6 +192,29 @@ func ToolResults[M adk.MessageType](msg M) []ToolResult {
 }
 
 // RoleLabel returns the human label used by chatwitheino UIs.
+// RoleOf 返回 message 的原始 role 字符串（"user" / "assistant" / "tool" / "system"）
+//
+// 跟 RoleLabel 区别：
+//   - RoleLabel：人类可读的中文标签（"你" / "Agent" / "工具"），给前端展示
+//   - RoleOf：原始 enum 字符串，给业务逻辑判断
+//
+// v4.10.1 新增：用于 server 在持久化 session history 时区分"中间 chatter assistant"和"tool call assistant"
+func RoleOf[M adk.MessageType](msg M) string {
+	switch m := any(msg).(type) {
+	case *schema.Message:
+		if m == nil {
+			return ""
+		}
+		return string(m.Role)
+	case *schema.AgenticMessage:
+		if m == nil {
+			return ""
+		}
+		return string(m.Role)
+	}
+	return ""
+}
+
 func RoleLabel[M adk.MessageType](msg M) string {
 	switch m := any(msg).(type) {
 	case *schema.Message:

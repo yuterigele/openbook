@@ -16,6 +16,7 @@ func (ReminderLog) TableName() string  { return "reminder_logs" }
 func (EventLog) TableName() string     { return "event_logs" }
 func (BarberLeave) TableName() string  { return "barber_leaves" }
 func (Service) TableName() string      { return "services" }
+func (CustomerNotification) TableName() string { return "customer_notifications" }
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
@@ -42,6 +43,10 @@ type Shop struct {
 	WecomToken          string `gorm:"size:64" json:"-"`
 	WecomEncodingAESKey string `gorm:"size:64" json:"-"`
 	WecomKFLink         string `gorm:"size:512" json:"wecom_kf_link"`
+	// OpenKfID 微信客服 open_kfid（每个店铺独立；leave notify 等多店路由靠这个字段选 client）
+	// 取值来源：企业微信管理后台"客服账号"页；多店场景下不同 corpID 对应不同 openKfID。
+	// 留空时 fallback 到 wecom.DefaultOpenKfID（MVP 兼容）。
+	OpenKfID            string `gorm:"size:64;index" json:"open_kf_id"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }
@@ -200,7 +205,11 @@ type BarberLeave struct {
 	BarberName string     `gorm:"size:64" json:"barber_name"` // 冗余，便于审计
 	StartAt    time.Time  `gorm:"index;not null" json:"start_at"`
 	EndAt      time.Time  `gorm:"index;not null" json:"end_at"`
-	Reason     string     `gorm:"size:256" json:"reason"`           // 病假/家中有事/紧急出差
+	Reason     string     `gorm:"size:256" json:"reason"`           // 内部原因（病假/家中有事/紧急出差，商户后台可见）
+	// CustomerFacingReason 对顾客展示的原因（隐私脱敏）
+	//   - 商户填表时可单独填；不填时 fallback 到 "师傅临时有事"
+	//   - 真实场景避免暴露"痔疮手术""陪老婆产检"等敏感信息
+	CustomerFacingReason string `gorm:"size:256;default:" json:"customer_facing_reason,omitempty"`
 	Action     string     `gorm:"size:16;not null" json:"action"`   // cancel / reschedule
 	Status     string     `gorm:"size:16;default:active;index" json:"status"`
 	AffectedCount int      `gorm:"default:0" json:"affected_count"` // 影响的预约数（cancel 或 reschedule 总和）
@@ -226,5 +235,64 @@ type Service struct {
 	IsActive      bool      `gorm:"default:true;index" json:"is_active"`     // false = 已下架（保留历史）
 	SortOrder     int       `gorm:"default:0" json:"sort_order"`             // 列表展示顺序，asc
 	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// NotificationChannel 通知渠道
+const (
+	NotifChannelWeComKF    = "wecom_kf"    // 微信客服（external_userid + open_kfid）
+	NotifChannelWeComApp   = "wecom_app"   // 企业应用消息（wechat_open_id）
+	NotifChannelSMS        = "sms"         // 短信降级（暂未实现，留位）
+	NotifChannelPending    = "pending"     // 尚未尝试发送（多通道 fallback 中）
+)
+
+// NotificationStatus 通知发送状态
+const (
+	NotifStatusPending = "pending" // 已记录，未尝试发送
+	NotifStatusSent    = "sent"    // 至少一次成功
+	NotifStatusFailed  = "failed"  // 所有重试均失败（需人工介入）
+	NotifStatusSkipped = "skipped" // 无可发送目标（customer 无 ID / 无 phone）
+)
+
+// NotificationType 通知类型
+const (
+	NotifTypeLeaveCancel     = "leave_cancel"     // 理发师请假 → 取消预约通知
+	NotifTypeLeaveReschedule = "leave_reschedule" // 理发师请假 → 改派通知
+	NotifTypeLeaveCancelled  = "leave_cancelled"  // 请假撤销（恢复预约，可选通知）
+	NotifTypeLeaveNoContact  = "leave_no_contact" // 顾客无联系方式，需要商户手动联系
+)
+
+// CustomerNotification 顾客通知发送日志（v4.10 leave notify 持久化）
+//
+// 设计动机：
+//   - 之前 barber leave 的微信通知只在函数返回值里有，DB 里没存 → 失败无法排查 / 无法补发
+//   - 一次性记录所有尝试（包含多通道 fallback 链），运维可查"该顾客这次到底发了没 / 失败原因"
+//
+// 字段：
+//   - LeaveID / AppointmentID / ShopID / CustomerID：四向关联（admin 后台按任一维度都能查）
+//   - Channel / Status / Target：成功时是哪条通道成功；失败时尝试过的所有通道会留多条 row
+//   - TextPreview：前 256 字符预览（避免存全文，DB 体量可控）
+//   - AttemptCount / LastAttemptAt / SentAt / ErrorMessage：重试链路完整
+//   - Type：通知类型，区分 leave_cancel / leave_reschedule / leave_no_contact 等
+//
+// 索引：
+//   - (LeaveID, CustomerID)：admin 后台"查看本次请假的通知结果"
+//   - (ShopID, Status, CreatedAt)：商户看板"未发送列表"
+type CustomerNotification struct {
+	ID            uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	LeaveID       string    `gorm:"size:64;index:idx_notif_leave_cust,priority:1" json:"leave_id"`
+	AppointmentID string    `gorm:"size:64;index" json:"appointment_id"`
+	ShopID        string    `gorm:"size:64;index:idx_notif_shop_status_time,priority:1" json:"shop_id"`
+	CustomerID    string    `gorm:"size:64;index:idx_notif_leave_cust,priority:2" json:"customer_id"`
+	Type          string    `gorm:"size:32;index" json:"type"`           // leave_cancel / leave_reschedule / ...
+	Channel       string    `gorm:"size:16;index" json:"channel"`       // wecom_kf / wecom_app / sms / pending
+	Status        string    `gorm:"size:16;index:idx_notif_shop_status_time,priority:2" json:"status"` // pending/sent/failed/skipped
+	Target        string    `gorm:"size:128" json:"target"`             // external_userid / wechat_open_id / phone
+	TextPreview   string    `gorm:"size:256" json:"text_preview"`       // 文案前 256 字符
+	ErrorMessage  string    `gorm:"size:512;column:error_message" json:"error,omitempty"`
+	AttemptCount  int       `gorm:"default:0" json:"attempt_count"`
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+	SentAt        *time.Time `json:"sent_at,omitempty"`
+	CreatedAt     time.Time `gorm:"index:idx_notif_shop_status_time,priority:3" json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
