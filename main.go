@@ -356,12 +356,22 @@ func parseRecipients(raw string) []string {
 	return out
 }
 
-// buildLeaveNotificationSender 构造请假通知发送器（P4）
+// buildLeaveNotificationSender 构造请假通知发送器（P4，v4.9.3 修复 81013）
+//
+// 历史 bug：
+//   - 之前不管 customer 的 external_user_id 来源，都调 SendTextMessage（企业应用消息 API）
+//   - 但 KF 场景下 external_user_id 是 KF 客服场景的外部用户 ID，**不属于**任何应用的可见范围
+//   - 调 SendTextMessage 会报 81013（userid 不在该应用可见范围）
+//   - 错误码跟 IP 白名单无关，加 IP 白名单没用
+//
+// v4.9.3 修法：按 customer 字段自动选接口：
+//   - 有 external_user_id（KF / 外部联系人）→ SendKfTextMessage（KF 接口，+ openKfID）
+//   - 只有 wechat_open_id（企业应用成员）→ SendTextMessage（应用消息）
+//   - 都没有 → 返回 error，log 提示商户手工通知
 //
 // 行为：
 //   - wecomClient == nil：返回 nil（通知能力缺失，但不影响 leave row 写入）
 //   - customerID 为空：no-op
-//   - 查 customer 表取 external_userid / wechat_open_id（优先 external）→ 调 wecomClient.SendTextMessage
 //   - 失败只 log，不返回 error 给上层（避免一个顾客失败影响整个 leave）
 //
 // 注意：这里直接用 storage.DB 是为了保持简单；不抽 repo 是不想为这个一次性通知路径多写一层。
@@ -377,13 +387,17 @@ func buildLeaveNotificationSender(wecomClient *wecom.Client) func(ctx context.Co
 		if err := storage.DB.WithContext(ctx).Where("id = ?", customerID).First(&cust).Error; err != nil {
 			return fmt.Errorf("顾客 %s 不存在: %w", customerID, err)
 		}
-		target := cust.ExternalUserID
-		if target == "" {
-			target = cust.WechatOpenID
+
+		// v4.9.3：按字段自动选接口（关键修复 81013）
+		// 优先 external_user_id（KF / 外部联系人）→ 用 KF 接口
+		if cust.ExternalUserID != "" {
+			// DefaultOpenKfID 是兜底——实际生产应该按 customer 所属的客服账号动态选
+			return wecomClient.SendKfTextMessage(ctx, cust.ExternalUserID, wecom.DefaultOpenKfID, text)
 		}
-		if target == "" {
-			return fmt.Errorf("顾客 %s 无 external_userid / wechat_open_id", customerID)
+		// fallback：只有 wechat_open_id（企业应用成员）→ 用应用消息
+		if cust.WechatOpenID != "" {
+			return wecomClient.SendTextMessage(ctx, cust.WechatOpenID, text)
 		}
-		return wecomClient.SendTextMessage(ctx, target, text)
+		return fmt.Errorf("顾客 %s 无 external_userid / wechat_open_id（无法自动选发送接口）", customerID)
 	}
 }
