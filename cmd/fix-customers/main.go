@@ -64,8 +64,8 @@ func listMissing(ctx context.Context) {
 		ID             string
 		Name           string
 		Phone          string
-		WechatOpenID   string
-		ExternalUserID string
+		WechatOpenID   *string // 用指针区分 NULL 和 ""
+		ExternalUserID *string
 		ApptCount      int
 		LastApptAt     *time.Time
 	}
@@ -76,7 +76,10 @@ func listMissing(ctx context.Context) {
 		        (SELECT COUNT(*) FROM appointments a WHERE a.customer_id = c.id) AS appt_count,
 		        (SELECT MAX(STR_TO_DATE(CONCAT(a.date, ' ', a.time), '%Y-%m-%d %H:%i'))
 		         FROM appointments a WHERE a.customer_id = c.id) AS last_appt_at`).
-		Where("c.wechat_open_id = '' AND c.external_user_id = ''").
+		// v4.9.3 修复：原来 WHERE wechat_open_id = '' 不匹配 NULL（MySQL 里 NULL = '' 是 false）
+		// 改成：两个字段都空（NULL 或 '' 都算）
+		Where(`(c.wechat_open_id IS NULL OR c.wechat_open_id = '')
+		       AND (c.external_user_id IS NULL OR c.external_user_id = '')`).
 		Scan(&rows).Error
 	if err != nil {
 		log.Fatalf("查询失败: %v", err)
@@ -88,15 +91,21 @@ func listMissing(ctx context.Context) {
 	}
 
 	fmt.Printf("⚠️  共 %d 个顾客缺微信绑定（无法接收提醒/通知）：\n\n", len(rows))
-	fmt.Printf("%-40s %-20s %-15s %-8s %s\n", "顾客ID", "姓名", "电话", "预约数", "最后预约")
-	fmt.Println(strings.Repeat("-", 100))
+	fmt.Printf("%-40s %-20s %-15s %-8s %-12s %s\n", "顾客ID", "姓名", "电话", "预约数", "openID?", "最后预约")
+	fmt.Println(strings.Repeat("-", 120))
 	for _, r := range rows {
 		last := "—"
 		if r.LastApptAt != nil {
 			last = r.LastApptAt.Format("2006-01-02 15:04")
 		}
-		fmt.Printf("%-40s %-20s %-15s %-8d %s\n",
-			r.ID, r.Name, r.Phone, r.ApptCount, last)
+		oid := "(null)"
+		if r.WechatOpenID != nil && *r.WechatOpenID != "" {
+			oid = "✅ " + *r.WechatOpenID
+		} else {
+			oid = "❌ 空"
+		}
+		fmt.Printf("%-40s %-20s %-15s %-8d %-12s %s\n",
+			r.ID, r.Name, r.Phone, r.ApptCount, oid, last)
 	}
 	fmt.Println()
 	fmt.Println("修复方式：")
@@ -126,7 +135,8 @@ func attemptBackfill(ctx context.Context) {
 	if err := storage.DB.WithContext(ctx).
 		Table("customers").
 		Select("id, name").
-		Where("wechat_open_id = '' AND external_user_id = ''").
+		Where(`(wechat_open_id IS NULL OR wechat_open_id = '')
+		       AND (external_user_id IS NULL OR external_user_id = '')`).
 		Scan(&missing).Error; err != nil {
 		log.Fatalf("query: %v", err)
 	}
