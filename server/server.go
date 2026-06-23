@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1264,8 +1265,122 @@ func buildTodayContext() string {
 //
 // shopID：注入 ctx，Agent 工具（create_appointment 等）通过 tools.ShopIDFromCtx 取。
 //         也作为 system prompt 的提示，让 Agent 知道当前是哪家店。
+// agentHistoryLimit 历史消息条数上限（env AGENT_HISTORY_LIMIT，默认 6，比之前 10 紧）
+//
+// 设计权衡：
+//   - 条数太少（≤3）：顾客切话题后 agent 失忆
+//   - 条数太多（≥12）：长预约工具调用（含 create_appointment / query_schedule）展开后 prompt 爆 token
+//   - 默认 6 ≈ 3 轮对话，足够覆盖"查询→确认→执行"的主流链路
+const defaultAgentHistoryLimit = 6
+
+// agentHistoryMaxChars 历史消息字符预算（env AGENT_HISTORY_MAX_CHARS，默认 12000）
+//
+// 兜底：即使条数 ≤ limit，某条 tool_call 返回特别长也会爆；按字符再砍一次
+const defaultAgentHistoryMaxChars = 12000
+
+// trimHistory 按"条数上限 + 字符预算"双约束截断历史，从最新往旧取
+//
+// 行为：
+//   - 先按 maxMessages 砍（取最后 N 条）
+//   - 再按 maxChars 砍（从最新往旧累加，超出预算就停）
+//   - 保证 assistant 完整：永远从 user/assistant 配对边界切，不会切到半条
+func trimHistory[M adk.MessageType](history []M, maxMessages, maxChars int) []M {
+	if len(history) == 0 {
+		return history
+	}
+
+	// 1) 条数截断
+	start := 0
+	if len(history) > maxMessages {
+		start = len(history) - maxMessages
+	}
+	out := append([]M(nil), history[start:]...)
+
+	// 2) 字符预算截断（仅在超限时砍）
+	//    累加顺序：从最新往旧；第 i 条加上后会超预算 → 砍掉 [0, i]（保留 i+1 起）
+	totalChars := 0
+	trimmed := false
+	for i := len(out) - 1; i >= 0; i-- {
+		n := msgLen(out[i])
+		if totalChars+n > maxChars {
+			out = out[i+1:] // 从 i+1 开始保留
+			trimmed = true
+			break          // 后续更早的不用算了
+		}
+		totalChars += n
+	}
+	_ = trimmed // 防止 unused；后续如果要加日志可读
+	return out
+}
+
+// msgLen 估算一条消息的字符数（文本 + tool call 名 + 工具返回）
+//
+// 不精确（不模拟 tokenizer），但字符数是合理的粗粒度近似：
+// 中文 1 字符 ≈ 1 token，英文 4 字符 ≈ 1 token，预算 12k 字符 ≈ 3k-6k token
+func msgLen[M adk.MessageType](m M) int {
+	switch mm := any(m).(type) {
+	case *schema.Message:
+		if mm == nil {
+			return 0
+		}
+		s := len(mm.Content) + len(mm.ReasoningContent) + len(mm.ToolName)
+		for _, tc := range mm.ToolCalls {
+			s += len(tc.Function.Arguments) + len(tc.Function.Name)
+		}
+		return s
+	case *schema.AgenticMessage:
+		if mm == nil {
+			return 0
+		}
+		s := 0
+		for _, b := range mm.ContentBlocks {
+			if b == nil {
+				continue
+			}
+			if b.Reasoning != nil {
+				s += len(b.Reasoning.Text)
+			}
+			if b.UserInputText != nil {
+				s += len(b.UserInputText.Text)
+			}
+			if b.AssistantGenText != nil {
+				s += len(b.AssistantGenText.Text)
+			}
+			if b.FunctionToolCall != nil {
+				s += len(b.FunctionToolCall.Name) + len(b.FunctionToolCall.Arguments)
+			}
+			if b.FunctionToolResult != nil {
+				for _, c := range b.FunctionToolResult.Content {
+					if c != nil && c.Text != nil {
+						s += len(c.Text.Text)
+					}
+				}
+			}
+		}
+		return s
+	}
+	return 0
+}
+
+// getEnvInt 读 env 整数（解析失败用兜底）
+func getEnvInt(key string, fallback int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
 func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M], userContent, shopID string) string {
 	history := sess.GetMessages()
+
+	// 历史消息精简：先按条数砍，再按字符预算砍（v4.9.2）
+	//   AGENT_HISTORY_LIMIT     默认 6     （之前是 10，太宽）
+	//   AGENT_HISTORY_MAX_CHARS 默认 12000 （粗粒度 token 上限，≈ 3-6k token）
+	maxMessages := getEnvInt("AGENT_HISTORY_LIMIT", defaultAgentHistoryLimit)
+	maxChars := getEnvInt("AGENT_HISTORY_MAX_CHARS", defaultAgentHistoryMaxChars)
+	history = trimHistory(history, maxMessages, maxChars)
 
 	// 构造消息列表：第一条 user 是动态日期上下文 + 店铺上下文
 	ctxMsg := buildTodayContext()
@@ -1275,12 +1390,8 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 	var messages []M
 	messages = append(messages, msgops.NewUser[M](ctxMsg))
 
-	// 历史消息：限制最近 N 条，避免 prompt 过长
-	start := 0
-	if len(history) > 10 {
-		start = len(history) - 10
-	}
-	messages = append(messages, history[start:]...)
+	// 历史消息（已精简）
+	messages = append(messages, history...)
 
 	// 当前用户消息
 	messages = append(messages, msgops.NewUser[M](userContent))

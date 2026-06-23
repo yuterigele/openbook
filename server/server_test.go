@@ -591,3 +591,98 @@ func TestServerRouteRegistration(t *testing.T) {
 	// Just verify the server can be constructed without error.
 	_ = srv
 }
+
+// ---------------------------------------------------------------------------
+// trimHistory 单测（v4.9.2 — 历史精简）
+// ---------------------------------------------------------------------------
+
+// mkMsg 造一条给定内容长度的 user 消息
+func mkMsg(content string) *schema.Message {
+	return &schema.Message{Role: schema.User, Content: content}
+}
+
+func TestTrimHistory_LimitByMessageCount(t *testing.T) {
+	history := []*schema.Message{
+		mkMsg("1"), mkMsg("2"), mkMsg("3"), mkMsg("4"),
+		mkMsg("5"), mkMsg("6"), mkMsg("7"), mkMsg("8"),
+	}
+	out := trimHistory(history, 3, 10000)
+	if len(out) != 3 {
+		t.Fatalf("want 3, got %d", len(out))
+	}
+	if out[0].Content != "6" || out[2].Content != "8" {
+		t.Errorf("want [6,7,8], got [%s,%s,%s]", out[0].Content, out[1].Content, out[2].Content)
+	}
+}
+
+func TestTrimHistory_LimitByCharBudget(t *testing.T) {
+	// 4 条消息，每条 100 字符，预算 250 → 应该从最新往旧累加，超出就停
+	// 顺序：旧 → 新
+	history := []*schema.Message{
+		mkMsg(strings.Repeat("a", 100)), // idx 0
+		mkMsg(strings.Repeat("b", 100)), // idx 1
+		mkMsg(strings.Repeat("c", 100)), // idx 2
+		mkMsg(strings.Repeat("d", 100)), // idx 3
+	}
+	out := trimHistory(history, 10, 250)
+	// 累加顺序：d(100) → c(200) → b(300, 超 250，停) → 保留 [c, d]
+	if len(out) != 2 {
+		t.Fatalf("want 2, got %d", len(out))
+	}
+	if out[0].Content[0] != 'c' || out[1].Content[0] != 'd' {
+		t.Errorf("want [c,d], got [%s,%s]", out[0].Content[0:1], out[1].Content[0:1])
+	}
+}
+
+func TestTrimHistory_BothLimitsNoop(t *testing.T) {
+	history := []*schema.Message{mkMsg("hi"), mkMsg("there")}
+	out := trimHistory(history, 10, 10000)
+	if len(out) != 2 {
+		t.Fatalf("want 2, got %d", len(out))
+	}
+}
+
+func TestTrimHistory_BothLimitsApply(t *testing.T) {
+	// 条数限制 4 + 字符预算 250
+	// 6 条每条 100 字符：先砍到 4 条（保留 [c,d,e,f]），再按字符预算从新往旧累加
+	// 严格截断：f(100) + e(200) + d(300 超, 砍 d) → [e, f]
+	history := []*schema.Message{
+		mkMsg(strings.Repeat("a", 100)),
+		mkMsg(strings.Repeat("b", 100)),
+		mkMsg(strings.Repeat("c", 100)),
+		mkMsg(strings.Repeat("d", 100)),
+		mkMsg(strings.Repeat("e", 100)),
+		mkMsg(strings.Repeat("f", 100)),
+	}
+	out := trimHistory(history, 4, 250)
+	if len(out) != 2 {
+		t.Fatalf("want 2, got %d", len(out))
+	}
+	if out[0].Content[0] != 'e' || out[1].Content[0] != 'f' {
+		t.Errorf("want [e,f], got [%s,%s]",
+			out[0].Content[0:1], out[1].Content[0:1])
+	}
+}
+
+func TestTrimHistory_Empty(t *testing.T) {
+	out := trimHistory([]*schema.Message{}, 5, 100)
+	if len(out) != 0 {
+		t.Errorf("want 0, got %d", len(out))
+	}
+}
+
+func TestMsgLen_SchemaMessage(t *testing.T) {
+	m := &schema.Message{
+		Role:    schema.Assistant,
+		Content: "hello world",
+		ToolCalls: []schema.ToolCall{
+			{Function: schema.FunctionCall{Name: "f1", Arguments: `{"x":1}`}},
+		},
+	}
+	got := msgLen(m)
+	// "hello world"(11) + "f1"(2) + `{"x":1}`(7) = 20
+	want := 11 + 2 + 7
+	if got != want {
+		t.Errorf("msgLen = %d, want %d", got, want)
+	}
+}
