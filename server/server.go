@@ -1221,8 +1221,10 @@ func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client *
 	// 注入 shopID 到 ctx，让 Agent 工具（create_appointment 等）能拿到
 	ctxWithShop := tools.WithShopID(ctx, shopID)
 	// v4.8: 透传微信 openID，让 create_appointment 自动建顾客档案（修 admin 顾客列表空 bug）
+	// v4.9.3: KF 来源的 external_userid == FromUserName（同一字段）
 	ctxWithUser := tools.WithOpenID(ctxWithShop, msg.FromUserName)
-	reply := s.processAgentMessage(ctxWithUser, sess, msg.Content, shopID)
+	ctxWithExt := tools.WithExternalUserID(ctxWithUser, msg.FromUserName)
+	reply := s.processAgentMessage(ctxWithExt, sess, msg.Content, shopID)
 	log.Printf("[wecom] Agent回复: %s", reply)
 
 	// 发送回复消息
@@ -1679,7 +1681,13 @@ func (s *Server[M]) handleExternalContactMessage(ctx context.Context, client *we
 	log.Printf("[external] 处理消息: session=%s msg=%s history=%d", sessionID, userMsg.Content, len(sess.GetMessages()))
 
 	ctxWithShop := tools.WithShopID(ctx, shopID)
-	reply := s.processAgentMessage(ctxWithShop, sess, userMsg.Content, shopID)
+	// v4.9.3 修复：之前这条路径完全没透传任何 wecom ID，
+	//   导致外部联系人预约建的顾客档案 openID/external_user_id 都是空 → cron 全失败
+	//   - openID: 在外部联系人场景下用 employee userid（不完美但至少能定位）
+	//   - external_user_id: 真实 external ID（reminder 优先用这个）
+	ctxWithUser := tools.WithOpenID(ctxWithShop, employeeUserID)
+	ctxWithExt := tools.WithExternalUserID(ctxWithUser, externalUserID)
+	reply := s.processAgentMessage(ctxWithExt, sess, userMsg.Content, shopID)
 	log.Printf("[external] Agent回复: %s", reply)
 
 	// 使用统一回复适配层发送回复

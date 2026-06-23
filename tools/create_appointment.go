@@ -21,6 +21,9 @@ type ctxKeyShopID struct{}
 // ctxKeyOpenID 注入 ctx 的微信 openID（v4.8 给 CreateAppointmentFull 透传顾客档案用）
 type ctxKeyOpenID struct{}
 
+// ctxKeyExternalUserID 注入 ctx 的 external_user_id（v4.9.3 给 cron reminder 用）
+type ctxKeyExternalUserID struct{}
+
 // WithShopID 把 shop_id 放进 ctx（Agent 工具从 ctx 拿）
 func WithShopID(ctx context.Context, shopID string) context.Context {
 	return context.WithValue(ctx, ctxKeyShopID{}, shopID)
@@ -40,6 +43,17 @@ func WithOpenID(ctx context.Context, openID string) context.Context {
 // OpenIDFromCtx 从 ctx 取微信 openID（取不到返回 ""）
 func OpenIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyOpenID{}).(string)
+	return v
+}
+
+// WithExternalUserID 把 external_user_id 放进 ctx（v4.9.3 修 reminder cron 缺字段）
+func WithExternalUserID(ctx context.Context, externalUserID string) context.Context {
+	return context.WithValue(ctx, ctxKeyExternalUserID{}, externalUserID)
+}
+
+// ExternalUserIDFromCtx 从 ctx 取 external_user_id（取不到返回 ""）
+func ExternalUserIDFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyExternalUserID{}).(string)
 	return v
 }
 
@@ -178,8 +192,8 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		ShopIDFromCtx(ctx),
 		params.BarberName,
 		params.Customer,
-		OpenIDFromCtx(ctx),  // v4.8: 透传微信 openID，让 storage 自动建顾客档案
-		"",                  // externalUserID 暂未注入，后续如需要再加
+		OpenIDFromCtx(ctx),         // v4.8: 透传微信 openID，让 storage 自动建顾客档案
+		ExternalUserIDFromCtx(ctx), // v4.9.3: 透传 external_user_id，reminder cron 需要
 		params.Date,
 		params.Time,
 		params.Service,
