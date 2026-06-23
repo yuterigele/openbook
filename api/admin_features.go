@@ -333,22 +333,12 @@ func listCustomersHandler(ctx context.Context, c *app.RequestContext) {
 		q = q.Where("tags LIKE ?", "%"+tag+"%")
 	}
 	var custs []storage.Customer
-	if err := q.Order("last_visit_at DESC NULLS LAST, total_visits DESC, id ASC").
+	// MySQL 不支持 "NULLS LAST" 关键字（v4.9.2 修复：先试错的 fallback 已删，避免日志刷 1064）
+	// 用 COALESCE 把 NULL 映射成 '1970-01-01' → DESC 时自然排到最后，等价 NULLS LAST 语义
+	if err := q.Order("COALESCE(last_visit_at, '1970-01-01') DESC, total_visits DESC, id ASC").
 		Limit(limit).Find(&custs).Error; err != nil {
-		// 兼容 MySQL（无 NULLS LAST 关键字）：重试不写 NULLS LAST
-		q2 := storage.DB.WithContext(ctx).Model(&storage.Customer{}).
-			Where("id IN ?", apptCustIDs)
-		if query != "" {
-			like := "%" + query + "%"
-			q2 = q2.Where("name LIKE ? OR phone LIKE ? OR wechat_open_id LIKE ?", like, like, like)
-		}
-		if tag != "" {
-			q2 = q2.Where("tags LIKE ?", "%"+tag+"%")
-		}
-		if err2 := q2.Order("total_visits DESC, id ASC").Limit(limit).Find(&custs).Error; err2 != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": err2.Error()})
-			return
-		}
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 	if custs == nil {
 		custs = []storage.Customer{}
