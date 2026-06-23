@@ -34,6 +34,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/storage"
 )
 
@@ -48,6 +49,9 @@ func main() {
 	onlyFlag := flag.String("only", "", "只跑指定步骤，逗号分隔（schema,roles,shopadmin,roleperm,platform,customers）")
 	verbose := flag.Bool("v", true, "显示每步详情")
 	flag.Parse()
+
+	// 0) 读 .env（与主服务一致）—— 把 MYSQL_DSN / DEFAULT_*_PASSWORD 等填进 os.Environ
+	chatmodel.LoadEnv()
 
 	// 1) 连 DB（用 storage.InitDB 的环境变量解析逻辑）
 	ctx := context.Background()

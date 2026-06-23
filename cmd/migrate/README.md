@@ -36,7 +36,8 @@ go run ./cmd/migrate -only=customers
 
 ## 环境变量
 
-跟主服务一致：
+跟主服务一致。**脚本启动时会自动读 `.env` 文件**（与 main.go 走同一个 `chatmodel.LoadEnv()`），
+所以你只要把 DSN / 密码写在仓库根目录的 `.env` 里就行，不用每次手动 export。
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
@@ -44,6 +45,8 @@ go run ./cmd/migrate -only=customers
 | `MYSQL_HOST/PORT/USER/PASS/DB` | 分项配置 | 127.0.0.1:3306 / chatwitheino |
 | `DEFAULT_ADMIN_USERNAME/PASSWORD` | 默认店主账号 | admin / admin123 |
 | `DEFAULT_PLATFORM_ADMIN_USERNAME/PASSWORD` | 默认超管账号 | platform / platform123 |
+
+**优先级：**shell 里 export 的 env > `.env` 文件里的值（同 `chatmodel.LoadEnv` 的行为）
 
 ## 幂等保证
 
