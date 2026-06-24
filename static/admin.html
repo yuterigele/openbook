@@ -1345,6 +1345,14 @@
         </svg>
         <span>套餐与升级</span>
       </a>
+      <a class="nav-item" data-view="shops" data-perm="view:plan" href="#shops">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18"/>
+          <path d="M5 21V7l7-4 7 4v14"/>
+          <path d="M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"/>
+        </svg>
+        <span>分店管理</span>
+      </a>
       <a class="nav-item" data-view="shop" data-perm="edit:shop" href="#shop">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
@@ -1554,6 +1562,7 @@ const App = (() => {
     else if (state.view === 'services') c.innerHTML = renderServices();
     else if (state.view === 'subscription') c.innerHTML = renderSubscription();
     else if (state.view === 'shop') c.innerHTML = renderShop();
+    else if (state.view === 'shops') c.innerHTML = renderShops();
     else if (state.view === 'weekly') c.innerHTML = renderWeekly();
     else if (state.view === 'chain-weekly') c.innerHTML = renderChainWeekly();
     else if (state.view === 'notifications') c.innerHTML = renderNotifications();
@@ -2446,6 +2455,7 @@ const App = (() => {
     <div id="plansCurrentCard"></div>
     <h2 style="margin: 24px 0 12px; font-size: 16px; color: var(--ink);">4 档对比</h2>
     <div id="plansGrid" class="plans-grid"></div>
+    <div id="plansApiCard" style="margin-top: 24px;"></div>
     <div id="plansUpgradeModalSlot"></div>`;
   }
 
@@ -2525,6 +2535,23 @@ const App = (() => {
       if (gridEl) {
         const cards = (data.plans || []).map(p => renderPlanCard(p, data.current_plan)).join('');
         gridEl.innerHTML = cards;
+      }
+      // v4.12.1: API 访问 卡片（api_access feature 实战）
+      const apiCardEl = $('#plansApiCard');
+      if (apiCardEl) {
+        const hasApi = (data.current_plan === 'flagship' || data.current_plan === 'enterprise');
+        apiCardEl.innerHTML = `<div class="card card-pad">
+          <div class="section-head">
+            <h2>API 访问</h2>
+            <span class="spacer"></span>
+            ${hasApi
+              ? '<button class="btn btn-primary" onclick="App.openModal(\'apiKeyManage\')">管理 API Key</button>'
+              : '<span class="plan-pill plan-pill-status-warning">仅旗舰版可用</span>'}
+          </div>
+          <p class="text-muted" style="font-size:13px;margin:8px 0 0;">
+            API key 用于外部系统对接（POS / BI / 自建 CRM 等）。可通过 <code>GET /api/external/appointments</code> 读取本店的预约数据。
+          </p>
+        </div>`;
       }
     } catch (e) {
       if (cardEl) cardEl.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
@@ -3005,6 +3032,9 @@ const App = (() => {
     else if (kind === 'memberCreate') body = memberCreateModal();
     else if (kind === 'resetPassword') body = resetPasswordModal(data);
     else if (kind === 'planUpgrade') body = planUpgradeModal(data);
+    else if (kind === 'subsidiaryCreate') body = subsidiaryCreateModal();
+    else if (kind === 'apiKeyManage') { body = apiKeyManageModal(); setTimeout(loadApiKeysInto, 50); }
+    else if (kind === 'apiKeyCreate') body = apiKeyCreateModal();
     else return;
     root.innerHTML = body;
     // wire submit buttons by id
@@ -3803,6 +3833,224 @@ const App = (() => {
     state.apptDate = todayStr(); state.apptStatus = '';
     render();
     loadAppointments();
+  }
+
+  // v4.12.1 multi_store: 分店管理 view
+  function renderShops() {
+    const data = state.shops || { shops: [], current_plan: '', max_shops: 0, current_count: 0 };
+    const canCreate = data.max_shops < 0 || data.current_count < data.max_shops;
+    const maxLabel = data.max_shops < 0 ? '不限' : data.max_shops;
+    return `
+      <div class="view-head">
+        <h1>分店管理</h1>
+        <p>当前 plan：${esc(data.current_plan)}；已有 ${data.current_count} / ${maxLabel} 家店</p>
+      </div>
+      <div class="filterbar">
+        <span class="spacer"></span>
+        ${canCreate
+          ? `<button class="btn btn-primary" onclick="App.openModal('subsidiaryCreate')">+ 添加分店</button>`
+          : `<button class="btn" disabled title="已达 plan 限额，请升级旗舰版">已达上限</button>`}
+      </div>
+      <div class="card" id="shopsTable">
+        ${data.shops.length === 0
+          ? renderEmpty('暂无分店，点击「添加分店」创建', null, 'shop')
+          : `<table class="table">
+              <thead><tr>
+                <th>店名</th><th>ID</th><th>地址</th><th>类型</th><th>状态</th>
+              </tr></thead>
+              <tbody>
+                ${data.shops.map(s => `<tr>
+                  <td><strong>${esc(s.name)}</strong></td>
+                  <td><code style="font-size:11px;">${esc(s.id)}</code></td>
+                  <td>${esc(s.address || '—')}</td>
+                  <td>${s.parent_shop_id ? '分店' : '<strong>主店</strong>'}</td>
+                  <td>${s.is_current ? '<span class="badge badge-ok">当前会话</span>' : ''}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>`}
+      </div>
+      ${!canCreate ? `<div class="hint" style="margin-top:12px;color:#d97706;">⚠ 已达当前 plan 的店铺限额（${data.current_count} / ${maxLabel}）。如需更多店铺，请升级到旗舰版或以上。</div>` : ''}
+    `;
+  }
+
+  async function loadShops() {
+    try {
+      const data = await api('/api/admin/shops');
+      state.shops = data;
+      render();
+    } catch (e) {
+      showToast('加载分店失败：' + e.message, 'error');
+    }
+  }
+
+  function apiKeyManageModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width:680px;">
+        <div class="modal-head">
+          <h2>API Key 管理</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="hint" style="margin-bottom:12px;color:#666;font-size:13px;">
+            ⚠ 创建后明文 token 只显示一次，请立即保存到安全位置（如密码管理器）。
+          </div>
+          <div style="margin-bottom:16px;">
+            <button class="btn btn-primary" onclick="App.openModal('apiKeyCreate')">+ 创建 API Key</button>
+          </div>
+          <div id="apiKeyList" style="overflow-x:auto;">${renderSkeleton(3)}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">关闭</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  async function loadApiKeysInto() {
+    const el = $('#apiKeyList');
+    if (!el) return;
+    try {
+      const data = await api('/api/admin/api-keys');
+      const keys = data.keys || [];
+      if (keys.length === 0) {
+        el.innerHTML = renderEmpty('暂无 API Key', null, 'key');
+        return;
+      }
+      el.innerHTML = `<table class="table">
+        <thead><tr><th>名称</th><th>前缀</th><th>权限</th><th>状态</th><th>过期</th><th>操作</th></tr></thead>
+        <tbody>
+          ${keys.map(k => `<tr>
+            <td><strong>${esc(k.name)}</strong></td>
+            <td><code style="font-size:11px;">${esc(k.token_prefix)}...</code></td>
+            <td>${(k.scopes || []).map(s => `<span class="badge">${esc(s)}</span>`).join(' ')}</td>
+            <td>${k.status === 'active'
+              ? '<span class="badge badge-ok">active</span>'
+              : '<span class="badge badge-muted">revoked</span>'}</td>
+            <td style="font-size:12px;">${esc(k.expires_at.slice(0, 10))}</td>
+            <td>${k.status === 'active'
+              ? `<button class="btn btn-sm btn-danger" onclick="App.submitAPIKeyRevoke(${k.id}, '${esc(k.name).replace(/'/g, "\\'")}')">吊销</button>`
+              : '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    } catch (e) {
+      el.innerHTML = '<div class="err-banner">' + esc(e.message) + '</div>';
+    }
+  }
+
+  function apiKeyCreateModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>创建 API Key</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>名称 <span style="color:#d00;">*</span></label>
+            <input class="input" type="text" id="apiKeyName" placeholder="例：POS 系统" maxlength="64" />
+          </div>
+          <div class="field">
+            <label>权限（scopes，可多选）</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <label><input type="checkbox" value="appointments:read" checked /> appointments:read（读预约）</label>
+            </div>
+          </div>
+          <div class="hint" style="color:#666;font-size:13px;">
+            每次创建只返回一个权限；v4.12.1 只支持 appointments:read，更多 scope 留 v4.13。
+          </div>
+          <div id="apiKeyCreateErr" class="err-banner hidden"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitAPIKeyCreate()">创建</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  async function submitAPIKeyCreate() {
+    const name = $('#apiKeyName').value.trim();
+    const errEl = $('#apiKeyCreateErr');
+    errEl.classList.add('hidden');
+    if (!name) { errEl.textContent = '请填写名称'; errEl.classList.remove('hidden'); return; }
+    const scopes = ['appointments:read']; // v4.12.1 简化
+    try {
+      const r = await api('/api/admin/api-keys', { method: 'POST', body: { name, scopes } });
+      // 显示明文 token —— 只这一次！
+      const shown = prompt(
+        '⚠ 这是明文 token，只显示这一次！\n\n请立即复制到安全位置：\n\n' + r.plaintext + '\n\n（点击"确定"关闭此弹窗后，token 不再可查）',
+        r.plaintext
+      );
+      _ = shown;
+      closeModal();
+      // 重开 manage modal 刷新列表
+      openModal('apiKeyManage');
+      setTimeout(loadApiKeysInto, 100);
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.classList.remove('hidden');
+    }
+  }
+
+  async function submitAPIKeyRevoke(id, name) {
+    if (!confirm(`确认吊销「${name}」？吊销后此 key 立即失效，不可恢复。`)) return;
+    try {
+      await api(`/api/admin/api-keys/${id}/revoke`, { method: 'POST', body: { note: 'manual revoke' } });
+      showToast('已吊销', 'success');
+      loadApiKeysInto();
+    } catch (e) {
+      showToast('吊销失败：' + e.message, 'error');
+    }
+  }
+
+  function subsidiaryCreateModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>添加分店</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>分店名 <span style="color:#d00;">*</span></label>
+            <input class="input" type="text" id="subName" placeholder="例：分店甲（中关村店）" maxlength="128" />
+          </div>
+          <div class="field">
+            <label>地址</label>
+            <input class="input" type="text" id="subAddress" placeholder="例：北京市海淀区中关村南大街 5 号" maxlength="256" />
+          </div>
+          <div class="hint" style="color:#666;font-size:13px;">
+            创建后请到「成员管理」为分店新建 owner 账号。分店管理员可独立登录管理本店。
+          </div>
+          <div id="subErr" class="err-banner hidden"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitSubsidiaryCreate()">创建</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  async function submitSubsidiaryCreate() {
+    const name = $('#subName').value.trim();
+    const address = $('#subAddress').value.trim();
+    const errEl = $('#subErr');
+    errEl.classList.add('hidden');
+    if (!name) { errEl.textContent = '请填写分店名'; errEl.classList.remove('hidden'); return; }
+    try {
+      const r = await api('/api/admin/shops', { method: 'POST', body: { name, address } });
+      closeModal();
+      showToast(r.message || '分店创建成功', 'success');
+      loadShops();
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.classList.remove('hidden');
+    }
   }
 
   // v4.12.1: CSV 导出（data_export feature 实战）
@@ -4806,6 +5054,7 @@ const App = (() => {
     else if (state.view === 'events') loadEvents();
     else if (state.view === 'chain') loadChain();
     else if (state.view === 'handoffs') loadHandoffs();
+    else if (state.view === 'shops') loadShops();
     else if (state.view === 'customers') loadCustomers();
     else if (state.view === 'services') loadServices();
     else if (state.view === 'subscription') loadSubscription();
@@ -4871,11 +5120,13 @@ const App = (() => {
     submitService, deactivateService, activateService,
     submitMember, submitResetPassword, changeMemberRole, disableMember,
     submitRenew, submitShopEdit,
+    submitSubsidiaryCreate,
+    submitAPIKeyCreate, submitAPIKeyRevoke,
     submitHandoffResolve, submitServiceImport, onServiceImportFile, downloadServiceTemplate,
     resolveHandoff, switchChainWindow, toggleResolvedHandoffs,
     deleteBarber, activateBarber,
     markCompleted, markCancelled,
-    loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain,
+    loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain, loadShops,
     loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop, loadMembers, loadPlans,
     loadWeekly, loadChainWeekly, resetWeekly, loadAlerts, drillDown,
     resetCustFilters,

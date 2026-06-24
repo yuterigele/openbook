@@ -17,13 +17,25 @@ func (EventLog) TableName() string     { return "event_logs" }
 func (BarberLeave) TableName() string  { return "barber_leaves" }
 func (Service) TableName() string      { return "services" }
 func (CustomerNotification) TableName() string { return "customer_notifications" }
+func (APIKey) TableName() string              { return "api_keys" } // v4.12.1 api_access
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
 // 多店支持：每条 Shop 独立 CorpID / AgentID / Secret，回调时按 CorpID 反查 Shop。
+//
+// v4.12.1 multi_store gate：
+//   - ParentShopID == "" → 主店（top-level）
+//   - ParentShopID != "" → 分店（指向主店 ID）
+//   - 同一主店 + 其分店 = 一个 "shop group"
+//   - 店主 plan 限额按 group 内 shop 数（plan_gate.go CountShopsInGroup）
 type Shop struct {
 	ID            string    `gorm:"primaryKey;size:64" json:"id"`
 	Name          string    `gorm:"size:128;not null" json:"name"`
+	// ParentShopID 分店关联的主店 ID（v4.12.1 multi_store）
+	//   - 主店 = 自己 → ParentShopID = ""
+	//   - 分店 = 隶属某主店 → ParentShopID = 主店 ID
+	//   - 索引：让 ListShopsInGroup(parentID) 走索引
+	ParentShopID  string    `gorm:"size:64;index" json:"parent_shop_id,omitempty"`
 	Address       string    `gorm:"size:256" json:"address"`
 	Timezone      string    `gorm:"size:64;default:Asia/Shanghai" json:"timezone"`
 	OpenHour      int       `gorm:"default:9" json:"open_hour"`   // 09:00
@@ -148,6 +160,29 @@ type WecomMessageLog struct {
 	Processed     bool      `gorm:"default:true" json:"processed"`
 	ReceivedAt    time.Time `gorm:"index" json:"received_at"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+// APIKey 商户 API key（v4.12.1 api_access feature 实战）
+//
+//   - Token 明文只在创建时返一次（前端 modal 显示 + 用户复制），DB 只存哈希
+//   - Hash 用 SHA256（明文 token → hash 比对），不是 bcrypt（API key 已是高熵随机字符串，不需要慢哈希）
+//   - Scopes：JSON 数组字符串（sqlite 不支持 []string native），如 `["appointments:read"]`
+//   - Status：active / revoked（revoked 后即使明文对也拒）
+//   - LastUsedAt 每次鉴权成功后更新（异步，不阻塞主流程）
+type APIKey struct {
+	ID          uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	ShopID      string    `gorm:"size:64;index;not null" json:"shop_id"`
+	Name        string    `gorm:"size:64;not null" json:"name"`         // 用户起的标识名（"POS 系统"）
+	TokenHash   string    `gorm:"size:128;uniqueIndex;not null" json:"-"` // SHA256(token)
+	TokenPrefix string    `gorm:"size:16;index" json:"token_prefix"`    // 前 8 字符（apikey_），用于列表展示，不暴露全 token
+	Scopes      string    `gorm:"size:512;default:'[]'" json:"scopes"`  // JSON 数组字符串
+	Status      string    `gorm:"size:16;default:active;index" json:"status"`
+	ExpiresAt   time.Time `json:"expires_at"`                           // 默认 +1 年
+	LastUsedAt  time.Time `json:"last_used_at"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	RevokedAt   time.Time `json:"revoked_at,omitempty"`
+	RevokeNote  string    `gorm:"size:256" json:"revoke_note,omitempty"`
 }
 
 // ReminderLog 提醒发送日志（对应 PRD §11.4 ReminderLog）

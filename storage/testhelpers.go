@@ -63,6 +63,7 @@ func SetupTestDB(t *testing.T) {
 		&Service{}, // v4.4 服务目录
 		&RolePermission{}, // v4.7 RBAC 权限表
 		&CustomerNotification{}, // v4.10 leave notify 持久化
+		&APIKey{},               // v4.12.1 api_access feature
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

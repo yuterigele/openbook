@@ -58,6 +58,12 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	// 公开：登录
 	h.POST("/api/auth/login", loginHandler)
 
+	// v4.12.1 api_access：外部系统接入（用 API key，不用 JWT）
+	//   - middleware chain：APIKeyAuth → RequireAPIKeyScope → handler
+	//   - 独立路由组，不走 JWT / PlanActive middleware
+	external := h.Group("/api/external", auth.APIKeyAuth())
+	external.GET("/appointments", auth.RequireAPIKeyScope("appointments:read"), listExternalAppointmentsHandler)
+
 	// 公开：看板（用 URL 里的 shop_id，登录后才能用）
 	api := h.Group("/api")
 	api.GET("/shop/:id/dashboard", dashboardHandler)
@@ -120,6 +126,11 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/shop", auth.RequirePerm(storage.PermEditShop), getShopHandler) // 设为 owner-only 防止 staff 误读敏感字段
 	protected.GET("/plans", auth.RequirePerm(storage.PermViewPlan), plansHandler) // v4.12: owner 看自己 plan + 4 档对比
 	protected.GET("/data/export", auth.RequirePerm(storage.PermViewPlan), dataExportHandler) // v4.12.1: CSV 导出，需 data_export feature
+	protected.GET("/shops", auth.RequirePerm(storage.PermViewPlan), listShopsHandler)       // v4.12.1: 列当前 shop group
+	protected.POST("/shops", auth.RequirePerm(storage.PermViewPlan), createShopHandler)     // v4.12.1: 建分店，需 multi_store feature
+	protected.GET("/api-keys", auth.RequirePerm(storage.PermViewPlan), listAPIKeysHandler)  // v4.12.1: 列 API keys
+	protected.POST("/api-keys", auth.RequirePerm(storage.PermViewPlan), createAPIKeyHandler) // v4.12.1: 生成 API key，需 api_access feature
+	protected.POST("/api-keys/:id/revoke", auth.RequirePerm(storage.PermViewPlan), revokeAPIKeyHandler) // v4.12.1: 吊销
 	protected.PUT("/shop", auth.RequirePerm(storage.PermEditShop), updateShopHandler)
 
 	// 跨店看板（连锁）—— v4.10.1：只给 platform_admin 看
@@ -310,14 +321,28 @@ func changePasswordHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// v4.12.1 安全 fix：必须校验旧密码（之前不校验，token 泄漏就能改密码）
+	if req.OldPassword == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "旧密码不能为空"})
+		return
+	}
 	if len(req.NewPassword) < 6 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "新密码至少 6 位"})
 		return
 	}
-	admin, err := storage.FindAdminByUsername(ctx, "") // 不通过 username 走，直接按 id
-	_ = admin
-	_ = err
-	// 简化：直接用 cl.AdminID 改
+	if req.OldPassword == req.NewPassword {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "新密码不能与旧密码相同"})
+		return
+	}
+	admin, err := storage.FindShopAdminByID(ctx, cl.AdminID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "查账号失败: " + err.Error()})
+		return
+	}
+	if !storage.VerifyAdminPassword(admin, req.OldPassword) {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "旧密码错误"})
+		return
+	}
 	if err := storage.UpdateAdminPassword(ctx, cl.AdminID, req.NewPassword); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
