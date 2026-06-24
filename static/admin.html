@@ -1217,6 +1217,15 @@
         </svg>
         <span>多店看板</span>
       </a>
+      <a class="nav-item" data-view="members" href="#members">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span>成员管理</span>
+      </a>
       <a class="nav-item" data-view="shop" href="#shop">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
@@ -1404,6 +1413,7 @@ const App = (() => {
       handoffs: '转人工', customers: '顾客', services: '服务目录',
       subscription: '订阅', shop: '店铺设置', weekly: '单店周报',
       'chain-weekly': '跨店周报',
+      members: '成员管理',
       notifications: '通知中心'
     };
     $('#crumbView').textContent = labels[v] || v;
@@ -1426,6 +1436,7 @@ const App = (() => {
     else if (state.view === 'weekly') c.innerHTML = renderWeekly();
     else if (state.view === 'chain-weekly') c.innerHTML = renderChainWeekly();
     else if (state.view === 'notifications') c.innerHTML = renderNotifications();
+    else if (state.view === 'members') c.innerHTML = renderMembers();
   }
 
   function renderEmpty(title, hint, iconName = 'inbox') {
@@ -2133,6 +2144,156 @@ const App = (() => {
     </div>`;
   }
 
+  // ---------- Members view (v4.11 — v4.7 RBAC 前端补完) ----------
+  //
+  // 后端 5 个 handler（api/members.go）从 v4.7 起就完整：
+  //   GET    /api/admin/members              listMembersHandler
+  //   POST   /api/admin/members              createMemberHandler
+  //   PUT    /api/admin/members/:id/role     changeMemberRoleHandler
+  //   POST   /api/admin/members/:id/reset-password  resetMemberPasswordHandler
+  //   DELETE /api/admin/members/:id          disableMemberHandler
+  // 前端 7 个版本没接通，pilot 期间只能用 admin-tool / curl 测。
+  // v4.11 补最小可用页面：list + create + change role + reset password + disable
+  //
+  // ROLES_REQUIRED 已配 'members': ['owner']（staff 故意禁）
+  function renderMembers() {
+    const me = state.user || {};
+    return `<div class="view-head">
+      <h1>成员管理</h1>
+      <p>本店登录账号：建成员、改角色、重置密码、停用。所有操作都限本店，跨店操作会被拒</p>
+    </div>
+    <div class="row" style="margin-bottom:14px; gap: 8px; flex-wrap: wrap;">
+      <button class="btn btn-primary" onclick="App.openMemberModal()">
+        ${icon('plus', 14)} 新增成员
+      </button>
+      <span class="spacer"></span>
+      <span class="text-muted" style="font-size:12px;">
+        当前账号：<b>${esc(me.username || '?')}</b>（${esc(me.role || '?')}） · ${esc(me.shop_id || '?')}
+      </span>
+    </div>
+    <div class="card" id="membersCard">
+      <div style="padding:20px;">${renderSkeleton(4)}</div>
+    </div>`;
+  }
+
+  function renderMemberRows() {
+    const rows = state.members || [];
+    if (!rows.length) {
+      return '<div style="padding:20px;">' + renderEmpty('还没有成员', '点击右上角"新增成员"开始', 'user-plus') + '</div>';
+    }
+    const header = `<div class="member-row" style="background:var(--surface-2);font-size:11px;font-weight:600;text-transform:uppercase;color:var(--ink-muted);letter-spacing:.04em;">
+      <div>用户名</div><div>角色</div><div>状态</div><div>最后登录</div><div class="num">操作</div>
+    </div>`;
+    return header + rows.map(renderMemberRow).join('');
+  }
+
+  function renderMemberRow(m) {
+    const me = state.user || {};
+    const isMe = m.id === me.admin_id;
+    const status = (m.status === 'active' || !m.status) ? 'active' : 'disabled';
+    const statusPill = status === 'active'
+      ? '<span class="pill pill-success">活跃</span>'
+      : '<span class="pill pill-muted">已停用</span>';
+    const rolePill = m.role === 'owner'
+      ? '<span class="pill pill-warning">店主</span>'
+      : '<span class="pill">店员</span>';
+    const lastLogin = m.last_login_at ? m.last_login_at.slice(0, 19).replace('T', ' ') : '—';
+    // 操作按钮规则：
+    //   - 自己：只能"重置自己密码"（其他都禁，避免误操作把自己降级 / 停用）
+    //   - 对方：可改 role / 重置密码 / 停用
+    //   - last-owner 保护在 changeMemberRoleHandler / disableMemberHandler 服务端做
+    const actions = [];
+    if (isMe) {
+      actions.push(`<button class="btn btn-sm" disabled style="opacity:0.5">自己</button>`);
+    } else {
+      const newRole = m.role === 'owner' ? 'staff' : 'owner';
+      actions.push(`<button class="btn btn-sm" onclick="App.changeMemberRole(${m.id},'${newRole}')">改为${newRole === 'owner' ? '店主' : '店员'}</button>`);
+      actions.push(`<button class="btn btn-sm" onclick="App.openResetPasswordModal(${m.id},'${esc(m.username)}')">重置密码</button>`);
+      if (status === 'active') {
+        actions.push(`<button class="btn btn-sm btn-danger" onclick="App.disableMember(${m.id},'${esc(m.username)}')">停用</button>`);
+      }
+    }
+    return `<div class="member-row ${status === 'disabled' ? 'inactive' : ''}">
+      <div class="name">
+        <b>${esc(m.username)}</b>${isMe ? ' <span class="text-muted" style="font-weight:400;font-size:11px;">· 我</span>' : ''}
+      </div>
+      <div>${rolePill}</div>
+      <div>${statusPill}</div>
+      <div class="text-muted text-mono">${esc(lastLogin)}</div>
+      <div class="num" style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;">
+        ${actions.join('')}
+      </div>
+    </div>`;
+  }
+
+  // ---------- Members ops (v4.11) ----------
+  function openMemberModal() {
+    openModal('memberCreate', {});
+  }
+  async function submitMember() {
+    const username = $('#mbUsername').value.trim();
+    const password = $('#mbPassword').value;
+    const role = $('#mbRole').value;
+    const errEl = $('#mbErr');
+    if (errEl) errEl.classList.add('hidden');
+    if (username.length < 3 || username.length > 32) {
+      if (errEl) { errEl.textContent = '用户名长度必须在 3-32 字'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    if (password.length < 6) {
+      if (errEl) { errEl.textContent = '密码至少 6 位'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    try {
+      await api('/api/admin/members', { method: 'POST', body: { username, password, role } });
+      closeModal();
+      showToast('已新增成员 ' + username, 'success');
+      loadMembers();
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    }
+  }
+  async function changeMemberRole(id, newRole) {
+    if (!confirm(`确定改为「${newRole === 'owner' ? '店主' : '店员'}」吗？\n\n注意：本店最后一个 owner 会被服务端拒绝降级`)) return;
+    try {
+      await api(`/api/admin/members/${id}/role`, { method: 'PUT', body: { role: newRole } });
+      showToast('已更新角色', 'success');
+      loadMembers();
+    } catch (e) {
+      showToast('改角色失败：' + e.message, 'error');
+    }
+  }
+  function openResetPasswordModal(id, username) {
+    openModal('resetPassword', { targetId: id, targetUsername: username });
+  }
+  async function submitResetPassword() {
+    const d = state.modal.data;
+    const np = $('#rpNewPassword').value;
+    const errEl = $('#rpErr');
+    if (errEl) errEl.classList.add('hidden');
+    if (np.length < 6) {
+      if (errEl) { errEl.textContent = '新密码至少 6 位'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    try {
+      await api(`/api/admin/members/${d.targetId}/reset-password`, { method: 'POST', body: { new_password: np } });
+      closeModal();
+      showToast(`已重置 ${d.targetUsername} 的密码`, 'success');
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    }
+  }
+  async function disableMember(id, username) {
+    if (!confirm(`确定停用「${username}」吗？\n\n停用后该账号无法登录，店主可重新启用（v4.11 后端没启启用接口，停用 = 永久）。\n注意：本店最后一个 active owner 会被服务端拒绝`)) return;
+    try {
+      await api(`/api/admin/members/${id}`, { method: 'DELETE' });
+      showToast(`已停用 ${username}`, 'success');
+      loadMembers();
+    } catch (e) {
+      showToast('停用失败：' + e.message, 'error');
+    }
+  }
+
   // ---------- Subscription view (v4.4) ----------
   function renderSubscription() {
     // v4.10.1：只有 platform_admin 能进这个页面（前端 nav-item 已按 role 隐藏）
@@ -2570,6 +2731,8 @@ const App = (() => {
     else if (kind === 'customerDetail') body = customerDetailModal();
     else if (kind === 'handoffResolve') body = handoffResolveModal(data);
     else if (kind === 'serviceImport') body = serviceImportModal();
+    else if (kind === 'memberCreate') body = memberCreateModal();
+    else if (kind === 'resetPassword') body = resetPasswordModal(data);
     else return;
     root.innerHTML = body;
     // wire submit buttons by id
@@ -2588,6 +2751,10 @@ const App = (() => {
       $('#handoffResolveNote')?.focus();
     } else if (kind === 'serviceImport') {
       $('#svcImportFile')?.addEventListener('change', App.onServiceImportFile);
+    } else if (kind === 'memberCreate') {
+      $('#mbUsername')?.focus();
+    } else if (kind === 'resetPassword') {
+      $('#rpNewPassword')?.focus();
     } else if (kind === 'confirm') {
       // v4.6 修复:把 callback 绑在 .js-confirm-btn 上,保留 IIFE 闭包
       const btn = root.querySelector('.js-confirm-btn');
@@ -2800,6 +2967,73 @@ const App = (() => {
         <div class="modal-foot">
           <button class="btn" onclick="App.closeModal()">取消</button>
           <button class="btn btn-primary" onclick="App.submitService()">${isEdit ? '保存修改' : '确认新增'}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.11 成员管理 modal
+  function memberCreateModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>新增成员</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>用户名 <span class="text-muted" style="font-weight:400;">(3-32 字, 登录用)</span></label>
+            <input class="input" id="mbUsername" maxlength="32" placeholder="例如：tony01" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label>初始密码 <span class="text-muted" style="font-weight:400;">(≥6 位, 让 ta 首次登录后改掉)</span></label>
+            <input class="input" id="mbPassword" type="text" minlength="6" placeholder="例如：Welcome2026" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label>角色</label>
+            <select class="select" id="mbRole">
+              <option value="staff" selected>店员（看 + 业务操作）</option>
+              <option value="owner">店主（全权限，含本成员管理）</option>
+            </select>
+          </div>
+          <div class="text-muted" style="font-size:12px; margin-top:6px;">
+            · 跨店保护由后端强约束，本店 owner 才能管本店成员<br/>
+            · 自己不能停用 / 改自己（防误操作）<br/>
+            · 最后 1 个 active owner 不能被降级 / 停用（防锁死）
+          </div>
+          <div id="mbErr" class="err-banner hidden" style="margin-top:12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitMember()">确认新增</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function resetPasswordModal(data) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>重置 <span style="color:var(--brand);">${esc(data.targetUsername)}</span> 的密码</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>新密码 <span class="text-muted" style="font-weight:400;">(≥6 位, 让 ta 改掉)</span></label>
+            <input class="input" id="rpNewPassword" type="text" minlength="6" placeholder="新密码" autocomplete="off" />
+          </div>
+          <div class="text-muted" style="font-size:12px; margin-top:6px;">
+            · 不能重置自己（请用修改密码功能，避免误锁）<br/>
+            · 跨店操作会被后端拒绝（403）
+          </div>
+          <div id="rpErr" class="err-banner hidden" style="margin-top:12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitResetPassword()">确认重置</button>
         </div>
       </div>
     </div>`;
@@ -3133,6 +3367,7 @@ const App = (() => {
     'chain': ['platform_admin'],         // 多店看板：只 platform_admin
     'subscription': ['platform_admin'],   // 订阅：只 platform_admin（v4.10.1 商户不需要看订阅）
     'chain-weekly': ['platform_admin'],   // 跨店周报：只 platform_admin（v4.10.1）
+    'members': ['owner'],                 // 成员管理：只 owner（v4.11 补前端；staff 故意禁掉）
     // 'weekly' 不列：单店周报 owner / staff 都能看（v4.10.1 拆出来）
   };
   function applyRoleBasedNavVisibility(role) {
@@ -3504,6 +3739,19 @@ const App = (() => {
       state.services = Array.isArray(data) ? data : [];
       if (state.view === 'services' && card) {
         card.innerHTML = renderServiceRows();
+      }
+    } catch (e) {
+      if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  async function loadMembers() {
+    const card = $('#membersCard');
+    try {
+      const data = await api('/api/admin/members');
+      state.members = Array.isArray(data) ? data : [];
+      if (state.view === 'members' && card) {
+        card.innerHTML = renderMemberRows();
       }
     } catch (e) {
       if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
@@ -4189,6 +4437,7 @@ const App = (() => {
     else if (state.view === 'weekly') loadWeekly();
     else if (state.view === 'chain-weekly') loadChainWeekly();
     else if (state.view === 'notifications') loadNotifications();
+    else if (state.view === 'members') loadMembers();
   }
 
   // ---------- Init ----------
@@ -4212,6 +4461,7 @@ const App = (() => {
       else if (v === 'weekly') loadWeekly();
       else if (v === 'chain-weekly') loadChainWeekly();
       else if (v === 'notifications') loadNotifications();
+      else if (v === 'members') loadMembers();
     }));
     // 顾客搜索回车支持（v4.4 轻打磨）
     document.addEventListener('keydown', e => {
@@ -4236,16 +4486,18 @@ const App = (() => {
     openLeaveModal,
     openCustTagModal, openServiceModal, openRenewModal, openShopEditModal,
     openCustomerDetail, openHandoffResolveModal, openServiceImportModal,
+    openMemberModal, openResetPasswordModal,
     submitNewBarber, submitLeave, submitChangePassword,
     submitCustTag, removeCustTag,
     submitService, deactivateService, activateService,
+    submitMember, submitResetPassword, changeMemberRole, disableMember,
     submitRenew, submitShopEdit,
     submitHandoffResolve, submitServiceImport, onServiceImportFile, downloadServiceTemplate,
     resolveHandoff, switchChainWindow, toggleResolvedHandoffs,
     deleteBarber, activateBarber,
     markCompleted, markCancelled,
     loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain,
-    loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop,
+    loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop, loadMembers,
     loadWeekly, loadChainWeekly, resetWeekly, loadAlerts, drillDown,
     resetCustFilters,
     refreshCurrent,
