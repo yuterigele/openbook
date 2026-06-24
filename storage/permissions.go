@@ -68,6 +68,13 @@ const (
 	PermViewSubscription   = "view:subscription"
 	PermManageSubscription = "manage:subscription" // 续费（v4.4）
 
+	// plan 元数据（v4.12）：商户看自己 plan + 4 档对比
+	//   - owner 有（升级决策需要看 plan）
+	//   - staff 故意禁（plan 是经营决策，staff 不需要）
+	//   - platform_admin 全有
+	// 跟 PermViewSubscription 区别：后者是平台层订阅管理（v4.10.1 收紧归 platform_admin）
+	PermViewPlan = "view:plan"
+
 	// 成员管理
 	PermManageMembers = "manage:members" // 建 / 改 role / 重置密码 / 停用
 
@@ -98,6 +105,7 @@ var AllPermissions = []string{
 	PermManageMembers,
 	PermChangeOwnPassword,
 	PermViewNotifications, PermRetryNotifications,
+	PermViewPlan,
 }
 
 // Role 角色枚举
@@ -173,6 +181,7 @@ var DefaultRolePermissions = map[string][]string{
 		PermManageMembers,
 		PermChangeOwnPassword,
 		PermViewNotifications, PermRetryNotifications,
+		PermViewPlan, // v4.12: 升级决策需要看自己 plan 元数据
 	},
 	RoleStaff: {
 		// 看 + 业务操作（不允许 manage:* / edit:shop / edit:services）

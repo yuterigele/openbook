@@ -249,6 +249,8 @@ func TestAdminHasPermission_NotFound(t *testing.T) {
 //   - view:subscription
 //   - manage:subscription
 //   - manage:members
+//
+// v4.12 新增：view:plan（plan 元数据，staff 故意禁——plan 是经营决策，staff 不需要）
 func TestStaffForbiddensPinned(t *testing.T) {
 	wantForbidden := []string{
 		PermViewWeeklyReport,
@@ -258,6 +260,7 @@ func TestStaffForbiddensPinned(t *testing.T) {
 		PermViewSubscription,
 		PermManageSubscription,
 		PermManageMembers,
+		PermViewPlan, // v4.12
 	}
 	staffSet := make(map[string]bool, len(DefaultRolePermissions[RoleStaff]))
 	for _, p := range DefaultRolePermissions[RoleStaff] {
