@@ -11,6 +11,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"os"
 	"testing"
@@ -194,8 +196,36 @@ func MakeBarberLeave(t *testing.T, shopID, barberID string, startAt, endAt time.
 //   - 默认 status=active
 //   - 不会跟 MakeShop 的固定 ID 撞（ID 用 t.Name() 区分）
 //   - PasswordHash 是真实 bcrypt hash，能用 VerifyAdminPassword 校验
+//   - username 长度保护：api/members.go 限制 3-32 字符。t.Name() 经常超 32（特别是
+//     "TestCreateMember_DuplicateUsername" 这种长方法名 + 嵌套调用），先 panic 早，
+//     不让"撞长度校验"这种问题偷偷表现为"测试期望不符"
+const (
+	testAdminUsernameMin = 3
+	testAdminUsernameMax = 32
+)
+
+// ShortTestUsername 拼一个 ≤ 32 字符、test 间基本唯一的 username
+//
+//   - 解决 "t.Name() 经常超 32 撞长度校验" 的 footgun
+//   - 格式：prefix + "-" + sha256(t.Name())[:6 bytes 12 hex]
+//   - prefix 限制 ≤ 19 字符（prefix(19) + "-"(1) + 12 hex = 32 正好）
+//   - 唯一性：sha256 6 bytes = 48 bit，跨 test 碰撞概率极低（10^14 量级）
+//   - debug 友好：t.Name() 会在 test failure log 里出现，便于排查
+func ShortTestUsername(t *testing.T, prefix string) string {
+	t.Helper()
+	if len(prefix) > 19 {
+		t.Fatalf("ShortTestUsername: prefix %q (%d 字符) 太长，需 ≤ 19", prefix, len(prefix))
+	}
+	h := sha256.Sum256([]byte(t.Name()))
+	return prefix + "-" + hex.EncodeToString(h[:6])
+}
+
 func MakeAdminWithRole(t *testing.T, shopID, username, role string) *ShopAdmin {
 	t.Helper()
+	if n := len(username); n < testAdminUsernameMin || n > testAdminUsernameMax {
+		t.Fatalf("MakeAdminWithRole: username 长度 %d 超出 [%d, %d]：%q（t.Name() 太长？用短常量或 hash 截断）",
+			n, testAdminUsernameMin, testAdminUsernameMax, username)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("testpass"), bcrypt.DefaultCost)
 	if err != nil {
 		t.Fatalf("bcrypt: %v", err)

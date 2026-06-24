@@ -9,11 +9,17 @@
 // 背景：v4.10.1 加了 view:notifications / retry:notifications 两个新权限，
 // SeedDefaultRolePermissions 只在 role_permissions 表为空时才跑，
 // 所以老店铺永远拿不到新权限——用 reconcile 子命令补齐（不动运营调整过的）。
+//
+// 测试性：
+//   - runPerms* 接受 io.Writer + 返 error，不直接 os.Exit（main 负责退出码）
+//   - initStorageFn 是 var，测试里可替换为 storage.SetupTestDB 注入
+//   - 这样 main_test.go 不需要真连 MySQL
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -22,33 +28,54 @@ import (
 	"github.com/yuterigele/openbook/storage"
 )
 
+// initStorageFn 是 initStorage 的实现（依赖注入点）。
+//
+//   - 生产：调 storage.InitDB 连 MySQL
+//   - 测试：替换为 storage.SetupTestDB 走 in-memory sqlite
+var initStorageFn = func(ctx context.Context) error {
+	_, err := storage.InitDB(ctx)
+	return err
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run 是 main 的可测核心。返回 exit code（0=成功，1=用户错误，2=系统错误）。
+//
+//   - args:  os.Args[1:]，由调用方负责切片
+//   - out:   正常输出（perms list / set / reconcile 的结果）
+//   - errOut: usage / 错误信息
+func run(args []string, out, errOut io.Writer) int {
+	if len(args) < 1 {
+		usage(errOut)
+		return 1
 	}
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	cmd := args[0]
+	rest := args[1:]
 
 	chatmodel.LoadEnv()
 	ctx := context.Background()
-	if _, err := storage.InitDB(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "InitDB 失败: %v\n", err)
-		os.Exit(1)
+	if err := initStorageFn(ctx); err != nil {
+		fmt.Fprintf(errOut, "InitDB 失败: %v\n", err)
+		return 2
 	}
 
 	switch cmd {
 	case "perms":
-		runPerms(ctx, args)
+		if err := runPerms(ctx, rest, out, errOut); err != nil {
+			return 1
+		}
+		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "未知子命令: %s\n", cmd)
-		usage()
-		os.Exit(1)
+		fmt.Fprintf(errOut, "未知子命令: %s\n", cmd)
+		usage(errOut)
+		return 1
 	}
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, `用法:
+func usage(w io.Writer) {
+	fmt.Fprintf(w, `用法:
   admin-tool perms reconcile                       # 增量补齐缺失的 role → permission
   admin-tool perms list [role]                     # 列某 role 的权限
   admin-tool perms set <role> <p1,p2,...>          # 整组覆盖某 role 的权限
@@ -56,124 +83,124 @@ func usage() {
 `)
 }
 
-func runPerms(ctx context.Context, args []string) {
+// runPerms dispatch perms 子命令；返回 error 走 main 决定 exit code
+func runPerms(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "perms 子命令需要参数: reconcile / list / set / check")
-		os.Exit(1)
+		fmt.Fprintln(errOut, "perms 子命令需要参数: reconcile / list / set / check")
+		return fmt.Errorf("missing subcommand")
 	}
-	sub := args[0]
-	switch sub {
+	switch args[0] {
 	case "reconcile":
-		runPermsReconcile(ctx)
+		return runPermsReconcile(ctx, out)
 	case "list":
 		role := ""
 		if len(args) >= 2 {
 			role = args[1]
 		}
-		runPermsList(ctx, role)
+		return runPermsList(ctx, role, out)
 	case "set":
 		if len(args) < 3 {
-			fmt.Fprintln(os.Stderr, "用法: admin-tool perms set <role> <p1,p2,...>")
-			os.Exit(1)
+			fmt.Fprintln(errOut, "用法: admin-tool perms set <role> <p1,p2,...>")
+			return fmt.Errorf("usage: perms set <role> <p1,p2,...>")
 		}
 		perms := strings.Split(args[2], ",")
-		runPermsSet(ctx, args[1], perms)
+		return runPermsSet(ctx, args[1], perms, out)
 	case "check":
 		if len(args) < 3 {
-			fmt.Fprintln(os.Stderr, "用法: admin-tool perms check <role> <perm>")
-			os.Exit(1)
+			fmt.Fprintln(errOut, "用法: admin-tool perms check <role> <perm>")
+			return fmt.Errorf("usage: perms check <role> <perm>")
 		}
-		runPermsCheck(ctx, args[1], args[2])
+		return runPermsCheck(ctx, args[1], args[2], out)
 	default:
-		fmt.Fprintf(os.Stderr, "未知 perms 子命令: %s\n", sub)
-		os.Exit(1)
+		fmt.Fprintf(errOut, "未知 perms 子命令: %s\n", args[0])
+		return fmt.Errorf("unknown subcommand: %s", args[0])
 	}
 }
 
-func runPermsReconcile(ctx context.Context) {
+// runPermsReconcile 增量补齐缺失的 role → permission（"只补缺失，不删任何"）
+func runPermsReconcile(ctx context.Context, out io.Writer) error {
 	res, err := storage.ReconcileRolePermissions(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "reconcile 失败: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("reconcile 失败: %w", err)
 	}
-	fmt.Printf("✓ reconcile 完成\n")
-	fmt.Printf("  新增 %d 条（已有 %d 条保留）\n", res.Inserted, res.Skipped)
+	fmt.Fprintf(out, "✓ reconcile 完成\n")
+	fmt.Fprintf(out, "  新增 %d 条（已有 %d 条保留）\n", res.Inserted, res.Skipped)
 	if res.Inserted > 0 {
-		fmt.Println("  新增明细：")
+		fmt.Fprintln(out, "  新增明细：")
 		for _, desc := range res.InsertedList {
-			fmt.Printf("    + %s\n", desc)
+			fmt.Fprintf(out, "    + %s\n", desc)
 		}
 	} else {
-		fmt.Println("  （无缺失，无需补全）")
+		fmt.Fprintln(out, "  （无缺失，无需补全）")
 	}
+	return nil
 }
 
-func runPermsList(ctx context.Context, role string) {
+// runPermsList 列权限：role 为空时列所有 role
+func runPermsList(ctx context.Context, role string, out io.Writer) error {
 	if role != "" {
 		perms, err := storage.GetRolePermissions(ctx, role)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "查询失败: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("查询失败: %w", err)
 		}
-		fmt.Printf("role=%s 权限（%d 条）：\n", role, len(perms))
+		fmt.Fprintf(out, "role=%s 权限（%d 条）：\n", role, len(perms))
 		for _, p := range perms {
-			fmt.Printf("  - %s\n", p)
+			fmt.Fprintf(out, "  - %s\n", p)
 		}
-		return
+		return nil
 	}
 	// 不传 role：列所有 role
 	for _, r := range storage.AllRoles {
 		perms, err := storage.GetRolePermissions(ctx, r)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "查询 %s 失败: %v\n", r, err)
-			continue
+			return fmt.Errorf("查询 %s 失败: %w", r, err)
 		}
-		fmt.Printf("\nrole=%s 权限（%d 条）：\n", r, len(perms))
+		fmt.Fprintf(out, "\nrole=%s 权限（%d 条）：\n", r, len(perms))
 		for _, p := range perms {
-			fmt.Printf("  - %s\n", p)
+			fmt.Fprintf(out, "  - %s\n", p)
 		}
 	}
-	// 顺便提示：default 矩阵里 owner/staff 的预期条数
-	fmt.Println()
-	fmt.Println("（可对照 storage/permissions.go 的 defaultRolePermissions 看是否齐全）")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "（可对照 storage/permissions.go 的 DefaultRolePermissions 看是否齐全）")
+	return nil
 }
 
-func runPermsSet(ctx context.Context, role string, perms []string) {
-	// 排序 + 去重
+// runPermsSet 整组覆盖某 role 的权限（去重 + 排序后写入）
+func runPermsSet(ctx context.Context, role string, perms []string, out io.Writer) error {
 	uniq := make(map[string]bool)
-	out := make([]string, 0, len(perms))
+	out2 := make([]string, 0, len(perms))
 	for _, p := range perms {
 		p = strings.TrimSpace(p)
 		if p != "" && !uniq[p] {
 			uniq[p] = true
-			out = append(out, p)
+			out2 = append(out2, p)
 		}
 	}
-	sort.Strings(out)
+	sort.Strings(out2)
 
-	fmt.Printf("将覆盖 role=%s 的权限：%d 条\n", role, len(out))
-	for _, p := range out {
-		fmt.Printf("  - %s\n", p)
+	fmt.Fprintf(out, "将覆盖 role=%s 的权限：%d 条\n", role, len(out2))
+	for _, p := range out2 {
+		fmt.Fprintf(out, "  - %s\n", p)
 	}
-	if err := storage.SetRolePermissions(ctx, role, out); err != nil {
-		fmt.Fprintf(os.Stderr, "set 失败: %v\n", err)
-		os.Exit(1)
+	if err := storage.SetRolePermissions(ctx, role, out2); err != nil {
+		return fmt.Errorf("set 失败: %w", err)
 	}
-	fmt.Println("✓ 完成")
+	fmt.Fprintln(out, "✓ 完成")
+	return nil
 }
 
-func runPermsCheck(ctx context.Context, role, perm string) {
+// runPermsCheck 查某 role 是否有某 perm；缺则返 error
+func runPermsCheck(ctx context.Context, role, perm string, out io.Writer) error {
 	perms, err := storage.GetRolePermissions(ctx, role)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "查询失败: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("查询失败: %w", err)
 	}
 	for _, p := range perms {
 		if p == perm {
-			fmt.Printf("✓ role=%s 拥有 perm=%s\n", role, perm)
-			return
+			fmt.Fprintf(out, "✓ role=%s 拥有 perm=%s\n", role, perm)
+			return nil
 		}
 	}
-	fmt.Printf("✗ role=%s 缺少 perm=%s\n", role, perm)
-	os.Exit(1)
+	fmt.Fprintf(out, "✗ role=%s 缺少 perm=%s\n", role, perm)
+	return fmt.Errorf("role=%s 缺少 perm=%s", role, perm)
 }

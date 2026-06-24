@@ -22,30 +22,53 @@ import (
 
 // helper: 造一个 owner + 一个 staff 在同店
 //   - 返回 owner / staff；要拿 shop_id 用 owner.ShopID（同一个店）
+//   - username 用 ShortTestUsername 拼短串（t.Name() 经常超 32 撞长度校验）
 func setupShopWithOwnerAndStaff(t *testing.T) (owner, staff *storage.ShopAdmin) {
 	t.Helper()
 	shopRec := storage.MakeShop(t, "shop-rbac-"+t.Name(), "")
-	ownerRec := storage.MakeAdminWithRole(t, shopRec.ID, "owner1-"+t.Name(), "owner")
-	staffRec := storage.MakeAdminWithRole(t, shopRec.ID, "staff1-"+t.Name(), "staff")
+	ownerRec := storage.MakeAdminWithRole(t, shopRec.ID, storage.ShortTestUsername(t, "owner"), "owner")
+	staffRec := storage.MakeAdminWithRole(t, shopRec.ID, storage.ShortTestUsername(t, "staff"), "staff")
 	return ownerRec, staffRec
 }
 
 func TestRBAC_Setup(t *testing.T) {
 	// 验证 defaultRolePermissions 已被 seed
-	perms, err := storage.GetRolePermissions(t.Context(), storage.RoleOwner)
+	//
+	// 注意：v4.10.1 之后 owner 不再默认拥有 AllPermissions 里所有 perm——
+	// 故意拿掉 3 个：view:chain_dashboard / view:subscription / manage:subscription
+	// （订阅 + 跨店数据归 platform_admin，单店 owner 不应能看）。
+	// 所以这里断言用 defaultRolePermissions 矩阵的实际长度，不要用 len(AllPermissions)。
+	setupAPITestDB(t)
+
+	wantOwner := len(storage.DefaultRolePermissions[storage.RoleOwner])
+	wantPlatform := len(storage.DefaultRolePermissions[storage.RolePlatformAdmin])
+
+	ownerPerms, err := storage.GetRolePermissions(t.Context(), storage.RoleOwner)
 	if err != nil {
 		t.Fatalf("GetRolePermissions owner: %v", err)
 	}
-	if len(perms) != len(storage.AllPermissions) {
-		t.Errorf("owner 应有 %d 权限，实际 %d", len(storage.AllPermissions), len(perms))
+	if len(ownerPerms) != wantOwner {
+		t.Errorf("owner 应有 %d 权限，实际 %d（v4.10.1 后 owner 不再用 AllPermissions 兜底）", wantOwner, len(ownerPerms))
 	}
 	staffPerms, err := storage.GetRolePermissions(t.Context(), storage.RoleStaff)
 	if err != nil {
 		t.Fatalf("GetRolePermissions staff: %v", err)
 	}
-	if len(staffPerms) >= len(perms) {
-		t.Errorf("staff 权限 (%d) 应少于 owner (%d)", len(staffPerms), len(perms))
+	if len(staffPerms) >= len(ownerPerms) {
+		t.Errorf("staff 权限 (%d) 应少于 owner (%d)", len(staffPerms), len(ownerPerms))
 	}
+	platformPerms, err := storage.GetRolePermissions(t.Context(), storage.RolePlatformAdmin)
+	if err != nil {
+		t.Fatalf("GetRolePermissions platform_admin: %v", err)
+	}
+	if wantPlatform != len(storage.AllPermissions) {
+		t.Errorf("platform_admin 默认矩阵应该 = AllPermissions（%d），实际 %d —— defaultRolePermissions 漂了",
+			len(storage.AllPermissions), wantPlatform)
+	}
+	if len(platformPerms) != wantPlatform {
+		t.Errorf("platform_admin 应有 %d 权限，实际 %d", wantPlatform, len(platformPerms))
+	}
+
 	// staff 必含 PermViewDashboard, 必不含 PermEditShop
 	has := map[string]bool{}
 	for _, p := range staffPerms {
@@ -56,6 +79,20 @@ func TestRBAC_Setup(t *testing.T) {
 	}
 	if has[storage.PermEditShop] {
 		t.Error("staff 不应有 PermEditShop")
+	}
+	// owner 不应再默认拥有 view:chain_dashboard / view:subscription / manage:subscription（v4.10.1 收紧）
+	ownerHas := map[string]bool{}
+	for _, p := range ownerPerms {
+		ownerHas[p] = true
+	}
+	for _, banned := range []string{
+		storage.PermViewChainDashboard,
+		storage.PermViewSubscription,
+		storage.PermManageSubscription,
+	} {
+		if ownerHas[banned] {
+			t.Errorf("owner 不应默认拥有 %s（v4.10.1 起归 platform_admin）", banned)
+		}
 	}
 }
 
@@ -78,7 +115,7 @@ func TestListMembers_OwnerOK(t *testing.T) {
 	if !strings.Contains(body, owner.Username) {
 		t.Errorf("响应缺 owner: %s", body)
 	}
-	if !strings.Contains(body, "staff1-") {
+	if !strings.Contains(body, "staff-") {
 		t.Errorf("响应缺 staff: %s", body)
 	}
 }
@@ -116,8 +153,13 @@ func TestCreateMember_HappyPath(t *testing.T) {
 func TestCreateMember_DuplicateUsername(t *testing.T) {
 	setupAPITestDB(t)
 	owner, _ := setupShopWithOwnerAndStaff(t)
+	// 故意用短 username（owner.Username 是 "owner1-<t.Name()>"，t.Name() 长起来会超 32 撞长度校验）
+	// 改用 staff.Username 更稳——setupShopWithOwnerAndStaff 的 staff 前缀是 "staff1-" + t.Name()，
+	// 同样可能超长。所以单独建一个短名 admin 来测重名。
+	shortName := "dup-user"
+	storage.MakeAdminWithRole(t, owner.ShopID, shortName, "staff")
 	ctx := newAPIContext(t, "POST", "/api/admin/members",
-		[]byte(`{"username":"`+owner.Username+`","password":"secret123","role":"staff"}`))
+		[]byte(`{"username":"`+shortName+`","password":"secret123","role":"staff"}`))
 	setClaimsForAdmin(ctx, owner.ID, owner.ShopID, owner.Role)
 	status, body := runHandler(t, createMemberHandler, ctx)
 	if status != 409 {

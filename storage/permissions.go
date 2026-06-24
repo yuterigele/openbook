@@ -150,7 +150,10 @@ func IsPlatformAdmin(role string) bool {
 //  3. platform_admin 不需要列（默认全权限）
 //  4. 重启服务，让 seed 写 DB
 //  5. 写单测覆盖 owner/staff 边界
-var defaultRolePermissions = map[string][]string{
+//
+// 暴露 DefaultRolePermissions 让测试可以断言"矩阵期望长度"（避免硬编码数字，
+// 后续加 perm 时测试自动跟上）。
+var DefaultRolePermissions = map[string][]string{
 	// owner 全权限（除了 view:chain_dashboard——单店 owner 看不到跨店数据）
 	// v4.10.1：之前用 AllPermissions 走捷径，导致单店 owner 也能看多店看板。
 	// 现改成显式列，缺什么补什么更安全。
@@ -314,7 +317,7 @@ func SeedDefaultRolePermissions(ctx context.Context) error {
 		return nil // 已 seed 过
 	}
 	var rows []RolePermission
-	for role, perms := range defaultRolePermissions {
+	for role, perms := range DefaultRolePermissions {
 		for _, p := range perms {
 			rows = append(rows, RolePermission{Role: role, Permission: p})
 		}
@@ -322,8 +325,6 @@ func SeedDefaultRolePermissions(ctx context.Context) error {
 	if err := DB.WithContext(ctx).Create(&rows).Error; err != nil {
 		return err
 	}
-	log.Printf("[storage] seed role_permissions: %d 条（owner=%d staff=%d）",
-		len(rows), len(defaultRolePermissions[RoleOwner]), len(defaultRolePermissions[RoleStaff]))
 	return nil
 }
 
@@ -338,7 +339,7 @@ type ReconcileRolePermissionsResult struct {
 //
 //   - 这是 SeedDefaultRolePermissions 的"补丁版"：
 //     Seed 只在表为空时跑一次（保护运营调整），但**新加的权限**老店铺永远拿不到
-//     Reconcile 每次启动都跑，对比 defaultRolePermissions + 已存在记录，**只补缺失、不删任何记录**
+//     Reconcile 每次启动都跑，对比 DefaultRolePermissions + 已存在记录，**只补缺失、不删任何记录**
 //   - 关键安全约束：绝不 Delete 任何 row
 //     - 运营在线调过的（比如"staff 禁掉 view:dashboard"）会完整保留
 //     - 真正"删 perm"的操作只应该走 SetRolePermissions（替换整组），不走 reconcile
@@ -373,13 +374,13 @@ func ReconcileRolePermissions(ctx context.Context) (ReconcileRolePermissionsResu
 		have[r.Role+"\x00"+r.Permission] = true
 	}
 
-	// 2) 对比 defaultRolePermissions，找出缺失的
-	//    注意：owner / staff / platform_admin 全部走 defaultRolePermissions 矩阵
+	// 2) 对比 DefaultRolePermissions，找出缺失的
+	//    注意：owner / staff / platform_admin 全部走 DefaultRolePermissions 矩阵
 	//    v4.10.1：owner 也改成显式列了（不再用 AllPermissions 兜底）
 	//    → 删掉/新增 perm 都要同步改这里
 	desired := make(map[string]bool)
 	// 显式遍历每个 role 的 default 矩阵
-	for role, perms := range defaultRolePermissions {
+	for role, perms := range DefaultRolePermissions {
 		if role == RoleOwner {
 			// owner 走显式列表（不包含 view:chain_dashboard 等"平台/连锁级" perm）
 			for _, p := range perms {
