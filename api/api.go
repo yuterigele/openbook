@@ -781,6 +781,21 @@ func renewSubscriptionHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "plan / months 必须"})
 		return
 	}
+	// v4.12：plan 白名单校验（之前是任意字符串都接受——bug）
+	// enterprise plan price = 0（按需谈），renew handler 不接受 enterprise
+	// enterprise 走商务手动建单 / 不走这个 endpoint
+	if !storage.IsValidPlanID(req.Plan) {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "未知 plan: " + req.Plan + "（支持: " + strings.Join(storage.AllPlanIDs, ", ") + "）",
+		})
+		return
+	}
+	if req.Plan == storage.PlanEnterprise {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "enterprise plan 按需谈价，不走自动续费（联系商务）",
+		})
+		return
+	}
 
 	now := time.Now()
 	expiresAt := now.AddDate(0, req.Months, 0)

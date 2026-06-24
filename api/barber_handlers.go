@@ -93,6 +93,22 @@ func createBarberHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// v4.12 plan gate：basic plan 限 3 个 barber / pro 限 10 / flagship 不限
+	// 在 create 之前算当前 active 数 + 1，超限返 402 Payment Required
+	current, err := storage.CountBarbersByShop(ctx, shopID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "plan gate: " + err.Error()})
+		return
+	}
+	if err := storage.CheckPlanLimit(ctx, shopID, "barbers", current, 1); err != nil {
+		if storage.IsPlanLimitExceeded(err) {
+			c.JSON(http.StatusPaymentRequired, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
 	b, err := storage.CreateBarber(ctx, shopID, req.Name, req.Skills)
 	if err != nil {
 		switch {
