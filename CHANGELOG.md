@@ -7,6 +7,138 @@
 
 ---
 
+## [v4.12] - 2026-06-24
+
+W1 测试基建收尾 + plan 体系完整化 + 过期冻结 + plans UI + 老店铺矩阵自动迁移。
+详见下面部署注意和 commit ref。
+
+### Added
+
+- **plan 体系完整化**（commit `661807e`）—— 4 档 plan 硬编码元数据 + renew handler 白名单校验
+  - `basic` 99 元/月（1 店 3 barber） / `pro` 299 元/月（1 店 10 barber + data_export）
+  - `flagship` 999 元/月（5 店不限 barber + api_access + multi_store + custom_report）
+  - `enterprise` 按需谈（不限 + priority_support + sla_guarantee）
+  - `storage/plan.go` 真理之源 + `PlanRegistry` map + 6 个 helper（IsValidPlanID/HasFeature/PlanLimitInt 等）
+- **barber 数 limit gate**（commit `661807e`）—— createBarberHandler 调 `CheckPlanLimit`
+  - basic 第 4 个 barber 返 402 Payment Required
+  - 软删 barber 不算限额
+- **plan 过期冻结 middleware**（commit `aca9fd8`）—— `auth.RequirePlanActive()`
+  - 7 天宽限期（仍可用，UI banner 提示）
+  - 冻结后返 402 + `frozen: true`
+  - 5min sync.Map cache（避免每 request 1 次 DB）
+  - renew handler 续费后自动清 cache
+- **plans API + UI**（commit `da272f5` + `76ef2ae` + `6c0bff2`）—— owner 端"套餐与升级"页
+  - `GET /api/admin/plans`（perm: view:plan）返 4 档对比 + 当前 plan + 倒计时 + grace_days
+  - admin.html 新 view `plans`：当前 plan 卡 + 4 档对比 + 升级 modal（v4.13 留支付扩展点）
+  - 顶部 banner：fresh 不显示 / 宽限期橙 / frozen 红
+- **view:plan 新 perm**（commit `da272f5`）—— 区分"自己店 plan 元数据"和"订阅管理"
+  - owner + platform_admin 有，staff 故意禁（plan 是经营决策）
+  - 跟 v4.10.1 收紧的 view:subscription 区分
+- **admin-tool perms migrate**（commit `268ecef`）—— 长期 fix 老店铺矩阵漂
+  - 跟 reconcile 区别：reconcile 只补不删，migrate 先删 v4.10.1 收紧项再补 v4.12 缺失
+  - 跑后列出"删除 + 新增 + perm 数 vs 矩阵长度"清单
+  - 幂等可重跑
+- **老店铺紧急修复 SQL**（`scripts/sql/fix-owner-perms-v4.12.sql`）
+  - v4.10.1 部署时漏 migrate 老 DB——owner 矩阵还停在 v4.7 时代的 AllPermissions（含 3 个收紧项）
+  - 这条 SQL 删 3 个收紧项 + 补 view:plan
+  - **生产必跑**（commit `208279a` 写明但没人跑——这是教训）
+
+### Changed
+
+- **storage/permissions.go**：v4.10.1 改 storage 代码收紧 owner 矩阵（去掉 chain_dashboard / view:subscription / manage:subscription），但**没 migrate 老 DB**——commit `268ecef` 修了 deploy 流程
+- **storage/permissions.go**：owner 矩阵加 view:plan（v4.12）
+
+### Fixed
+
+- **前端 nav 漂问题**（v4.10.1 / v4.11 三次漂过）—— 改用真 perm 矩阵驱动 nav 可见性（`applyRoleBasedNavVisibility` 走 `state.user.permissions`），删 ROLES_REQUIRED 字典
+  - 后端 meHandler 返 permissions 字段，前端按 nav-item `data-perm` 属性匹配
+  - 加 fallback（perms=[] 时退化全显示）防部署错位
+- **staff nav 漏配 3 个 owner-only 菜单**（v4.11 commit `161f577`）—— 加 weekly / shop / services
+- **v4.11 UI 错乱 + 数据未汉化**（v4.11 commit `934411b`）—— 补 CSS + 汉化 role + 加 admin_id 后缀
+- **TestRBAC_Setup / TestCreateMember_DuplicateUsername** 2 个红测试（v4.11 commit `f4b7896`）
+- **2 个 seed 噪音**（storage/permissions.go 的 log.Printf）
+- **MakeAdminWithRole username 长度 footgun**（fail-fast）
+
+### Security
+
+- **生产 owner 矩阵泄漏修复**（commit `268ecef`）—— 老店铺 owner 不该有 view:chain_dashboard（v4.10.1 收紧）；前端显示后立刻 SQL 修
+
+### 部署注意
+
+**1) 第一次部署 v4.12 必跑**：
+
+```bash
+# A) 紧急 SQL（立刻修生产 owner 矩阵）
+scp -O scripts/sql/fix-owner-perms-v4.12.sql root@server:/tmp/
+ssh root@server "mysql chatwitheino < /tmp/fix-owner-perms-v4.12.sql"
+
+# B) 后端 build + 部署
+pwsh scripts/build-linux.ps1
+scp -O chatwitheino-linux root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/
+scp -O static/admin.html root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/static/
+ssh root@server "systemctl restart chatwitheino"
+
+# C) 跑 admin-tool migrate 验证（新版 binary 含 migrate 子命令）
+ssh root@server "cd /home/www/wwwroot/agent.yuyuanyuan.cn && ./chatwitheino-linux --version 2>&1 || ./admin-tool perms migrate"
+
+# D) 浏览器强刷
+# Ctrl+Shift+R
+```
+
+**2) 部署前必查 production subs 表**：
+
+```sql
+-- 已过期 < 7 天 = 宽限期内
+SELECT shop_id, plan, expires_at, DATEDIFF(NOW(), expires_at) AS days_overdue
+FROM subscriptions
+WHERE cancelled_at IS NULL
+  AND expires_at < NOW()
+  AND expires_at > NOW() - INTERVAL 7 DAY;
+
+-- 已过期 > 7 天 = frozen（部署后这些店 402）
+SELECT shop_id, plan, expires_at, DATEDIFF(NOW(), expires_at) AS days_overdue
+FROM subscriptions
+WHERE cancelled_at IS NULL
+  AND expires_at < NOW() - INTERVAL 7 DAY;
+```
+
+**3) 未来加 perm / 收紧时**：
+
+- 改 `storage/permissions.go` 的 `DefaultRolePermissions` 矩阵
+- **改 `cmd/admin-tool/main.go` 的 `runPermsMigrate` 函数**（如果是 owner 收紧，加到 `ownerRemove` 列表）
+- 写 commit message 提醒"部署后跑 `admin-tool perms migrate`"
+- **v4.12 教训**：v4.10.1 写了"部署注意"但**没**自动 migrate——这次有 `admin-tool perms migrate` 工具化，下次必走
+
+**4) 风险点**：
+
+- `createBarberHandler` 加 402 gate 后，已 > 3 barber 的 basic 店主**不能再加 barber**（v4.12 设计）——如有超限，部署前手动调 plan 或删多余 barber
+- `auth.RequirePlanActive` middleware 部署后立即生效——`plans` 表里 frozen 店**所有 admin endpoint 都 402**
+
+### Test
+
+- `go test ./storage/`: 6 个新（plan 字典 + 6 个边界）
+- `go test ./api/`: 17 个新（plan gate 4 + plan expired 5 + plans API 4 + me 4）
+- `go test ./cmd/admin-tool/`: 3 个新（migrate happy + 幂等 + 不删运营手动 perm）
+- **0 个 frontend 测试**（项目里没 JS 测试基建——v4.12 没碰这个）
+
+### Metrics
+
+- **新代码**: ~2200 行（plan 体系 + middleware + API + UI + tests + CSS + SQL）
+- **新文件**: 8 个（`storage/plan.go` / `storage/plan_gate.go` / `api/plans.go` / `scripts/sql/fix-owner-perms-v4.12.sql` + 4 个测试文件）
+- **修改文件**: 12 个
+- **新 commit**: 7 个（6 个 feat/fix + 1 个 hotfix）
+
+### 留 v4.12.1 / v4.13
+
+- **feature gate 实战**：plan 字典里**列了** `data_export` / `api_access` / `multi_store` / `custom_report` / `priority_support` / `sla_guarantee` feature，但 **handler 没真用** `HasFeature` 拦——v4.12.1 加 demo 端点
+- **支付集成**（v4.13）：升级 modal 引导联系商务 → 接入微信支付
+- **续费 webhook**（v4.13）
+- **admin.html JS 测试基建**（v4.12.2 或之后）
+- **启用接口**（disable → active，UI 反悔）
+- **改自己密码 modal**（change:own_password 后端有前端没接）
+
+---
+
 ## [v4.10.1] - 2026-06-23
 
 ### Added
