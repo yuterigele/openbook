@@ -49,41 +49,60 @@ mysql -e "INSERT INTO shops (id, name, ...) SELECT 'shop-B-test', '测试 B 店'
 
 ---
 
-## 场景 1：新员工入职（成员管理 + RBAC 上手）
+## 场景 1：新员工入职（成员管理 — **前端未实装，本场景暂不测**）
 
-**目的**：测 owner 建 staff → staff 登录 → 看 staff 哪些菜单看不到
+**⚠ 状态**：v4.7 写了后端 API（`api/members.go`：list / create / changeRole / resetPassword / disable）+ 完整单测，
+**但 admin.html 14 个 nav-item 里没有"成员管理"**（已 grep 验证）。pilot 阶段前端没接通。
 
-**角色**：owner（已登录）
+**pilot 期间用什么替代测**：
+- 用 **`admin-tool` 工具** 或 **curl 直接打 API** 测后端（见场景 1.1）
+- 不让运营同学点 UI（点了也没东西可点）
 
-**步骤**：
+**何时启用 UI 测**：v4.11+ 把前端 nav-item + 成员管理页面补上之后。
 
-1. 打开 `https://agi.yuyuanyuan.cn/admin`，用 owner 账号登录
-2. 左侧导航 → "成员管理" → "添加成员"
-3. 用户名：`test-staff-1`
-4. 密码：`Test123456`
-5. 角色：`店员`
-6. 点"创建"
+---
+
+### 场景 1.1：成员管理 API 烟囱测（admin-tool / curl）
+
+**目的**：验证后端 RBAC + 跨店保护 OK（绕过 UI，纯 API 测）
+
+**角色**：owner（已登录获取 JWT） + 有 DB / SSH 权限的工程师
+
+**步骤 1-3**（建 staff）：
+
+1. SSH 到服务器 / admin-tool，用 owner 调：
+   ```bash
+   curl -X POST https://agi.yuyuanyuan.cn/api/admin/members \
+     -H "Authorization: Bearer $OWNER_JWT" \
+     -H "Content-Type: application/json" \
+     -d '{"username":"test-staff-1","password":"Test123456","role":"staff"}'
+   ```
+2. 期望：200，`"username":"test-staff-1"`，`role=staff`
+
+**步骤 4-5**（staff 登录 + 测无权限）：
+
+4. 用 `test-staff-1` 登录拿 JWT（POST `/api/auth/login`）
+5. 调 `GET /api/admin/members` 用 staff JWT
 
 **期望**：
 
-- [ ] 创建成功，自动回到成员列表，看到 `test-staff-1`（role=staff，status=active）
-- [ ] 顶部不报红
+- [ ] 建 staff 200
+- [ ] staff 调 `/api/admin/members` 返 **403**（无 PermManageMembers）
+- [ ] staff 调 `GET /api/admin/chain` 返 **403**（v4.10.1 收紧：staff 故意没 view:chain_dashboard）
+- [ ] staff 调 `GET /api/admin/subscription` 返 **403**（v4.10.1 收紧）
 
-**步骤 7**：
+**步骤 6**（跨店保护 — 已有跨店测试覆盖，这里 API 再 smoke 一下即可）：
 
-7. 退出登录 → 用 `test-staff-1` / `Test123456` 重新登录
-8. 看左侧导航菜单
+6. ownerA 调 `PUT /api/admin/members/<ownerB_id>/role`
 
 **期望**：
 
-- [ ] 看不到"成员管理"（staff 没 PermManageMembers）
-- [ ] 看不到"订阅" / "跨店看板"（v4.10.1 收紧：staff 故意没这几个 perm）
-- [ ] 看得到"预约" / "顾客" / "通知中心"（staff 业务操作权限）
+- [ ] 返 403 "无权操作其他店铺的成员"
 
 **反直觉点**：
 
-- 如果 staff 能看到"成员管理"菜单 → 权限漏拦，**严重 bug**
-- 如果 staff 看到"订阅"菜单 → v4.10.1 权限矩阵漂了
+- 后端 5xx / 没拒绝 → RBAC 中间件漏挂
+- staff 能调 → 权限矩阵漂了
 
 ---
 
@@ -247,9 +266,9 @@ mysql -e "INSERT INTO shops (id, name, ...) SELECT 'shop-B-test', '测试 B 店'
 - 店 B 有 1 个 barber + 1 个 customer + 1 个 leave 记录
 - 店 A 不知道店 B 的存在
 
-**步骤**：
+**步骤 1-2**（成员列表 — **前端未实装，走 API**）：
 
-1. 店 A 登录 → "成员管理" → 看列表
+1. 店 A 用 admin-tool / curl 调 `GET /api/admin/members`
 2. 应该只看到店 A 的 admin
 
 **期望**：
@@ -297,6 +316,7 @@ mysql -e "INSERT INTO shops (id, name, ...) SELECT 'shop-B-test', '测试 B 店'
 - [ ] **看不到** "跨店看板"（v4.10.1：单店 owner 故意不展示）
 - [ ] **看不到** "订阅" 菜单（v4.10.1：订阅归 platform_admin）
 - [ ] 仍然看得到 "周报"（v4.10.1：单店周报 owner 该看自己店）
+- [ ] **看不到** "成员管理" 菜单（**前端未实装**，见末尾"待补模块"）
 
 **步骤 2**：
 
@@ -450,5 +470,19 @@ P0 立刻 @我，P1 当天处理，P2/P3 排到 W2-W3 末统一修。
 
 ---
 
-> 文档版本：v4.11 W1 测试基建对应 commit `f4b7896`
-> 下次更新：v4.10.2 发版时同步更新场景
+## 待补模块清单（v4.11 候选）
+
+pilot 之前没发现，调研 admin.html 14 个 nav-item 之后整理：
+
+| 模块 | 后端 | 前端 | 备注 |
+|---|---|---|---|
+| 成员管理（v4.7 RBAC）| ✅ 完整（5 个 handler + 跨店测试）| ❌ 未实装 | 最高优先级——v4.7 commit 就标记了，7 个版本没补；pilot 期间只能用 admin-tool/curl 测 |
+| 修改密码（`/api/auth/change-password`）| ✅ | ⚠ 后端有，前端可能没接"改自己密码"页面 | 让 staff 改密码走 admin-tool 改的（v4.7 自助）|
+| ~~跨店看板订阅~~| — | — | v4.10.1 收紧不归 owner，无需补 owner 端 |
+
+**建议**：v4.11 第一波加一个 `nav-item data-view="members"` + 一个最小可用成员管理页面（建 / 改 role / 停用，复用现有 5 个 API）。前端代码量预估 ~150 行（参考 services / barbers 模块的写法）。
+
+---
+
+> 文档版本：v4.11 W1 测试基建对应 commit `f4b7896`，场景校正对应 commit `260301b`
+> 下次更新：v4.10.2 发版时同步更新场景；v4.11 补"成员管理前端"后启用场景 1
