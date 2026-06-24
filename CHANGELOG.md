@@ -7,6 +7,117 @@
 
 ---
 
+## [v4.12.1] - 2026-06-24
+
+v4.12 plan 体系只列了 feature 没用 gate，v4.12.1 让 feature 真用起来：
+data_export（CSV 导出）/ multi_store（建分店）/ api_access（API key）。
+外加：改自己密码补旧密码验证（v4.12 安全 fix）+ W2 pilot 文档 + 邀请文案。
+
+### Added
+
+- **CSV 导出**（commit `28cac1e`，v4.12.1 第一块）—— `GET /api/admin/data/export?type=appointments&from=YYYY-MM-DD&to=YYYY-MM-DD&format=csv`
+  - feature gate：basic 403 + `feature_required=data_export`，pro+ 200
+  - UTF-8 BOM（Excel 兼容）+ 中文表头（日期/时间/理发师/客户/服务/状态/来源）+ status 中文映射
+  - 默认区间：最近 30 天（缺 from/to）
+  - admin.html 预约管理 view 顶部加 [导出 CSV] 按钮（`data-perm="view:plan"` 自动 hide）
+- **multi_store gate**（commit `458f922`）—— `GET/POST /api/admin/shops`
+  - Shop 加 `ParentShopID`（自引用，主店="" 分店=主店 id）
+  - `CountShopsInGroup` / `ListShopsInGroup` / `CreateSubsidiaryShop` / `RootShopID` 4 个 helper
+  - 基本 plan 限 1 店，旗舰限 5 店；建第 N+1 个 → 402 + `resource=shops`
+  - 从分店建分店 → 403（必须主店账号）
+  - 跨店隔离：shopB 看不到 shopA 分店
+  - admin.html 加 "分店管理" nav view + 添加分店 modal
+- **api_access**（commit `458f922`）—— `POST/GET /api/admin/api-keys` + `POST /api/admin/api-keys/:id/revoke`
+  - 新表 `api_keys`（SHA256 hash，前 16 字符 prefix 用于展示；明文**只在创建时返一次**）
+  - `auth.APIKeyAuth` + `auth.RequireAPIKeyScope(want)` 中间件
+  - demo：`GET /api/external/appointments`（走 API key 鉴权 + `appointments:read` scope gate）
+  - admin.html 套餐与升级 view 加 "API 访问" 卡片（basic 显示"仅旗舰版可用"，旗舰 [管理 API Key] 按钮 → 创建 / 列表 / 吊销）
+- **W2 pilot 文档**（`PILOT-v4.12.md`）—— S9-S14 共 6 个新场景
+  - S9 plan UI + 升级流程
+  - S10 plan 过期冻结（关键路径，DB 改时间模拟）
+  - S11 多店管理（basic 403 / flagship 建店 / 跨店隔离）
+  - S12 CSV 导出
+  - S13 API Key（生成 + external 调通 + 吊销）
+  - S14 改自己密码
+  - 邀请文案（贴群里）+ 反馈收集表
+
+### Changed
+
+- `storage/models.go`: Shop 加 `ParentShopID`（AutoMigrate 自动加列）
+- `storage/models.go`: 新增 `APIKey` 结构 + `TableName()` 注册
+- `storage/db.go` / `storage/testhelpers.go`: AutoMigrate 加 `&APIKey{}`
+- `static/admin.html`:
+  - 新 nav "分店管理" + 新 view `shops`
+  - 新增 `applyElementPermVisibility`（非 nav-item 的 `[data-perm]` 元素也按 perm 隐藏）
+  - 套餐与升级 view 加 API 访问卡片
+  - 新增 modal：`subsidiaryCreate` / `apiKeyManage` / `apiKeyCreate`
+
+### Fixed
+
+- **改自己密码缺旧密码验证**（commit `458f922`，**v4.12.1 安全 fix**）
+  - 之前 `changePasswordHandler` 只 BindAndValidate，不校验旧密码——**任何人有 JWT 就能改别人密码**
+  - 现强制 `OldPassword` 非空 + bcrypt compare + 401 if wrong + 新密码 ≥ 6 位 + 新旧不可相同
+
+### Security
+
+- 同上（change-password 缺旧密码校验）。Token 泄漏场景下，原本能直接改任意账号密码。Fix 后必须知道旧密码。
+
+### 部署注意
+
+**1) 第一次部署 v4.12.1 必跑**：
+
+```bash
+# 后端 build + 部署（DB 自动 migrate：加 ParentShopID 列 + api_keys 表）
+pwsh scripts/build-linux.ps1
+scp -O chatwitheino-linux root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/
+scp -O static/admin.html root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/static/
+ssh root@server "systemctl restart chatwitheino"
+
+# 验证 api_keys 表建好
+ssh root@server "mysql chatwitheino -e 'SHOW TABLES LIKE \"api_keys\"'"
+# 或 sqlite: sqlite3 /path/to/db 'SELECT name FROM sqlite_master WHERE type="table" AND name="api_keys"'
+
+# 浏览器强刷
+Ctrl+Shift+R
+```
+
+**2) 升级 modal 还是"联系商务"** —— 支付接入留 v4.13。
+
+**3) 风险点**：
+
+- v4.12.1 改了自己密码的前端 modal — **之前能改但缺校验**，现在强制要求旧密码——所有现有用户无影响（首次改密码时仍可正常改）。
+- `POST /api/admin/api-keys` 返 plaintext **只这一次**，前端 prompt 显示明文 token + 强提示。**用户必须立即复制保存**——吊销后无法再查。
+- API key last_used_at 暂不异步更新（v4.12.1 简化）—— 留 v4.13。
+- 分店 owner 账号**不**自动创建——v4.12.1 仍需店主用现有"成员管理"手动建 admin（v4.13 自动）。
+
+### Test
+
+- `go test ./api/`: 23 个新 case
+  - change_password: 6 (D)
+  - shops: 9 (A')
+  - api_keys + external: 8 (B')
+- `go test ./...` — **0 回归**（仅 `TestE2E_S1_FirstAppointment` 预存 flaky hardcoded 2026-06-24 14:00 已过期）
+
+### Metrics
+
+- **新代码**: ~2200 行
+- **新文件**: 9 个（`storage/api_keys.go` / `auth/api_key.go` / `api/shops.go` / `api/api_keys.go` / `api/external.go` + 4 个测试 + PILOT 文档）
+- **修改文件**: 5 个（`api/api.go` / `storage/{db,models,shop_repo,testhelpers}.go` / `static/admin.html`）
+- **新 commit**: 2 个（28cac1e + 458f922）
+
+### 留 v4.13 / v4.12.2
+
+- **支付集成**：升级 modal "联系商务" → 微信支付跳转 URL
+- **续费 webhook**：微信支付回调 → 自动写 sub
+- **API key last_used_at 异步更新**
+- **API key 多个 scope**：customers:read / customers:write / reports:write 等
+- **JS 测试基建**：admin.html 没前端测试基建（v4.12.1 没碰）
+- **分店 owner 自动建**：v4.12.1 手动用 members API
+- **启用接口**（disable → active）
+- **platform_admin 跨店管理 UI**
+
+---
+
 ## [v4.12] - 2026-06-24
 
 W1 测试基建收尾 + plan 体系完整化 + 过期冻结 + plans UI + 老店铺矩阵自动迁移。
