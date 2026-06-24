@@ -77,6 +77,7 @@ func run(args []string, out, errOut io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprintf(w, `用法:
   admin-tool perms reconcile                       # 增量补齐缺失的 role → permission
+  admin-tool perms migrate                         # 把老店铺矩阵收敛到当前 DefaultRolePermissions（删+补）
   admin-tool perms list [role]                     # 列某 role 的权限
   admin-tool perms set <role> <p1,p2,...>          # 整组覆盖某 role 的权限
   admin-tool perms check <role> <perm>             # 查某 role 是否有某 perm
@@ -92,6 +93,8 @@ func runPerms(ctx context.Context, args []string, out, errOut io.Writer) error {
 	switch args[0] {
 	case "reconcile":
 		return runPermsReconcile(ctx, out)
+	case "migrate":
+		return runPermsMigrate(ctx, out)
 	case "list":
 		role := ""
 		if len(args) >= 2 {
@@ -133,6 +136,83 @@ func runPermsReconcile(ctx context.Context, out io.Writer) error {
 	} else {
 		fmt.Fprintln(out, "  （无缺失，无需补全）")
 	}
+	return nil
+}
+
+// runPermsMigrate 收敛老店铺矩阵到当前 DefaultRolePermissions（v4.12 增量）
+//
+// 跟 reconcile 的区别：
+//   - reconcile：只补缺失，**不删任何记录**（防运营调整被覆盖）
+//   - migrate：先删（v4.10.1 收紧项），再补（v4.12 新加项）
+//
+// 适用场景：
+//   - v4.10.1 部署后老店铺 owner 还含 view:chain_dashboard / view:subscription / manage:subscription
+//     （v4.10.1 改了 storage 代码收紧，但没 migrate 老 DB）
+//   - v4.12 部署后老店铺 owner 缺 view:plan
+//
+// 安全约束：
+//   - **只删** 3 个 perm：view:chain_dashboard / view:subscription / manage:subscription
+//     （v4.10.1 明确的收紧项；其他 perm 一概不动——运营手动加的仍保留）
+//   - **只补** storage.DefaultRolePermissions 里所有 role 缺的 perm
+//   - 跑后列出"实际删除 + 实际新增"的明细 + 验证 perm 数 = 矩阵长度
+//
+// 幂等：可重跑无副作用（第二次跑 0 删除 0 新增）
+func runPermsMigrate(ctx context.Context, out io.Writer) error {
+	// v4.10.1 明确的 owner 收紧项——其他 role 不动
+	ownerRemove := []string{
+		"view:chain_dashboard",
+		"view:subscription",
+		"manage:subscription",
+	}
+
+	fmt.Fprintln(out, ">>> 将执行以下操作：")
+	fmt.Fprintf(out, "  1) owner 矩阵删除 %d 个 v4.10.1 收紧项：\n", len(ownerRemove))
+	for _, p := range ownerRemove {
+		fmt.Fprintf(out, "     - %s\n", p)
+	}
+	fmt.Fprintln(out, "  2) 调 storage.ReconcileRolePermissions 补所有 role 缺的 perm")
+	fmt.Fprintln(out, "  3) 列出 owner / staff / platform_admin 当前 perm 数（应 = 矩阵长度）")
+	fmt.Fprintln(out)
+
+	// 1) 删 v4.10.1 收紧项
+	deleted := 0
+	for _, p := range ownerRemove {
+		res := storage.DB.WithContext(ctx).
+			Where("role = ? AND permission = ?", storage.RoleOwner, p).
+			Delete(&storage.RolePermission{})
+		if res.Error != nil {
+			return fmt.Errorf("删 %s 失败: %w", p, res.Error)
+		}
+		deleted += int(res.RowsAffected)
+	}
+	fmt.Fprintf(out, "✓ 实际删除 owner 矩阵 %d 条\n", deleted)
+
+	// 2) 调 reconcile 补缺失
+	res, err := storage.ReconcileRolePermissions(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile 失败: %w", err)
+	}
+	fmt.Fprintf(out, "✓ reconcile 补全: 新增 %d 条（已有 %d 条保留）\n", res.Inserted, res.Skipped)
+	for _, desc := range res.InsertedList {
+		fmt.Fprintf(out, "    + %s\n", desc)
+	}
+
+	// 3) 列出 3 个 role 现在的 perm 数
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, ">>> 当前各 role perm 数（应 = storage.DefaultRolePermissions 矩阵长度）：")
+	for _, r := range storage.AllRoles {
+		var n int64
+		storage.DB.WithContext(ctx).Model(&storage.RolePermission{}).Where("role = ?", r).Count(&n)
+		want := len(storage.DefaultRolePermissions[r])
+		mark := "✓"
+		if int(n) != want {
+			mark = "✗（与 DefaultRolePermissions 不一致）"
+		}
+		fmt.Fprintf(out, "  %s: %d 条（期望 %d）%s\n", r, n, want, mark)
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "✓ migrate 完成")
 	return nil
 }
 

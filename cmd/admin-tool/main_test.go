@@ -210,6 +210,112 @@ func TestRunPermsReconcile_Idempotent(t *testing.T) {
 	}
 }
 
+// TestRunPermsMigrate_OldOwnerMatrix 模拟"v4.10.1 部署后老店铺"——owner 含 chain_dashboard / view:subscription
+// migrate 应：删这 3 个 + 补 v4.12 加的 view:plan
+func TestRunPermsMigrate_OldOwnerMatrix(t *testing.T) {
+	defer withTestStorage(t)()
+	// 模拟 v4.10.1 部署后老店铺：owner 含这 3 个收紧项
+	extraPerms := []string{
+		"view:chain_dashboard",
+		"view:subscription",
+		"manage:subscription",
+	}
+	for _, p := range extraPerms {
+		if err := storage.DB.Create(&storage.RolePermission{
+			Role: storage.RoleOwner, Permission: p,
+		}).Error; err != nil {
+			t.Fatalf("create %s: %v", p, err)
+		}
+	}
+	// 验证"老"矩阵：owner 应该有 20+3 条 perm（20 默认 + 3 收紧项）
+	//   - 20 = v4.10.1 显式列 19 + v4.12 view:plan 1
+	var n int64
+	storage.DB.Model(&storage.RolePermission{}).Where("role = ?", storage.RoleOwner).Count(&n)
+	wantOld := len(storage.DefaultRolePermissions[storage.RoleOwner]) + 3
+	if n != int64(wantOld) {
+		t.Fatalf("老 owner 矩阵 应 = %d, got %d", wantOld, n)
+	}
+
+	// 跑 migrate
+	var out bytes.Buffer
+	if err := runPermsMigrate(context.Background(), &out); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 验证：owner 现在有 20 条（19 默认 + 1 view:plan）
+	storage.DB.Model(&storage.RolePermission{}).Where("role = ?", storage.RoleOwner).Count(&n)
+	want := len(storage.DefaultRolePermissions[storage.RoleOwner]) // 20
+	if int(n) != want {
+		t.Errorf("migrate 后 owner 应 = %d 条, got %d", want, n)
+	}
+
+	// 验证：chain_dashboard / view:subscription / manage:subscription 都没了
+	for _, p := range extraPerms {
+		var cnt int64
+		storage.DB.Model(&storage.RolePermission{}).
+			Where("role = ? AND permission = ?", storage.RoleOwner, p).Count(&cnt)
+		if cnt != 0 {
+			t.Errorf("migrate 后 owner 仍含 %s（应被删）", p)
+		}
+	}
+
+	// 验证：view:plan 在 owner 矩阵里
+	var planN int64
+	storage.DB.Model(&storage.RolePermission{}).
+		Where("role = ? AND permission = ?", storage.RoleOwner, storage.PermViewPlan).Count(&planN)
+	if planN != 1 {
+		t.Errorf("migrate 后 owner 缺 view:plan, got %d", planN)
+	}
+
+	// 验证：输出含"实际删除 3 条"
+	if !strings.Contains(out.String(), "实际删除 owner 矩阵 3 条") {
+		t.Errorf("输出应含'实际删除 owner 矩阵 3 条', got: %q", out.String())
+	}
+}
+
+// TestRunPermsMigrate_Idempotent 二次跑 migrate 0 删除 0 新增
+func TestRunPermsMigrate_Idempotent(t *testing.T) {
+	defer withTestStorage(t)()
+	// 第一次
+	if err := runPermsMigrate(context.Background(), io.Discard); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+	// 第二次
+	var out bytes.Buffer
+	if err := runPermsMigrate(context.Background(), &out); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	if !strings.Contains(out.String(), "实际删除 owner 矩阵 0 条") {
+		t.Errorf("二次 migrate 应 0 删除, got: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "新增 0 条") {
+		t.Errorf("二次 migrate reconcile 应 0 新增, got: %q", out.String())
+	}
+}
+
+// TestRunPermsMigrate_LeavesOperatorCustomPerm 验证 migrate 不删运营手动加的 perm
+func TestRunPermsMigrate_LeavesOperatorCustomPerm(t *testing.T) {
+	defer withTestStorage(t)()
+	fakePerm := "custom:fake_perm"
+	if err := storage.DB.Create(&storage.RolePermission{
+		Role: storage.RoleOwner, Permission: fakePerm,
+	}).Error; err != nil {
+		t.Fatalf("create fake: %v", err)
+	}
+
+	if err := runPermsMigrate(context.Background(), io.Discard); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 运营手动加的 perm 应保留
+	var n int64
+	storage.DB.Model(&storage.RolePermission{}).
+		Where("role = ? AND permission = ?", storage.RoleOwner, fakePerm).Count(&n)
+	if n != 1 {
+		t.Errorf("migrate 不应删运营手动加的 perm %s, got count=%d", fakePerm, n)
+	}
+}
+
 // ============================================================
 // runPermsList
 // ============================================================
