@@ -23,6 +23,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -162,3 +164,112 @@ func HasPermission(ctx context.Context, adminID uint64, perm string) (bool, erro
 func SetHasPermissionFunc(fn func(ctx context.Context, adminID uint64, perm string) (bool, error)) {
 	hasPermissionFunc = fn
 }
+
+// ============================================================
+// v4.12 plan 过期冻结中间件
+// ============================================================
+
+// isPlanExpiredFunc 由 api 包注入（auth 包不依赖 storage）
+//
+// 返回 (frozen, graceDays)：
+//   - frozen=false, graceDays=0：fresh
+//   - frozen=false, graceDays=N (正数)：宽限期内（仍可用）
+//   - frozen=true,  graceDays=0：frozen（功能冻结）
+type PlanExpiredFunc func(ctx context.Context, shopID string) (frozen bool, graceDays int)
+
+var planExpiredFunc PlanExpiredFunc
+
+// SetPlanExpiredFunc 注入 plan 过期检查（api 包 init 时调）
+func SetPlanExpiredFunc(fn PlanExpiredFunc) {
+	planExpiredFunc = fn
+}
+
+// planActiveCache 5min TTL cache：避免每个 request 都查 DB
+//
+// key: shopID
+// value: { frozen, graceDays, expiresAt }
+type planActiveCacheEntry struct {
+	frozen    bool
+	graceDays int
+	cachedAt  time.Time
+}
+
+const planActiveCacheTTL = 5 * time.Minute
+
+// RequirePlanActive 中间件：检查当前 shop 的订阅是否仍有效（v4.12）
+//
+// 行为：
+//   - fresh → 放行
+//   - 宽限期内 → 放行，设 c.Set("plan_grace_days", N) 让前端 banner 提示
+//   - frozen → 403 "plan 已过期，请续费"
+//   - platform_admin → 直接放行（不查 plan——超管是平台层，不受限）
+//   - 没注入 planExpiredFunc → 放行（dev 环境 + 单测时 storage 未初始化）
+//
+// 性能：
+//   - 每个 request 1 次 cache 查（O(1)）
+//   - cache miss 才查 DB，cache 命中 5min 内不查
+//   - 续费后下次 cache miss 自动反映（不主动失效）
+func RequirePlanActive() app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		cl := GetClaims(c)
+		if cl == nil || cl.AdminID == 0 {
+			// 未登录交给其他中间件 / handler 返 401
+			c.Next(ctx)
+			return
+		}
+		if cl.Role == "platform_admin" {
+			// 超管不查 plan
+			c.Next(ctx)
+			return
+		}
+		if cl.ShopID == "" {
+			c.Next(ctx)
+			return
+		}
+		if planExpiredFunc == nil {
+			// dev / 单测没注入 → 放行
+			c.Next(ctx)
+			return
+		}
+		frozen, graceDays := getPlanActiveCached(ctx, cl.ShopID)
+		if frozen {
+			c.JSON(http.StatusPaymentRequired, map[string]any{
+				"error":  "plan 已过期，请续费（联系 platform_admin 或 7 天宽限期内续费）",
+				"frozen": true,
+			})
+			c.Abort()
+			return
+		}
+		if graceDays > 0 {
+			c.Set("plan_grace_days", graceDays)
+		}
+		c.Next(ctx)
+	}
+}
+
+// getPlanActiveCached 5min cache 包一层
+func getPlanActiveCached(ctx context.Context, shopID string) (frozen bool, graceDays int) {
+	if v, ok := planActiveCache.Load(shopID); ok {
+		entry := v.(planActiveCacheEntry)
+		if time.Since(entry.cachedAt) < planActiveCacheTTL {
+			return entry.frozen, entry.graceDays
+		}
+	}
+	frozen, graceDays = planExpiredFunc(ctx, shopID)
+	planActiveCache.Store(shopID, planActiveCacheEntry{
+		frozen:    frozen,
+		graceDays:  graceDays,
+		cachedAt:  time.Now(),
+	})
+	return
+}
+
+// InvalidatePlanActiveCache 清掉某 shop 的 cache（renew handler 调）
+func InvalidatePlanActiveCache(shopID string) {
+	planActiveCache.Delete(shopID)
+}
+
+// planActiveCache 全局 cache（auth 包级别）
+//
+// sync.Map：读多写少，renew handler 1 次写 / request 多次读
+var planActiveCache sync.Map

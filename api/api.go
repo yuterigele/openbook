@@ -50,6 +50,11 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 		return storage.AdminHasPermission(ctx, adminID, perm)
 	})
 
+	// v4.12 plan 过期：把 storage.IsPlanExpired 注入 auth 包
+	auth.SetPlanExpiredFunc(func(ctx context.Context, shopID string) (bool, int) {
+		return storage.IsPlanExpired(ctx, shopID)
+	})
+
 	// 公开：登录
 	h.POST("/api/auth/login", loginHandler)
 
@@ -60,7 +65,9 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	api.GET("/shop/:id/subscription", getSubscriptionHandler)
 
 	// 需要鉴权：商户后台
-	protected := h.Group("/api/admin", authChain(cfg.LegacyToken))
+	//   v4.12：每个请求先过 RequirePlanActive —— 过期 + 宽限期外 frozen → 402
+	//   性能：5min cache 命中后 0 DB 调用
+	protected := h.Group("/api/admin", authChain(cfg.LegacyToken), auth.RequirePlanActive())
 
 	// v4.7 RBAC：所有 endpoint 都用 auth.RequirePerm(perm) 包一层
 	//
@@ -824,6 +831,9 @@ func renewSubscriptionHandler(ctx context.Context, c *app.RequestContext) {
 			"plan":       req.Plan,
 			"expires_at": expiresAt,
 		})
+
+	// v4.12：续费后清 plan active cache（5min 内不要判 frozen）
+	auth.InvalidatePlanActiveCache(shopID)
 
 	storage.TrackEvent(ctx, shopID, storage.EventRenewed, sub.ID, map[string]any{
 		"plan":   req.Plan,

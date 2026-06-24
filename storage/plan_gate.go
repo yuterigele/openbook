@@ -116,10 +116,10 @@ const PlanGracePeriod = 7 * 24 * time.Hour
 //
 // 返回值：
 //   - fresh: false, 0
-//   - 宽限期内: false, daysLeft（负数 = 已过 N 天）
+//   - 宽限期内: false, daysLeft（正数 = 还剩 N 天，0=临界）
 //   - frozen: true, 0
 //
-// v4.12 阶段 3 middleware 调这个判定返 402/403
+// v4.12 阶段 3 middleware 调这个判定返 402
 func IsPlanExpired(ctx context.Context, shopID string) (frozen bool, daysLeft int) {
 	if DB == nil {
 		return false, 0
@@ -142,6 +142,12 @@ func IsPlanExpired(ctx context.Context, shopID string) (frozen bool, daysLeft in
 	if diff > PlanGracePeriod {
 		return true, 0 // frozen
 	}
-	// 宽限期内
-	return false, -int(diff.Hours() / 24)
+	// 宽限期内：还剩 N 天
+	graceTotal := int(PlanGracePeriod / (24 * time.Hour))
+	usedDays := int(diff.Hours() / 24)
+	if diff.Hours() - float64(usedDays*24) > 0 {
+		// 半天内算 +1 天（向上取整——更严）
+		usedDays++
+	}
+	return false, graceTotal - usedDays
 }

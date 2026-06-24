@@ -173,6 +173,10 @@ func init() {
 	auth.SetHasPermissionFunc(func(ctx context.Context, adminID uint64, perm string) (bool, error) {
 		return storage.AdminHasPermission(ctx, adminID, perm)
 	})
+	// v4.12: 同样注入 plan 过期检查
+	auth.SetPlanExpiredFunc(func(ctx context.Context, shopID string) (bool, int) {
+		return storage.IsPlanExpired(ctx, shopID)
+	})
 }
 
 func runHandler(t *testing.T, handler func(ctx context.Context, c *app.RequestContext), ctx *app.RequestContext) (int, string) {
@@ -207,6 +211,24 @@ func runWithRole(t *testing.T, allowedRoles []string, handler func(ctx context.C
 	if !ctx.IsAborted() {
 		handler(context.Background(), ctx)
 	}
+	return ctx.Response.StatusCode(), string(ctx.Response.Body())
+}
+
+// runWithPermAndPlan 模拟 router 完整中间件链：RequirePerm + RequirePlanActive + handler（v4.12）
+//
+// 实际 router 是 protected group 里挂 authChain + RequirePlanActive，每个 endpoint
+// 再加 RequirePerm。测试里手动串起来
+func runWithPermAndPlan(t *testing.T, perm string, handler func(ctx context.Context, c *app.RequestContext), ctx *app.RequestContext) (int, string) {
+	t.Helper()
+	auth.RequirePerm(perm)(context.Background(), ctx)
+	if ctx.IsAborted() {
+		return ctx.Response.StatusCode(), string(ctx.Response.Body())
+	}
+	auth.RequirePlanActive()(context.Background(), ctx)
+	if ctx.IsAborted() {
+		return ctx.Response.StatusCode(), string(ctx.Response.Body())
+	}
+	handler(context.Background(), ctx)
 	return ctx.Response.StatusCode(), string(ctx.Response.Body())
 }
 
