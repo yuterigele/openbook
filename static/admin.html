@@ -1043,6 +1043,39 @@
     .alert-title { font-size: 13px; font-weight: 600; color: var(--ink); }
     .alert-desc { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
     .alert-action { font-size: 11px; color: var(--brand); margin-top: 4px; }
+    /* v4.11 成员管理列表（参考 service-row 风格） */
+    .member-row {
+      display: grid;
+      grid-template-columns: 1fr 90px 90px 170px 290px;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .member-row:last-child { border-bottom: 0; }
+    .member-row.inactive { opacity: 0.55; }
+    .member-row .name { font-weight: 500; color: var(--ink); }
+    .member-row .num { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+    .role-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .role-pill-owner { background: rgba(217, 119, 6, 0.12); color: #b45309; }
+    .role-pill-staff { background: var(--olive-soft); color: var(--olive); }
+    .role-pill-platform { background: rgba(99, 102, 241, 0.12); color: #4338ca; }
+    .status-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .status-pill-active { background: var(--olive-soft); color: var(--olive); }
+    .status-pill-disabled { background: var(--surface-2); color: var(--ink-muted); }
   </style>
 </head>
 <body>
@@ -2158,6 +2191,14 @@ const App = (() => {
   // ROLES_REQUIRED 已配 'members': ['owner']（staff 故意禁）
   function renderMembers() {
     const me = state.user || {};
+    // meHandler 返 { admin_id, shop_id, role, shop: { name, ... } }
+    //   - username 不在 me 里（meHandler 没返）→ 用 me.shop?.name || me.shop_id
+    //   - role 字段是 'owner' / 'staff' / 'platform_admin' → 汉化
+    const myRoleZh = me.role === 'owner' ? '店主'
+      : me.role === 'staff' ? '店员'
+      : me.role === 'platform_admin' ? '平台超管'
+      : (me.role || '?');
+    const myShop = (me.shop && me.shop.name) || me.shop_id || '?';
     return `<div class="view-head">
       <h1>成员管理</h1>
       <p>本店登录账号：建成员、改角色、重置密码、停用。所有操作都限本店，跨店操作会被拒</p>
@@ -2168,7 +2209,7 @@ const App = (() => {
       </button>
       <span class="spacer"></span>
       <span class="text-muted" style="font-size:12px;">
-        当前账号：<b>${esc(me.username || '?')}</b>（${esc(me.role || '?')}） · ${esc(me.shop_id || '?')}
+        当前账号：<b>${esc(myShop)}</b> · ${esc(myRoleZh)}${me.admin_id ? ` · #${me.admin_id}` : ''}
       </span>
     </div>
     <div class="card" id="membersCard">
@@ -2191,20 +2232,28 @@ const App = (() => {
     const me = state.user || {};
     const isMe = m.id === me.admin_id;
     const status = (m.status === 'active' || !m.status) ? 'active' : 'disabled';
-    const statusPill = status === 'active'
-      ? '<span class="pill pill-success">活跃</span>'
-      : '<span class="pill pill-muted">已停用</span>';
+    // role 中文 + 3 色 pill（owner / staff / platform_admin）
     const rolePill = m.role === 'owner'
-      ? '<span class="pill pill-warning">店主</span>'
-      : '<span class="pill">店员</span>';
+      ? '<span class="role-pill role-pill-owner">店主</span>'
+      : m.role === 'staff'
+        ? '<span class="role-pill role-pill-staff">店员</span>'
+        : m.role === 'platform_admin'
+          ? '<span class="role-pill role-pill-platform">平台超管</span>'
+          : `<span class="role-pill">${esc(m.role || '?')}</span>`;
+    const statusPill = status === 'active'
+      ? '<span class="status-pill status-pill-active">活跃</span>'
+      : '<span class="status-pill status-pill-disabled">已停用</span>';
     const lastLogin = m.last_login_at ? m.last_login_at.slice(0, 19).replace('T', ' ') : '—';
     // 操作按钮规则：
-    //   - 自己：只能"重置自己密码"（其他都禁，避免误操作把自己降级 / 停用）
+    //   - 自己：所有操作禁掉（防误操作把自己降级 / 停用；改自己密码走 /change-password 单独流程）
     //   - 对方：可改 role / 重置密码 / 停用
+    //   - platform_admin 行：不显示操作按钮（platform_admin 跨店超管，UI 不应误改）
     //   - last-owner 保护在 changeMemberRoleHandler / disableMemberHandler 服务端做
     const actions = [];
     if (isMe) {
-      actions.push(`<button class="btn btn-sm" disabled style="opacity:0.5">自己</button>`);
+      actions.push(`<span class="text-muted" style="font-size:11px;">自己</span>`);
+    } else if (m.role === 'platform_admin') {
+      actions.push(`<span class="text-muted" style="font-size:11px;">平台超管（不可改）</span>`);
     } else {
       const newRole = m.role === 'owner' ? 'staff' : 'owner';
       actions.push(`<button class="btn btn-sm" onclick="App.changeMemberRole(${m.id},'${newRole}')">改为${newRole === 'owner' ? '店主' : '店员'}</button>`);
@@ -2220,7 +2269,7 @@ const App = (() => {
       <div>${rolePill}</div>
       <div>${statusPill}</div>
       <div class="text-muted text-mono">${esc(lastLogin)}</div>
-      <div class="num" style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;">
+      <div class="num">
         ${actions.join('')}
       </div>
     </div>`;
