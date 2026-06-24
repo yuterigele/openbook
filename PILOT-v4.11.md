@@ -49,24 +49,85 @@ mysql -e "INSERT INTO shops (id, name, ...) SELECT 'shop-B-test', '测试 B 店'
 
 ---
 
-## 场景 1：新员工入职（成员管理 — **前端未实装，本场景暂不测**）
+## 场景 1：新员工入职（成员管理 — **v4.11 已实装前端**）
 
-**⚠ 状态**：v4.7 写了后端 API（`api/members.go`：list / create / changeRole / resetPassword / disable）+ 完整单测，
-**但 admin.html 14 个 nav-item 里没有"成员管理"**（已 grep 验证）。pilot 阶段前端没接通。
+**✅ 状态**：v4.7 写后端 + 跨店测试，v4.11 (commit `864e367`) 补前端（nav-item + 最小可用页面），v4.11.1 (commit `6a460c9`) 改成真 perm 矩阵驱动 nav 可见性。
 
-**pilot 期间用什么替代测**：
-- 用 **`admin-tool` 工具** 或 **curl 直接打 API** 测后端（见场景 1.1）
-- 不让运营同学点 UI（点了也没东西可点）
+**UI 测**（运营/前台 owner 账号）：
 
-**何时启用 UI 测**：v4.11+ 把前端 nav-item + 成员管理页面补上之后。
+**步骤 1-6**（建 staff）：
+
+1. 打开 `https://agi.yuyuanyuan.cn/admin`，用 owner 账号登录
+2. 左侧导航 → "成员管理"（v4.11 新增）
+3. 右上角 "新增成员" 按钮
+4. 用户名：`test-staff-1`
+5. 初始密码：`Test123456`（6 位以上）
+6. 角色：`店员` → 点"确认新增"
+
+**期望**：
+
+- [ ] 创建成功，弹 toast "已新增成员 test-staff-1"
+- [ ] 列表里多一行 test-staff-1，角色 pill 显示"店员"，状态 pill 显示"活跃"
+- [ ] 顶部不报红
+
+**步骤 7-8**（staff 登录 + 测无权限）：
+
+7. 退出登录 → 用 `test-staff-1` / `Test123456` 重新登录
+8. 看左侧导航菜单
+
+**期望**：
+
+- [ ] **看不到** "成员管理"（v4.11.1 真 perm 矩阵：staff 没 manage:members）
+- [ ] **看不到** "单店周报" / "跨店周报" / "多店看板"（staff 没 view:weekly_report / view:chain_dashboard）
+- [ ] **看不到** "订阅" / "店铺设置" / "服务目录"（staff 没 view:subscription / edit:shop / edit:services）
+- [ ] **看得到** "预约" / "顾客" / "理发师" / "请假" / "事件" / "通知中心" / "转人工"（staff 业务操作）
+- [ ] "实时看板" 显示 staff 角色（不是 owner）
+
+**步骤 9-12**（改 staff 角色）：
+
+9. 用 owner 重新登录 → "成员管理" → 找到 test-staff-1 → 点"改为主"
+10. 弹 confirm → 确认
+
+**期望**：
+
+- [ ] 角色 pill 从"店员"变"店主"
+- [ ] 操作按钮变成"改为店员" / "重置密码" / "停用"
+
+**步骤 13-15**（重置密码）：
+
+13. 点"重置密码" → 输入新密码 `Newpass2026` → 确认
+14. 让 test-staff-1 退出，用旧密码 `Test123456` 登录
+
+**期望**：
+
+- [ ] 旧密码登不上（返 "用户名或密码错误"）
+
+15. 用新密码 `Newpass2026` 登录 → 成功
+
+**步骤 16-18**（停用）：
+
+16. owner → 成员管理 → 找到 test-staff-1 → 点"停用"
+17. 弹 confirm → 确认
+
+**期望**：
+
+- [ ] 状态 pill 从"活跃"变"已停用"
+- [ ] 行 opacity 变 0.55
+- [ ] test-staff-1 重新登不上
+
+**反直觉点**：
+
+- staff 看到"成员管理" → 权限漏拦（**严重 P0**）
+- staff 看到"周报" / "跨店看板" / "店铺设置" → v4.11.1 perm 矩阵漂了
+- 自己那行还能改自己 / 停自己 → 服务端 self-protection 漏了
+- 改最后 1 个 owner 为 staff → 服务端 last-owner 保护漏了
+- 重置自己密码 → 改别人密码的 modal 应该拒绝自己
 
 ---
 
-### 场景 1.1：成员管理 API 烟囱测（admin-tool / curl）
+### 场景 1.1：成员管理 API 烟囱测（admin-tool / curl）— **保留为 fallback**
 
-**目的**：验证后端 RBAC + 跨店保护 OK（绕过 UI，纯 API 测）
-
-**角色**：owner（已登录获取 JWT） + 有 DB / SSH 权限的工程师
+如果 UI 测出诡异问题（race condition / 缓存等），用 API 直接打更准：
 
 **步骤 1-3**（建 staff）：
 
@@ -266,9 +327,9 @@ mysql -e "INSERT INTO shops (id, name, ...) SELECT 'shop-B-test', '测试 B 店'
 - 店 B 有 1 个 barber + 1 个 customer + 1 个 leave 记录
 - 店 A 不知道店 B 的存在
 
-**步骤 1-2**（成员列表 — **前端未实装，走 API**）：
+**步骤 1-2**（成员列表 — v4.11 起有 UI 走 UI 测）：
 
-1. 店 A 用 admin-tool / curl 调 `GET /api/admin/members`
+1. 店 A 登录 → 左侧导航 → "成员管理" → 看列表
 2. 应该只看到店 A 的 admin
 
 **期望**：
@@ -315,8 +376,9 @@ mysql -e "INSERT INTO shops (id, name, ...) SELECT 'shop-B-test', '测试 B 店'
 
 - [ ] **看不到** "跨店看板"（v4.10.1：单店 owner 故意不展示）
 - [ ] **看不到** "订阅" 菜单（v4.10.1：订阅归 platform_admin）
-- [ ] 仍然看得到 "周报"（v4.10.1：单店周报 owner 该看自己店）
-- [ ] **看不到** "成员管理" 菜单（**前端未实装**，见末尾"待补模块"）
+- [ ] **看不到** "跨店周报" 菜单（v4.10.1：只 platform_admin）
+- [ ] 仍然看得到 "单店周报"（v4.10.1：单店周报 owner 该看自己店）
+- [ ] **看得到** "成员管理" 菜单（v4.11 起实装，v4.11.1 起由真 perm 矩阵驱动）
 
 **步骤 2**：
 
@@ -470,19 +532,49 @@ P0 立刻 @我，P1 当天处理，P2/P3 排到 W2-W3 末统一修。
 
 ---
 
-## 待补模块清单（v4.11 候选）
-
-pilot 之前没发现，调研 admin.html 14 个 nav-item 之后整理：
+## 待补模块清单
 
 | 模块 | 后端 | 前端 | 备注 |
 |---|---|---|---|
-| 成员管理（v4.7 RBAC）| ✅ 完整（5 个 handler + 跨店测试）| ❌ 未实装 | 最高优先级——v4.7 commit 就标记了，7 个版本没补；pilot 期间只能用 admin-tool/curl 测 |
-| 修改密码（`/api/auth/change-password`）| ✅ | ⚠ 后端有，前端可能没接"改自己密码"页面 | 让 staff 改密码走 admin-tool 改的（v4.7 自助）|
-| ~~跨店看板订阅~~| — | — | v4.10.1 收紧不归 owner，无需补 owner 端 |
-
-**建议**：v4.11 第一波加一个 `nav-item data-view="members"` + 一个最小可用成员管理页面（建 / 改 role / 停用，复用现有 5 个 API）。前端代码量预估 ~150 行（参考 services / barbers 模块的写法）。
+| 成员管理（v4.7 RBAC）| ✅ 完整（5 个 handler + 跨店测试）| ✅ v4.11 实装（commit `864e367`）| v4.11.1 (commit `6a460c9`) 改用真 perm 矩阵驱动 nav 可见性 |
+| 启用接口（disable → active）| ❌ | — | 当前 v4.11 停用后没法在 UI 反悔，pilot 反馈撞出来再加 |
+| 修改密码（`/api/auth/change-password`）| ✅ | ❌ 缺"改自己密码"页面 | staff 想改密码得用 admin-tool 改，pilot 看撞不撞 |
+| 操作审计日志（谁改了谁、什么时候）| ❌ | — | v4.12 候选 |
 
 ---
 
-> 文档版本：v4.11 W1 测试基建对应 commit `f4b7896`，场景校正对应 commit `260301b`
-> 下次更新：v4.10.2 发版时同步更新场景；v4.11 补"成员管理前端"后启用场景 1
+## v4.11.1+ 部署守则（关键！）
+
+v4.11.1 起 nav 可见性依赖后端 `/api/admin/me` 返的 `permissions` 字段。**前端单独部署会导致 nav 全 hide**（虽然有 fallback 兜底，但会失去 perm 控制）。
+
+**每次部署必须 4 步全做**：
+
+```powershell
+# 1) 后端 build
+pwsh scripts/build-linux.ps1
+
+# 2) 上传（两个文件）
+scp -O D:\golang\openbook\chatwitheino-linux root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/
+scp -O D:\golang\openbook\static\admin.html root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/static/
+
+# 3) 重启后端（必须！）
+ssh root@server "systemctl restart chatwitheino"   # 或 pkill + nohup
+
+# 4) 浏览器强刷 Ctrl+Shift+R
+```
+
+**漏任一步会出**：
+- 漏后端：nav 全 hide（fallback 兜底，但不精确）
+- 漏前端：nav 仍按旧 ROLES_REQUIRED 字典（已删，会 403）
+- 漏 restart：仍是旧 binary
+- 漏强刷：浏览器缓存旧 admin.html
+
+---
+
+> 文档版本：
+> - v4.11 W1 测试基建对应 commit `f4b7896`
+> - 场景校正（前端未实装说明）对应 commit `260301b`
+> - v4.11 补成员管理前端对应 commit `864e367` / `934411b`（UI hotfix）
+> - v4.11.1 真 perm 矩阵对应 commit `6a460c9` / `1954b66`（fallback）
+>
+> 下次更新：v4.10.2 发版时同步更新场景；新增 / 调整 perm 时同步改这里
