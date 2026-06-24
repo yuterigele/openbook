@@ -3424,6 +3424,16 @@ const App = (() => {
   // 加新 nav-item 时务必给 data-perm 标对应 perm 名字，否则默认所有人可见
   function applyRoleBasedNavVisibility() {
     const perms = (state.user && state.user.permissions) || [];
+    // 防御性 fallback：后端没返 permissions（部署错位：只 scp 前端 / 只 scp 后端）
+    //   → 旧版前端 ROLES_REQUIRED 字典已删，perms=[] 会让所有 nav 全 hide
+    //   → 这时退化为"全显示"，至少用户能正常用，点了会 403（后端会拦）
+    //   → console.error 提醒：后端没重启 / binary 是旧的 / DB role_permissions 表空
+    if (perms.length === 0) {
+      const role = (state.user && state.user.role) || 'unknown';
+      console.error(`[RBAC] state.user.permissions 为空（role=${role}）—— 后端可能没重启 / 没 scp 新 binary / role_permissions 表空。nav 全显示是降级行为，不是正常状态。`);
+      $$('.nav-item[data-view]').forEach(el => { el.style.display = ''; });
+      return;
+    }
     const permSet = new Set(perms);
     $$('.nav-item[data-view]').forEach(el => {
       const required = el.dataset.perm;
