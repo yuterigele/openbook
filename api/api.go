@@ -273,11 +273,17 @@ func meHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	shop, _ := storage.GetShopByID(ctx, cl.ShopID)
+	// v4.11.1：返 permissions 给前端用于 nav 可见性控制
+	//   - storage 是真理之源，admin.html 不再手维护 ROLES_REQUIRED 字典
+	//   - 避免 v4.7/v4.10.1/v4.11 三次漂过的"前端 ROLES_REQUIRED 跟后端 perm 矩阵漂"债务
+	//   - 角色变更时（比如降级）下次 /me 调会自动反映
+	perms, _ := storage.GetRolePermissions(ctx, cl.Role)
 	c.JSON(http.StatusOK, map[string]any{
-		"admin_id": cl.AdminID,
-		"shop_id":  cl.ShopID,
-		"role":     cl.Role,
-		"shop":     shop,
+		"admin_id":    cl.AdminID,
+		"shop_id":     cl.ShopID,
+		"role":        cl.Role,
+		"shop":        shop,
+		"permissions": perms,
 	})
 }
 

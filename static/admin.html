@@ -1148,28 +1148,28 @@
     </div>
 
     <nav class="nav" id="navList">
-      <a class="nav-item" data-view="dashboard" href="#dashboard">
+      <a class="nav-item" data-view="dashboard" data-perm="view:dashboard" href="#dashboard">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/>
           <rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>
         </svg>
         <span>实时看板</span>
       </a>
-      <a class="nav-item" data-view="appointments" href="#appointments">
+      <a class="nav-item" data-view="appointments" data-perm="view:appointments" href="#appointments">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/>
           <line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
         </svg>
         <span>预约管理</span>
       </a>
-      <a class="nav-item" data-view="barbers" href="#barbers">
+      <a class="nav-item" data-view="barbers" data-perm="view:barbers" href="#barbers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
           <circle cx="12" cy="7" r="4"/>
         </svg>
         <span>理发师</span>
       </a>
-      <a class="nav-item" data-view="leaves" href="#leaves">
+      <a class="nav-item" data-view="leaves" data-perm="create:barber_leave" href="#leaves">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/>
           <path d="M8 2v4M16 2v4"/>
@@ -1177,20 +1177,20 @@
         <span>请假管理</span>
         <span class="badge badge-warning" id="activeLeavesBadge" style="display:none;">0</span>
       </a>
-      <a class="nav-item" data-view="notifications" href="#notifications">
+      <a class="nav-item" data-view="notifications" data-perm="view:notifications" href="#notifications">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
         </svg>
         <span>通知中心</span>
         <span class="badge badge-noshow" id="failedNotifsBadge" style="display:none;">0</span>
       </a>
-      <a class="nav-item" data-view="events" href="#events">
+      <a class="nav-item" data-view="events" data-perm="view:events" href="#events">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
         </svg>
         <span>事件日志</span>
       </a>
-      <a class="nav-item" data-view="handoffs" href="#handoffs">
+      <a class="nav-item" data-view="handoffs" data-perm="view:handoffs" href="#handoffs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="8.5" cy="7" r="4"/>
@@ -1199,7 +1199,7 @@
         <span>转人工</span>
         <span class="badge badge-warning" id="handoffsBadge" style="display:none;">0</span>
       </a>
-      <a class="nav-item" data-view="weekly" href="#weekly">
+      <a class="nav-item" data-view="weekly" data-perm="view:weekly_report" href="#weekly">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/>
           <line x1="16" y1="2" x2="16" y2="6"/>
@@ -1210,7 +1210,7 @@
         </svg>
         <span>单店周报</span>
       </a>
-      <a class="nav-item" data-view="chain-weekly" href="#chain-weekly">
+      <a class="nav-item" data-view="chain-weekly" data-perm="view:chain_dashboard" href="#chain-weekly">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 21h18M5 21V7l7-4 7 4v14"/>
           <line x1="12" y1="9" x2="12" y2="9"/>
@@ -1219,7 +1219,7 @@
         </svg>
         <span>跨店周报</span>
       </a>
-      <a class="nav-item" data-view="customers" href="#customers">
+      <a class="nav-item" data-view="customers" data-perm="view:customers" href="#customers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
@@ -1228,7 +1228,7 @@
         </svg>
         <span>顾客</span>
       </a>
-      <a class="nav-item" data-view="services" href="#services">
+      <a class="nav-item" data-view="services" data-perm="view:services" href="#services">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
@@ -1237,20 +1237,20 @@
         </svg>
         <span>服务目录</span>
       </a>
-      <a class="nav-item" data-view="subscription" href="#subscription">
+      <a class="nav-item" data-view="subscription" data-perm="view:subscription" href="#subscription">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="5" width="20" height="14" rx="2"/>
           <line x1="2" y1="10" x2="22" y2="10"/>
         </svg>
         <span>订阅</span>
       </a>
-      <a class="nav-item" data-view="chain" href="#chain">
+      <a class="nav-item" data-view="chain" data-perm="view:chain_dashboard" href="#chain">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/>
         </svg>
         <span>多店看板</span>
       </a>
-      <a class="nav-item" data-view="members" href="#members">
+      <a class="nav-item" data-view="members" data-perm="manage:members" href="#members">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
@@ -1259,10 +1259,10 @@
         </svg>
         <span>成员管理</span>
       </a>
-      <a class="nav-item" data-view="shop" href="#shop">
+      <a class="nav-item" data-view="shop" data-perm="edit:shop" href="#shop">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.13.32.21.66.21 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.13.32.21.66.21 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
         <span>店铺设置</span>
       </a>
@@ -3395,10 +3395,9 @@ const App = (() => {
     $('#userAvatar').textContent = (shop.name || u.shop_id || 'A').slice(0, 1).toUpperCase();
     $('#crumbShop').textContent = shop.name || u.shop_id || '';
     $('#livePill').style.display = '';
-    // v4.10.1：按 role 隐藏 nav-item
-    //   - "多店看板" 只给 platform_admin（单店 owner 看不到自己管不到的其他店）
-    //   - 避免菜单显示但点击 403 的体验事故
-    applyRoleBasedNavVisibility(u.role || 'owner');
+    // v4.11.1：按真 perm 矩阵（来自 /me 的 permissions）控制 nav 可见性
+    //   - 之前 ROLES_REQUIRED 字典三次漂（v4.7/v4.10.1/v4.11），现在用后端真理之源
+    applyRoleBasedNavVisibility();
     setView('dashboard');
     refreshAll();
     startAutoRefresh();
@@ -3412,41 +3411,30 @@ const App = (() => {
   //   - 加新 nav-item 时如果也有 role 约束，加到 ROLES_REQUIRED 字典里
   //
   // 约束：隐藏是单方向的——platform_admin 仍能看到所有 owner/staff 也能用的 nav-item
-  // v4.10.1 按 role 控制 nav-item 可见性
+  // v4.11.1 nav 可见性：用真 perm 矩阵（来自 /api/admin/me 的 permissions 字段）
   //
-  // 设计：
-  //   - 后端用 auth.RequireRole 强约束（多店看板只给 platform_admin）
-  //   - 前端同步隐藏菜单项，避免显示但点击 403 的体验事故
-  //   - 加新 nav-item 时如果也有 role 约束，加到 ROLES_REQUIRED 字典里
+  // 之前 v4.7 / v4.10.1 / v4.11 三次漂过的"前端 ROLES_REQUIRED 字典跟后端 perm 矩阵漂"债务，
+  // 现在用后端返的真 perm 一刀切，nav-item 的 data-perm 决定能否看到。
   //
-  // 约束：隐藏是单方向的——platform_admin 仍能看到所有 owner/staff 也能用的 nav-item
+  // 数据流：
+  //   1. 登录后 /api/admin/me 返 { admin_id, shop_id, role, shop, permissions: []string }
+  //   2. bootstrap() 拿到 state.user.permissions 后调一次 applyRoleBasedNavVisibility
+  //   3. 每次 perm 变更（比如降级）会自动反映（下次 /me 重拿）
   //
-  // 重要：每个条目必须跟 storage/permissions.go 的 defaultRolePermissions 矩阵严格对应
-  //   - 加新 perm 时务必同步加这里
-  //   - storage/permissions.go 是真理之源，前端是缓存
-  //   - v4.11.1 TODO: meHandler 返 permissions []string，前端直接用真 perm 驱动 nav 可见性
-  //     （这个字典是"中间态"，长期会被 /api/admin/me 返的 perm 替换）
-  const ROLES_REQUIRED = {
-    'chain': ['platform_admin'],         // view:chain_dashboard：staff 故意禁
-    'subscription': ['platform_admin'],   // view:subscription：staff 故意禁（v4.10.1 收紧）
-    'chain-weekly': ['platform_admin'],   // view:chain_dashboard：staff 故意禁
-    'members': ['owner'],                 // manage:members：v4.11 补前端；staff 故意禁
-    'weekly': ['owner', 'platform_admin'],   // view:weekly_report：staff 故意禁（v4.10.1 收紧）
-                                          //   修正：之前注释"全员能看"是错的，v4.10.1 起 staff 没 PermViewWeeklyReport
-    'shop': ['owner', 'platform_admin'],     // edit:shop：staff 故意禁（改营业时间，误操作影响大）
-    'services': ['owner', 'platform_admin'], // edit:services：staff 故意禁（v4.7 注释"改服务目录/价格，敏感"）
-                                          //   staff 有 view:services 但没 edit:services，UI 进页面改不了，体验割裂 → 直接 hide
-  };
-  function applyRoleBasedNavVisibility(role) {
+  // 加新 nav-item 时务必给 data-perm 标对应 perm 名字，否则默认所有人可见
+  function applyRoleBasedNavVisibility() {
+    const perms = (state.user && state.user.permissions) || [];
+    const permSet = new Set(perms);
     $$('.nav-item[data-view]').forEach(el => {
-      const view = el.dataset.view;
-      const required = ROLES_REQUIRED[view];
-      if (!required) return; // 没约束 → 所有人可见
-      if (required.includes(role)) {
+      const required = el.dataset.perm;
+      if (!required) {
+        // 没标 data-perm 的 nav-item 默认全部人可见（兼容意外遗漏）
+        // 但 init 时会 console.warn 提醒加 perm
+        console.warn(`[RBAC] nav view "${el.dataset.view}" 缺 data-perm 属性——加新 view 务必同步加 perm`);
         el.style.display = '';
-      } else {
-        el.style.display = 'none';
+        return;
       }
+      el.style.display = permSet.has(required) ? '' : 'none';
     });
   }
 
