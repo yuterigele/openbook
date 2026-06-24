@@ -119,6 +119,7 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	// 店铺设置
 	protected.GET("/shop", auth.RequirePerm(storage.PermEditShop), getShopHandler) // 设为 owner-only 防止 staff 误读敏感字段
 	protected.GET("/plans", auth.RequirePerm(storage.PermViewPlan), plansHandler) // v4.12: owner 看自己 plan + 4 档对比
+	protected.GET("/data/export", auth.RequirePerm(storage.PermViewPlan), dataExportHandler) // v4.12.1: CSV 导出，需 data_export feature
 	protected.PUT("/shop", auth.RequirePerm(storage.PermEditShop), updateShopHandler)
 
 	// 跨店看板（连锁）—— v4.10.1：只给 platform_admin 看

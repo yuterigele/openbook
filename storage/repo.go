@@ -475,6 +475,29 @@ func GetAppointment(appointmentID string) (*Appointment, error) {
 	return &appt, nil
 }
 
+// ListAppointmentsByShopRange 列出某 shop 在 [dateFrom, dateTo] 区间内的所有预约（v4.12.1）
+//
+// 用于 /api/admin/data/export——不限 status（active / cancelled / completed / noshow 都返）。
+//   - dateFrom / dateTo 是 YYYY-MM-DD 字符串（DB 字段是 string）
+//   - 性能：shop_id + date 加索引（已有），按 date + time 升序
+//   - 跨多店隔离：必须按 shop_id 过滤
+func ListAppointmentsByShopRange(ctx context.Context, shopID, dateFrom, dateTo string) ([]Appointment, error) {
+	if DB == nil {
+		return nil, errors.New("db not initialized")
+	}
+	if shopID == "" {
+		return nil, errors.New("shop_id is required")
+	}
+	var appts []Appointment
+	if err := DB.WithContext(ctx).
+		Where("shop_id = ? AND date >= ? AND date <= ?", shopID, dateFrom, dateTo).
+		Order("date ASC, time ASC").
+		Find(&appts).Error; err != nil {
+		return nil, err
+	}
+	return appts, nil
+}
+
 // GetBarberByName 根据姓名获取理发师
 func GetBarberByName(name string) (*Barber, error) {
 	var b Barber

@@ -1763,6 +1763,7 @@ const App = (() => {
         <button class="btn btn-primary" onclick="App.loadAppointments()">查询</button>
         <button class="btn btn-ghost" onclick="App.resetApptFilters()">重置</button>
         <span class="spacer"></span>
+        <button class="btn btn-ghost" onclick="App.exportAppointmentsCSV()" data-perm="view:plan" title="Pro 及以上版本可用">导出 CSV</button>
         <span class="text-muted" id="apptTs" style="font-size:12px;"></span>
       </div>
 
@@ -3654,6 +3655,8 @@ const App = (() => {
     // v4.11.1：按真 perm 矩阵（来自 /me 的 permissions）控制 nav 可见性
     //   - 之前 ROLES_REQUIRED 字典三次漂（v4.7/v4.10.1/v4.11），现在用后端真理之源
     applyRoleBasedNavVisibility();
+    // v4.12.1：非 nav-item 的 [data-perm] 元素（如 CSV 导出按钮）也走同一 permSet
+    applyElementPermVisibility();
     setView('dashboard');
     refreshAll();
     startAutoRefresh();
@@ -3800,6 +3803,56 @@ const App = (() => {
     state.apptDate = todayStr(); state.apptStatus = '';
     render();
     loadAppointments();
+  }
+
+  // v4.12.1: CSV 导出（data_export feature 实战）
+  // basic plan 店主点会收到 403 + 引导升级文案
+  async function exportAppointmentsCSV() {
+    try {
+      // 默认导出当前查询日期前后 30 天（更广，给商户财务对账用）
+      const from = state.apptDate || todayStr();
+      const url = `/api/admin/data/export?type=appointments&from=${from}&to=${todayStr()}`;
+      const resp = await fetch(url, { credentials: 'same-origin' });
+      if (!resp.ok) {
+        // 尝试解析 JSON 错误（feature_required / frozen / perm 不足）
+        const text = await resp.text();
+        let msg = `导出失败 (${resp.status})`;
+        try {
+          const j = JSON.parse(text);
+          if (j.error) msg = j.error;
+          if (j.feature_required) msg += `\n\nfeature: ${j.feature_required}\n当前 plan: ${j.current_plan || '?'}`;
+        } catch (_) { /* not JSON */ }
+        alert(msg);
+        return;
+      }
+      // 成功：触发下载（用 Content-Disposition 的文件名；fallback 默认名）
+      const blob = await resp.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const cd = resp.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="?([^";]+)"?/);
+      a.download = m ? m[1] : `appointments-${from}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      alert('导出失败: ' + e.message);
+    }
+  }
+
+  // v4.12.1: 通用 [data-perm] 元素隐藏（非 nav-item，按钮/卡片）
+  // 跟 applyRoleBasedNavVisibility 共享同一 permSet，互补
+  // 不传 perm 的元素默认显示（避免误伤）
+  function applyElementPermVisibility() {
+    const perms = (state.user && state.user.permissions) || [];
+    if (perms.length === 0) return; // 防御性 fallback：nav 已处理，按钮默认显示
+    const permSet = new Set(perms);
+    $$('[data-perm]:not([data-view])').forEach(el => {
+      const required = el.dataset.perm;
+      if (!required) return;
+      el.style.display = permSet.has(required) ? '' : 'none';
+    });
   }
 
   async function loadEvents() {
