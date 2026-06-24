@@ -234,3 +234,38 @@ func TestAdminHasPermission_NotFound(t *testing.T) {
 		t.Errorf("不存在的 admin 不应有权限")
 	}
 }
+
+// TestStaffForbiddensPinned —— 防 staff 故意禁的 7 个 perm 矩阵漂移
+//
+//   - v4.7 / v4.10.1 反复漂过（注释里写了"owner/staff 都能看"但实际 staff 没 perm）
+//   - admin.html ROLES_REQUIRED 跟这个矩阵是镜像关系，矩阵一漂前端就错
+//   - 加新 perm 时务必同步改这里
+//
+// 故意禁的 7 个（参考 storage/permissions.go line 128-133 注释）：
+//   - view:weekly_report
+//   - view:chain_dashboard
+//   - edit:shop
+//   - edit:services
+//   - view:subscription
+//   - manage:subscription
+//   - manage:members
+func TestStaffForbiddensPinned(t *testing.T) {
+	wantForbidden := []string{
+		PermViewWeeklyReport,
+		PermViewChainDashboard,
+		PermEditShop,
+		PermEditServices,
+		PermViewSubscription,
+		PermManageSubscription,
+		PermManageMembers,
+	}
+	staffSet := make(map[string]bool, len(DefaultRolePermissions[RoleStaff]))
+	for _, p := range DefaultRolePermissions[RoleStaff] {
+		staffSet[p] = true
+	}
+	for _, p := range wantForbidden {
+		if staffSet[p] {
+			t.Errorf("staff 不应有 %s（storage/permissions.go 故意禁），但 DefaultRolePermissions[RoleStaff] 里出现了——v4.7/v4.10.1 漂过，请检查后再合", p)
+		}
+	}
+}

@@ -3412,12 +3412,30 @@ const App = (() => {
   //   - 加新 nav-item 时如果也有 role 约束，加到 ROLES_REQUIRED 字典里
   //
   // 约束：隐藏是单方向的——platform_admin 仍能看到所有 owner/staff 也能用的 nav-item
+  // v4.10.1 按 role 控制 nav-item 可见性
+  //
+  // 设计：
+  //   - 后端用 auth.RequireRole 强约束（多店看板只给 platform_admin）
+  //   - 前端同步隐藏菜单项，避免显示但点击 403 的体验事故
+  //   - 加新 nav-item 时如果也有 role 约束，加到 ROLES_REQUIRED 字典里
+  //
+  // 约束：隐藏是单方向的——platform_admin 仍能看到所有 owner/staff 也能用的 nav-item
+  //
+  // 重要：每个条目必须跟 storage/permissions.go 的 defaultRolePermissions 矩阵严格对应
+  //   - 加新 perm 时务必同步加这里
+  //   - storage/permissions.go 是真理之源，前端是缓存
+  //   - v4.11.1 TODO: meHandler 返 permissions []string，前端直接用真 perm 驱动 nav 可见性
+  //     （这个字典是"中间态"，长期会被 /api/admin/me 返的 perm 替换）
   const ROLES_REQUIRED = {
-    'chain': ['platform_admin'],         // 多店看板：只 platform_admin
-    'subscription': ['platform_admin'],   // 订阅：只 platform_admin（v4.10.1 商户不需要看订阅）
-    'chain-weekly': ['platform_admin'],   // 跨店周报：只 platform_admin（v4.10.1）
-    'members': ['owner'],                 // 成员管理：只 owner（v4.11 补前端；staff 故意禁掉）
-    // 'weekly' 不列：单店周报 owner / staff 都能看（v4.10.1 拆出来）
+    'chain': ['platform_admin'],         // view:chain_dashboard：staff 故意禁
+    'subscription': ['platform_admin'],   // view:subscription：staff 故意禁（v4.10.1 收紧）
+    'chain-weekly': ['platform_admin'],   // view:chain_dashboard：staff 故意禁
+    'members': ['owner'],                 // manage:members：v4.11 补前端；staff 故意禁
+    'weekly': ['owner', 'platform_admin'],   // view:weekly_report：staff 故意禁（v4.10.1 收紧）
+                                          //   修正：之前注释"全员能看"是错的，v4.10.1 起 staff 没 PermViewWeeklyReport
+    'shop': ['owner', 'platform_admin'],     // edit:shop：staff 故意禁（改营业时间，误操作影响大）
+    'services': ['owner', 'platform_admin'], // edit:services：staff 故意禁（v4.7 注释"改服务目录/价格，敏感"）
+                                          //   staff 有 view:services 但没 edit:services，UI 进页面改不了，体验割裂 → 直接 hide
   };
   function applyRoleBasedNavVisibility(role) {
     $$('.nav-item[data-view]').forEach(el => {
