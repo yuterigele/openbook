@@ -113,9 +113,20 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		log.Printf("[storage] SeedDefaultRolePermissions 警告: %v", err)
 	}
 
-	// 注意：v4.10.1 加新 perm 后，老店铺不会自动收到（Seed 只在表空时跑）。
-	// 解决方案：跑 `go run ./cmd/admin-tool perms reconcile` 手动补全（不删任何现有记录）。
-	// 详见 cmd/admin-tool/README。
+	// v4.13.0 自动 reconcile：每次启动把 DefaultRolePermissions 缺的 perm 补进 role_permissions
+	//   - 修复 v4.10.1 那种"加新 perm 后老店铺拿不到"的 footgun（admin-tool perms reconcile 是手动补丁）
+	//   - 幂等 + 只补缺失（Reconcile 内部用 INSERT IGNORE 兜底，不会覆盖运营调整）
+	//   - 成本：3 个 role × 1 个 SELECT + 几个 INSERT（最多），启动 < 1ms，可忽略
+	if res, err := ReconcileRolePermissions(ctx); err != nil {
+		log.Printf("[storage] ReconcileRolePermissions 警告: %v", err)
+	} else if res.Inserted > 0 {
+		log.Printf("[storage] ReconcileRolePermissions: 补 %d 条 perm（已有 %d 条保留）", res.Inserted, res.Skipped)
+		for _, desc := range res.InsertedList {
+			log.Printf("[storage]   + %s", desc)
+		}
+	}
+
+	// 兼容：仍保留 admin-tool perms reconcile 命令（运营手动跑也行）
 
 	// v4.8 顾客档案自愈：appointments 有 customer_id 为空 + customer 名字非空的，
 	// 按名字去 customers 表查（没有就建），回填 appointment.customer_id。
