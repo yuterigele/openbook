@@ -34,7 +34,7 @@ type BarberLeaveTool struct{}
 func (t *BarberLeaveTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "barber_leave",
-		Desc: "查询某位理发师在指定日期的请假安排。\n" +
+		Desc: "查询某位理发师在指定日期的请假安排（返回请假时段区间）。\n" +
 			"\n" +
 			"【调用时机】\n" +
 			"  - 顾客问「Tony 明天有空吗」「Kevin 后天请假吗」「师傅什么时候回来」等；\n" +
@@ -42,23 +42,45 @@ func (t *BarberLeaveTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 			"  - 顾客问「为什么 X 师傅没排班」等异常情况。\n" +
 			"\n" +
 			"【与 query_schedule 的区别】\n" +
-			"  - barber_leave 给「原因 + 区间」详情（用于解释）；\n" +
+			"  - barber_leave 给「请假区间」详情（用于解释）；\n" +
 			"  - query_schedule 给「可约时段」（用于下单）。\n" +
 			"两者互补，不必都调；问「为什么没空」调 leave，问「什么时候有空」调 schedule。\n" +
 			"\n" +
-			"【回复要求】\n" +
-			"  - 把请假原因也告诉顾客（顾客最关心）；\n" +
-			"  - 整天请假时主动建议换时间或换其他师傅；\n" +
-			"  - 半天请假时主动说「上午还有空 / 下午空了」。",
+			"【返回格式】（自然语言文本，不是 JSON，**请按字面念给顾客**）\n" +
+			"  - 有请假：「师傅 {name} 在 {date} 的请假安排：\\n  1. HH:MM-HH:MM（师傅临时有事）\\n  ...」\n" +
+			"  - 无请假：「师傅 {name} 在 {date} 没有请假安排，正常可约。」\n" +
+			"  - 师傅不存在：「师傅 {name} 不在店里呢（本店有 Tony、Kevin 两位），换个试试？」\n" +
+			"  - 师傅已停用：「师傅 {name} 暂时不接单了」\n" +
+			"\n" +
+			"【输出软约定 — 隐私硬约束】\n" +
+			"  - 返回的「原因」**永远是固定文案「师傅临时有事」**，**不返回任何具体原因**\n" +
+			"  - 这是 v4.13.0 隐私保护设计：商户在 admin 填的内部 Reason / CustomerFacingReason\n" +
+			"    （可能含「痔疮手术」「陪老婆产检」等敏感字眼）**永远不返给 LLM**\n" +
+			"  - **禁止**根据请假时长 / 时间点推测未在返回中明示的信息\n" +
+			"    （如「他大概是生病了」「估计是感冒」→ 这种推论让顾客尴尬，**禁止**）\n" +
+			"  - 返回「正常可约」时 → **继续调 query_schedule 拿可约时段**\n" +
+			"  - 返回部分时段请假时 → 调 query_schedule 拿剩余可约时段\n" +
+			"\n" +
+			"【回复顾客的硬要求】\n" +
+			"  - 把「师傅临时有事」转告顾客（**不要**画蛇添足加任何具体描述）；\n" +
+			"  - 整天请假（HH:MM 接近 00:00-23:59）：主动建议「换时间 / 换其他师傅」；\n" +
+			"  - 部分时段请假：点明「上午还有 / 下午没了 / X 点到 Y 点不在」；\n" +
+			"  - 语气自然，**不要**机械复述「HH:MM-HH:MM（师傅临时有事）」格式。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"barber_name": {
-				Type:     "string",
-				Desc:     "理发师姓名，例如：Tony、Kevin",
+				Type: "string",
+				Desc: "理发师**精确姓名**（必须匹配 shop_barbers.name，**大小写敏感**）。\n" +
+					"  - 示例：「Tony」「Kevin」\n" +
+					"  - 顾客用昵称必须先映射：「托尼老师」→「Tony」、「小 Kevin」→「Kevin」\n" +
+					"  - 不确定时**先调 list_barbers** 拿到准确名单再调本工具",
 				Required: true,
 			},
 			"date": {
-				Type:     "string",
-				Desc:     "查询日期，格式：YYYY-MM-DD，例如：2026-06-20；不传默认今天",
+				Type: "string",
+				Desc: "查询日期，**严格 YYYY-MM-DD 格式**（如「2026-06-25」）。\n" +
+					"  - 不传 → 默认今天（服务器时区 Asia/Shanghai）\n" +
+					"  - 「明天」/「后天」/「下周三」必须**先**转换为 YYYY-MM-DD 再传入\n" +
+					"  - 过去日期也能查（看历史），但**业务上无价值**，避免主动查过去",
 				Required: false,
 			},
 		}),
@@ -122,16 +144,18 @@ func (t *BarberLeaveTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 	}
 
 	// 渲染请假区间
+	// v4.13.0 隐私保护：内部 Reason / CustomerFacingReason 都不返给 LLM
+	//   - Reason 是商户填的内部原因（"痔疮手术""陪老婆产检"等敏感信息）
+	//   - CustomerFacingReason 即使脱敏，仍可能"临时有事 → 陪产检"这种
+	//   - LLM 拿到任何具体原因都可能在回复时复述给顾客 → 全部硬编码"师傅临时有事"
+	//   - 真实原因商户在 admin 后台自己看，顾客端只看到一致的"临时有事"
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("师傅 %s 在 %s 的请假安排：\n", params.BarberName, params.Date))
 	for i, l := range activeLeaves {
 		startHM := l.StartAt.In(loc).Format("15:04")
 		endHM := l.EndAt.In(loc).Format("15:04")
-		reason := strings.TrimSpace(l.Reason)
-		if reason == "" {
-			reason = "（未注明原因）"
-		}
-		sb.WriteString(fmt.Sprintf("  %d. %s-%s（%s）\n", i+1, startHM, endHM, reason))
+		// 不暴露 l.Reason / l.CustomerFacingReason（v4.13.0 隐私保护）
+		sb.WriteString(fmt.Sprintf("  %d. %s-%s（师傅临时有事）\n", i+1, startHM, endHM))
 	}
 	// 主动建议
 	sb.WriteString("\n建议：换时间（如上午/下午另一段）、换其他师傅，或联系店员确认。")
