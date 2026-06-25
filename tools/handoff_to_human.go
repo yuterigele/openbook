@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -31,8 +32,37 @@ import (
 //     1) 顾客明确说"找人工"/"叫老板来"/"投诉"
 //     2) 业务超出 Agent 能力（投诉、退款、改价等 Agent 没有 tool 的事）
 //     3) 连续 2 轮对话 Agent 都无法识别意图
-//   - 工具不强制去重（同一次会话可能多次触发）—— 业务上商户在后台看到多条同源埋点会自然合并处理
+//
+// v4.13.5 修复：**per-refID 去重**——LLM 偶尔会在 1 次 Run 里多次调 handoff 工具
+// （拿到第一次的"已转人工"返回后还会重试），导致 event_logs 表里同一个顾客
+// 出现 N 条 handoff 埋点，admin 后台看着像"莫名奇妙重复增加"。
+// 修复方案：进程内 sync.Map 按 refID（顾客稳定标识）去重，5 分钟窗口内只写 1 次。
+// - 进程重启 dedup 状态会丢——但重启不常有，可接受
+// - 不同顾客（不同 refID）互不影响
+// - 5 分钟后再触发算新事件（避免"无限延后"）
 type HandoffToHumanTool struct{}
+
+// handoffDedup per-refID 去重状态（v4.13.5 加）
+//   - key = refID（顾客稳定标识，优先 external_user_id）
+//   - value = 上次写入时间
+//   - 5 分钟内调 handoff 只写 1 次埋点（但工具仍 return 成功）
+var handoffDedup sync.Map
+
+// handoffDedupWindow dedup 窗口（5 分钟）
+//
+// 调参参考：
+//   - 太短（< 1 min）：去重效果差，LLM 多次调仍可能写多条
+//   - 太长（> 30 min）：商户在后台看到"老事件"，反应迟钝
+//   - 5 min 平衡：商户在后台看到新事件 + 防 LLM 短时间循环调
+const handoffDedupWindow = 5 * time.Minute
+
+// handoffDedupReset 测试用：清空 dedup 状态
+func handoffDedupReset() {
+	handoffDedup.Range(func(key, _ any) bool {
+		handoffDedup.Delete(key)
+		return true
+	})
+}
 
 // Info 返回工具信息
 func (t *HandoffToHumanTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -93,11 +123,34 @@ func (t *HandoffToHumanTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		shopID = "default"
 	}
 
-	// 顾客标识 ref_id：优先用 customer，否则用 "unknown" + 时间戳避免多条埋点挤在同一个 ref_id 上
-	refID := strings.TrimSpace(params.Customer)
+	// 顾客标识 ref_id（v4.13.5 改：优先用 ctx 的 external_user_id，stable key for dedup）
+	//
+	// 旧逻辑：customer 为空时用 "unknown-{time.Now().UnixNano()}" → 每次不同，
+	// dedup 永远命中不了。改成：
+	//   1) ctx.external_user_id（最稳，wechat 用户唯一标识）
+	//   2) customer 参数
+	//   3) "unknown"（不附加时间戳，让 dedup 至少能 merge 同一会话的 unknown 事件）
+	refID := strings.TrimSpace(ExternalUserIDFromCtx(ctx))
 	if refID == "" {
-		refID = fmt.Sprintf("unknown-%d", time.Now().UnixNano())
+		refID = strings.TrimSpace(params.Customer)
 	}
+	if refID == "" {
+		refID = "unknown"
+	}
+
+	// v4.13.5 dedup：同 refID 5 分钟内只写 1 次埋点
+	if last, ok := handoffDedup.Load(refID); ok {
+		if time.Since(last.(time.Time)) < handoffDedupWindow {
+			// 5 分钟内已 handoff 过——不写埋点，直接 return 成功提示
+			// 保留这个 return 让 LLM 不会因为没看到结果而重试
+			return fmt.Sprintf(
+				"已为顾客 %q 发起人工转接（原因：%s；本次会话内已记录过，不再重复埋点）。请用自然语言告诉顾客已转人工，请稍候。",
+				refID, params.Reason,
+			), nil
+		}
+	}
+	// 写入/更新时间戳（dedup 命中后**不**更新，避免"无限延后"）
+	handoffDedup.Store(refID, time.Now())
 
 	// 埋点
 	storage.TrackEvent(ctx, shopID, storage.EventHandoffToHuman, refID, map[string]any{

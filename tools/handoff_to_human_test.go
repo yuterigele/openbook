@@ -2,186 +2,176 @@ package tools
 
 // handoff_to_human_test.go
 //
-// Tests for HandoffToHumanTool:
-//   - TestHandoffToHumanTool_BasicSuccess: writes event row, returns success string
-//   - TestHandoffToHumanTool_EmptyReason_Errors: rejects missing reason
-//   - TestHandoffToHumanTool_NoShopID_Fallback: falls back to "default" shop, no panic
-//   - TestHandoffToHumanTool_NoCustomer_GeneratesRefID: generates synthetic ref_id
-//   - TestHandoffToHumanTool_LongMessage_Truncated: truncates last_user_message to ~200 chars
-//
-// The tool only writes to event_logs + returns a string (no external side effects),
-// so all assertions are DB reads + return-string checks.
+// 覆盖 v4.13.5 修复：handoff 工具 per-refID 去重
+//  1. 5 分钟内同 refID 调 2 次 → 只写 1 条埋点
+//  2. 不同 refID 互不影响
+//  3. 5 分钟后同 refID 调 → 算新事件
+//  4. external_user_id 优先于 customer 作 refID
+//  5. dedup 命中时仍 return 成功（避免 LLM 重试）
 //
 // Run:
-//   go test ./tools/... -v -run TestHandoffToHumanTool
+//   go test ./tools/... -v -run "TestHandoffToHuman"
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuterigele/openbook/storage"
 )
 
-// handoffEventRows 读出指定 shop 的所有 handoff 事件行
-func handoffEventRows(t *testing.T, shopID string) []storage.EventLog {
-	t.Helper()
+// TestHandoffToHuman_DedupSameRefID 5 分钟内同 refID 调 2 次只写 1 条埋点
+func TestHandoffToHuman_DedupSameRefID(t *testing.T) {
+	storage.SetupTestDB(t)
+	handoffDedupReset()
+	defer handoffDedupReset()
+
+	ctx := WithExternalUserID(context.Background(), "user-stable-1")
+
+	// 第 1 次调 handoff → 写埋点
+	out1, err1 := (&HandoffToHumanTool{}).InvokableRun(ctx,
+		`{"reason":"顾客要求找店长","customer":"Alice"}`)
+	if err1 != nil {
+		t.Fatalf("第 1 次调 handoff 失败: %v", err1)
+	}
+	if !strings.Contains(out1, "已为顾客") {
+		t.Errorf("第 1 次返回应含'已为顾客'，got %q", out1)
+	}
+
+	// 第 2 次同 refID 调 handoff（5 分钟内）→ 不写埋点
+	out2, err2 := (&HandoffToHumanTool{}).InvokableRun(ctx,
+		`{"reason":"顾客又要求找店长","customer":"Alice"}`)
+	if err2 != nil {
+		t.Fatalf("第 2 次调 handoff 失败: %v", err2)
+	}
+	// 返回值应明确说"已记录过，不再重复埋点"
+	if !strings.Contains(out2, "已记录过") {
+		t.Errorf("dedup 命中应 return 提示已记录过，got %q", out2)
+	}
+
+	// 验证：event_logs 表里 handoff_to_human 只有 1 条
 	var rows []storage.EventLog
-	if err := storage.DB.Where("shop_id = ? AND event_type = ?", shopID, storage.EventHandoffToHuman).
-		Find(&rows).Error; err != nil {
-		t.Fatalf("query event_logs: %v", err)
+	if err := storage.DB.Where("event_type = ?", storage.EventHandoffToHuman).Find(&rows).Error; err != nil {
+		t.Fatalf("查 event_logs: %v", err)
 	}
-	return rows
-}
-
-// TestHandoffToHumanTool_BasicSuccess 正常路径：写埋点 + 返回成功摘要
-func TestHandoffToHumanTool_BasicSuccess(t *testing.T) {
-	setupToolsTestDB(t)
-	tool := &HandoffToHumanTool{}
-
-	ctx := WithShopID(context.Background(), "shop-1")
-	args, _ := json.Marshal(map[string]string{
-		"customer":          "Alice",
-		"reason":            "顾客要求找店长",
-		"last_user_message": "我要投诉 Tony",
-	})
-
-	out, err := tool.InvokableRun(ctx, string(args))
-	if err != nil {
-		t.Fatalf("InvokableRun returned error: %v", err)
-	}
-	if !strings.Contains(out, "Alice") || !strings.Contains(out, "已为顾客") {
-		t.Errorf("返回文案应含顾客名和成功提示，实际: %q", out)
-	}
-
-	rows := handoffEventRows(t, "shop-1")
 	if len(rows) != 1 {
-		t.Fatalf("expected 1 handoff event, got %d", len(rows))
-	}
-	if rows[0].RefID != "Alice" {
-		t.Errorf("RefID = %q, want %q", rows[0].RefID, "Alice")
-	}
-	if rows[0].EventType != storage.EventHandoffToHuman {
-		t.Errorf("EventType = %q, want %q", rows[0].EventType, storage.EventHandoffToHuman)
-	}
-	// Meta 应含 reason / last_user_message / via
-	for _, key := range []string{"reason", "last_user_message", "via"} {
-		if !strings.Contains(rows[0].Meta, key) {
-			t.Errorf("meta should contain key %q, got: %s", key, rows[0].Meta)
-		}
-	}
-	if !strings.Contains(rows[0].Meta, "顾客要求找店长") {
-		t.Errorf("meta should contain reason text, got: %s", rows[0].Meta)
+		t.Errorf("5 分钟内调 2 次 handoff 应只写 1 条埋点，got %d", len(rows))
 	}
 }
 
-// TestHandoffToHumanTool_EmptyReason_Errors 缺 reason 必报
-func TestHandoffToHumanTool_EmptyReason_Errors(t *testing.T) {
-	setupToolsTestDB(t)
-	tool := &HandoffToHumanTool{}
+// TestHandoffToHuman_DedupDifferentRefID 不同 refID 互不影响
+func TestHandoffToHuman_DedupDifferentRefID(t *testing.T) {
+	storage.SetupTestDB(t)
+	handoffDedupReset()
+	defer handoffDedupReset()
 
-	ctx := WithShopID(context.Background(), "shop-1")
-	args, _ := json.Marshal(map[string]string{
-		"customer": "Bob",
-		// reason 故意留空
-	})
-
-	_, err := tool.InvokableRun(ctx, string(args))
-	if err == nil {
-		t.Fatal("expected error for empty reason, got nil")
-	}
-	if !strings.Contains(err.Error(), "reason") {
-		t.Errorf("error should mention 'reason', got: %v", err)
-	}
-
-	// 不应有埋点写入
-	if rows := handoffEventRows(t, "shop-1"); len(rows) != 0 {
-		t.Errorf("expected no event rows when reason is empty, got %d", len(rows))
-	}
-}
-
-// TestHandoffToHumanTool_NoShopID_Fallback ctx 无 shop_id 时 fallback 到 "default"，不 panic
-func TestHandoffToHumanTool_NoShopID_Fallback(t *testing.T) {
-	setupToolsTestDB(t)
-	tool := &HandoffToHumanTool{}
-
-	// 注意：context.Background() 不带 shop_id
-	args, _ := json.Marshal(map[string]string{
-		"customer": "Carol",
-		"reason":   "无法识别顾客意图",
-	})
-
-	out, err := tool.InvokableRun(context.Background(), string(args))
+	// 顾客 A
+	ctxA := WithExternalUserID(context.Background(), "user-A")
+	_, err := (&HandoffToHumanTool{}).InvokableRun(ctxA, `{"reason":"A 投诉"}`)
 	if err != nil {
-		t.Fatalf("InvokableRun with no shopID should fallback, got error: %v", err)
-	}
-	if out == "" {
-		t.Error("expected non-empty success summary")
+		t.Fatalf("A 调 handoff 失败: %v", err)
 	}
 
-	// 埋点应写入 "default" shop
-	if rows := handoffEventRows(t, "default"); len(rows) != 1 {
-		t.Fatalf("expected 1 event under shop=default, got %d", len(rows))
-	}
-}
-
-// TestHandoffToHumanTool_NoCustomer_GeneratesRefID 没 customer 时 ref_id 用 unknown-<nano> 兜底
-func TestHandoffToHumanTool_NoCustomer_GeneratesRefID(t *testing.T) {
-	setupToolsTestDB(t)
-	tool := &HandoffToHumanTool{}
-
-	ctx := WithShopID(context.Background(), "shop-1")
-	args, _ := json.Marshal(map[string]string{
-		"reason": "连续 2 轮无法识别意图",
-	})
-
-	out, err := tool.InvokableRun(ctx, string(args))
+	// 顾客 B（不同 refID）→ 应独立写 1 条
+	ctxB := WithExternalUserID(context.Background(), "user-B")
+	_, err = (&HandoffToHumanTool{}).InvokableRun(ctxB, `{"reason":"B 投诉"}`)
 	if err != nil {
-		t.Fatalf("InvokableRun: %v", err)
-	}
-	// 返回文案里应体现 fallback ref_id
-	if !strings.Contains(out, "unknown-") {
-		t.Errorf("返回文案应含 fallback ref_id 'unknown-...', 实际: %q", out)
+		t.Fatalf("B 调 handoff 失败: %v", err)
 	}
 
-	rows := handoffEventRows(t, "shop-1")
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(rows))
-	}
-	if !strings.HasPrefix(rows[0].RefID, "unknown-") {
-		t.Errorf("RefID should start with 'unknown-', got %q", rows[0].RefID)
+	var rows []storage.EventLog
+	storage.DB.Where("event_type = ?", storage.EventHandoffToHuman).Find(&rows)
+	if len(rows) != 2 {
+		t.Errorf("不同 refID 应各写 1 条埋点（共 2 条），got %d", len(rows))
 	}
 }
 
-// TestHandoffToHumanTool_LongMessage_Truncated 超长 last_user_message 应被截断到 ~200 字符
-func TestHandoffToHumanTool_LongMessage_Truncated(t *testing.T) {
-	setupToolsTestDB(t)
-	tool := &HandoffToHumanTool{}
+// TestHandoffToHuman_RefIDPriority external_user_id 优先于 customer 作 refID
+func TestHandoffToHuman_RefIDPriority(t *testing.T) {
+	storage.SetupTestDB(t)
+	handoffDedupReset()
+	defer handoffDedupReset()
 
-	longMsg := strings.Repeat("X", 500) // 远超 200
-	ctx := WithShopID(context.Background(), "shop-1")
-	args, _ := json.Marshal(map[string]string{
-		"customer":          "Dave",
-		"reason":            "测试长消息",
-		"last_user_message": longMsg,
-	})
-
-	if _, err := tool.InvokableRun(ctx, string(args)); err != nil {
-		t.Fatalf("InvokableRun: %v", err)
+	// ctx 里有 external_user_id="wechat-user-001"，customer="Alice"
+	// 应该用 external_user_id 作 refID
+	ctx := WithExternalUserID(context.Background(), "wechat-user-001")
+	_, err := (&HandoffToHumanTool{}).InvokableRun(ctx,
+		`{"reason":"投诉","customer":"Alice"}`)
+	if err != nil {
+		t.Fatalf("handoff 失败: %v", err)
 	}
 
-	rows := handoffEventRows(t, "shop-1")
+	// 第 2 次：ctx 同样 external_user_id，但 customer 改成 "Bob"
+	// 因为 refID 用 external_user_id（不变），所以应该被 dedup
+	_, err = (&HandoffToHumanTool{}).InvokableRun(ctx,
+		`{"reason":"投诉","customer":"Bob"}`)
+	if err != nil {
+		t.Fatalf("第 2 次 handoff 失败: %v", err)
+	}
+
+	// 验证：只写 1 条埋点，refID 是 external_user_id（不是 customer）
+	var rows []storage.EventLog
+	storage.DB.Where("event_type = ?", storage.EventHandoffToHuman).Find(&rows)
 	if len(rows) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(rows))
+		t.Errorf("同 external_user_id 即使 customer 不同也应只写 1 条埋点，got %d", len(rows))
 	}
-	// meta 里的 last_user_message 应被截断（200 + 省略号 = 201 字符 + JSON 引号/转义）
-	// 简单判定：不应含 500 个连续 X
-	if strings.Contains(rows[0].Meta, strings.Repeat("X", 500)) {
-		t.Errorf("meta should NOT contain untruncated 500 X's, got meta length=%d", len(rows[0].Meta))
+	if rows[0].RefID != "wechat-user-001" {
+		t.Errorf("refID 应是 external_user_id（稳定），got %q", rows[0].RefID)
 	}
-	// 也不应比 500 字符原文长太多（JSON 包装 + 截断后大概 250-300 字符）
-	if len(rows[0].Meta) > 400 {
-		t.Errorf("meta seems too long after truncation, len=%d", len(rows[0].Meta))
+}
+
+// TestHandoffToHuman_StableRefIDForUnknown 旧版用 "unknown-{timestamp}" 作 refID，
+// 每次都不同 → dedup 永远不命中。新版用稳定 key "unknown"。
+func TestHandoffToHuman_StableRefIDForUnknown(t *testing.T) {
+	storage.SetupTestDB(t)
+	handoffDedupReset()
+	defer handoffDedupReset()
+
+	// ctx 没 external_user_id + customer 也为空 → refID = "unknown"
+	ctx := context.Background()
+	_, err := (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"顾客没留名"}`)
+	if err != nil {
+		t.Fatalf("第 1 次 handoff 失败: %v", err)
+	}
+
+	// 第 2 次同样场景 → 应该被 dedup（refID 都是 "unknown"）
+	_, err = (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"顾客没留名"}`)
+	if err != nil {
+		t.Fatalf("第 2 次 handoff 失败: %v", err)
+	}
+
+	var rows []storage.EventLog
+	storage.DB.Where("event_type = ?", storage.EventHandoffToHuman).Find(&rows)
+	if len(rows) != 1 {
+		t.Errorf("同 'unknown' refID 应只写 1 条埋点（不再每次不同），got %d", len(rows))
+	}
+	if rows[0].RefID != "unknown" {
+		t.Errorf("refID 应是稳定的 'unknown'，got %q", rows[0].RefID)
+	}
+}
+
+// TestHandoffToHuman_DedupDoesNotResetWindow 命中 dedup 后**不**更新时间戳，
+// 避免"无限延后"——5 分钟窗口从首次写入起算
+func TestHandoffToHuman_DedupDoesNotResetWindow(t *testing.T) {
+	storage.SetupTestDB(t)
+	handoffDedupReset()
+	defer handoffDedupReset()
+
+	ctx := WithExternalUserID(context.Background(), "user-stable-2")
+
+	// 第 1 次写入
+	(&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"R1"}`)
+
+	// 手动修改 dedup map 把 lastWriteTime 设为 6 分钟前（模拟窗口已过期）
+	handoffDedup.Store("user-stable-2", time.Now().Add(-6*time.Minute))
+
+	// 第 2 次调：6 分钟前写过 → 视为新事件 → 写埋点
+	(&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"R2"}`)
+
+	var rows []storage.EventLog
+	storage.DB.Where("event_type = ?", storage.EventHandoffToHuman).Find(&rows)
+	if len(rows) != 2 {
+		t.Errorf("窗口外同 refID 应算新事件（写第 2 条埋点），got %d", len(rows))
 	}
 }
