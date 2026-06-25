@@ -26,6 +26,31 @@
 
 ---
 
+## ❌ AI 视频禁词清单（v4.13 实测踩坑）
+
+**2024-2025 所有 AI 视频工具（Sora / Runway Gen-3 / 即梦 / 可灵 / 通义万相）都搞不定"准确渲染文字"。**
+会出来形似的字但**都是错字 / 乱码**——投资人看到反而扣分（"这也太糙了"）。
+
+**prompt 里**绝对不能出现**：
+- ❌ `phone screen showing text` / `text messages visible`
+- ❌ `Chinese characters` / `text in Chinese` / `text on screen`
+- ❌ `sign saying "X"` / `logo reads "X"` / `notification says "X"`
+- ❌ `book with readable text` / `receipt with text`
+- ❌ `whiteboard with writing`
+
+**替代写法**：
+- ✅ `phone screen INTENTIONALLY BLURRED with abstract colorful notification dots`
+- ✅ `abstract floating notification icons (red dots, exclamation marks)`
+- ✅ `phone facing camera but content not visible`
+- ✅ `back of phone visible, no text`
+
+**后期补字**（剪映里）：
+- 想要"已为 3 位顾客自动预约" → AI 视频里画手机但**屏幕模糊**，剪映叠文字层
+- 想要"微信对话" → AI 视频里画**抽象气泡剪影**（无字），剪映叠真实微信截图 / 文字
+- 想要"价格表 / 服务菜单" → AI 视频里画**色块 + 数字占位**，剪映叠真表
+
+---
+
 ## 5 段镜头
 
 ### 场景 1 — 老板焦虑（0:00-0:07）
@@ -35,20 +60,27 @@
 
 **画面描述**：
 - 角色：中国中年男性（40-50 岁），穿围裙，店里
-- 道具：手里拿着手机，屏幕上塞满微信消息气泡（10+ 条）
+- 道具：手里拿着手机，**屏幕朝镜头但内容模糊**，周围漂浮抽象红色感叹号 / 圆点（暗示消息多）
 - 表情：揉太阳穴，疲惫、皱眉
 - 环境：背景是镜台 / 理发椅（虚化）
 
 **AI Prompt**（英文，直接粘贴）：
 ```
 A tired Chinese male hair salon owner in his 40s wearing a work apron, 
-looking at his phone overwhelmed by WeChat chat message bubbles stacking up, 
-rubbing his temple with a stressed expression, 
+looking down at his phone in his hands with a stressed expression, 
+rubbing his temple with his other hand, 
+phone screen facing camera but INTENTIONALLY BLURRED showing only 
+abstract colorful notification dots (no readable text), 
+abstract floating red exclamation marks and notification icons hovering nearby, 
 modern flat illustration style, soft cinematic lighting, 
 warm orange and olive green palette, shallow depth of field, 
 Chinese hair salon interior background softly blurred, 
 16:9 composition, subject centered-left
 ```
+
+**剪映叠字**（在视频左上角）：
+- 文本："📱 14 条未读消息"
+- 动画：打字机 + 0.3s 停留 + 淡出
 
 ---
 
@@ -59,19 +91,24 @@ Chinese hair salon interior background softly blurred,
 
 **画面描述**：
 - 同角色
-- 道具：面前本子上写满字、撕碎的小纸条堆在桌角、收银机、笔筒
+- 道具：面前本子上**只有色块和形状**（无字）、撕碎的小纸条堆在桌角、收银机、笔筒
 - 动作：边写边看手机、叹口气
-- 环境：收银台后面，挂钟显示 18:00（晚上）
+- 环境：收银台后面，挂钟显示 18:00（晚上，**数字清晰**，钟表数字 AI 普遍画得对）
 
 **AI Prompt**：
 ```
-A Chinese male hair salon owner in his 40s writing appointment notes 
-in a messy paper notebook, surrounded by torn paper slips and a small 
-calculator, glancing at his phone with a sigh, the wall clock shows 6 PM, 
+A Chinese male hair salon owner in his 40s writing abstract shapes 
+and color blocks in a messy paper notebook (no readable text in the notebook), 
+surrounded by torn paper slips and a small calculator, 
+glancing at his phone with a sigh, the wall clock shows 6 PM, 
 warm interior lighting, 
 modern flat illustration style, soft cinematic lighting, 
 warm orange and olive green palette, 16:9 composition
 ```
+
+**剪映叠字**（视频中下叠加「时间流逝」字幕）：
+- "每天 2 小时 × 365 天 = 730 小时"（数字 + 黄色）
+- 字体：思源黑体 Bold / 字号 56pt / 阴影
 
 ---
 
@@ -82,7 +119,7 @@ warm orange and olive green palette, 16:9 composition
 
 **画面描述**：
 - 同角色，**穿围裙但表情轻松**
-- 道具：手里端着咖啡杯，**旁边悬浮一个发光的对话界面**（半透明，显示顾客消息 + AI 自动回复）
+- 道具：手里端着咖啡杯，**旁边悬浮一个发光的半透明 UI 面板**（只有色块和勾选标记，无字）
 - 表情：微笑、放松、眼神看屏幕
 - 环境：吧台角落，柔和光
 
@@ -90,11 +127,16 @@ warm orange and olive green palette, 16:9 composition
 ```
 A Chinese male hair salon owner in his 40s, now wearing apron but with a 
 calm and proud smile, holding a coffee cup, beside him a glowing semi-transparent 
-chat interface showing customer messages and AI auto-replies, soft warm lighting, 
+chat interface panel with abstract color blocks and checkmark icons 
+(no readable text), soft warm lighting, 
 modern flat illustration style, soft cinematic lighting, 
-warm orange and olive green palette with subtle blue glow from the AI screen, 
+warm orange and olive green palette with subtle blue glow from the panel, 
 16:9 composition, peaceful atmosphere
 ```
+
+**剪映叠字**（视频上方淡入对话气泡）：
+- 顾客消息："明天下午 3 点能约吗？" → 老板消息：自动接住 ✓
+- 用「对话气泡」贴纸 / 模板，黄色描边
 
 ---
 
@@ -122,20 +164,27 @@ warm orange and olive green palette with subtle blue glow from the AI screen,
 
 **画面描述**：
 - 同角色，靠在吧台边
-- 道具：手机屏幕显示推送 "**已为 3 位顾客自动预约**"
+- 道具：手机**屏幕朝向镜头但内容模糊**，只能看到一个**绿色勾选图标**和**彩色小色块**（暗示成功通知）
 - 表情：欣慰、满足、点个头
 - 环境：店里轻松氛围，背景镜子里能看见空的理发椅
 
 **AI Prompt**：
 ```
 A Chinese male hair salon owner leaning casually at his counter, 
-looking at his phone showing a WeChat notification "已为 3 位顾客自动预约", 
-a satisfied and proud smile, mirror behind him reflects empty barber chairs, 
+looking at his phone with a satisfied and proud smile, 
+phone screen facing camera INTENTIONALLY BLURRED showing only a large 
+green checkmark icon and abstract color blocks (no readable text), 
+mirror behind him reflects empty barber chairs, 
 relaxed end-of-day atmosphere, 
 modern flat illustration style, soft cinematic lighting, 
 warm orange and olive green palette, golden hour lighting, 
 16:9 composition
 ```
+
+**剪映叠字**（手机屏幕位置上方淡入）：
+- "✓ 已为 3 位顾客自动预约"
+- 字体：思源黑体 Medium / 字号 42pt / 白色 + 绿色对勾
+- 动画：缩放弹入 0.5s
 
 ---
 
