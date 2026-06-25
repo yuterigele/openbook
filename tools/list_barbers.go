@@ -92,8 +92,12 @@ func formatBarbers(ctx context.Context, bs []storage.Barber) string {
 // barberLeaveTag 返回某理发师在「今天」窗口内的请假提示文案
 //
 //   - 无请假：返回空字符串
-//   - 当前正在请假：返回「今日 HH:MM-HH:MM 请假（原因：xxx）」
-//   - 即将请假（start_at 在未来）：返回「今日 HH:MM 起请假（原因：xxx）」
+//   - 当前正在请假：返回「今日 HH:MM-HH:MM 请假」
+//   - 即将请假（start_at 在未来）：返回「今日 HH:MM 起请假」
+//
+// v4.13.0 隐私保护：之前这里把 l.Reason（内部原因，可能含"痔疮手术"等敏感字眼）
+// 直接拼到输出，LLM 拿走后可能在回复时复述给顾客。改为只返"请假"区间，不带原因。
+// 真实原因商户在 admin 后台自己看，顾客端只看到一致的"请假了"。
 //
 // 实现说明：
 //   - 用 ListBarberLeavesInRange(barberID, dayStart, dayEnd) 拿到今天相交的 active leave
@@ -107,14 +111,11 @@ func barberLeaveTag(ctx context.Context, barberID string, now, dayStart, dayEnd 
 	l := leaves[0]
 	startHM := l.StartAt.In(loc).Format("15:04")
 	endHM := l.EndAt.In(loc).Format("15:04")
-	reason := strings.TrimSpace(l.Reason)
-	reasonSuffix := ""
-	if reason != "" {
-		reasonSuffix = "（原因：" + reason + "）"
-	}
+	// v4.13.0：不暴露 l.Reason；l 的 start/end 已经够用
+	_ = l
 	// 已开始（含 now）-> 显示完整区间；未开始 -> 显示"HH:MM 起"
 	if !now.Before(l.StartAt) {
-		return fmt.Sprintf("今日 %s-%s 请假%s", startHM, endHM, reasonSuffix)
+		return fmt.Sprintf("今日 %s-%s 请假", startHM, endHM)
 	}
-	return fmt.Sprintf("今日 %s 起请假%s", startHM, reasonSuffix)
+	return fmt.Sprintf("今日 %s 起请假", startHM)
 }

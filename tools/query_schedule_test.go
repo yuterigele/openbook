@@ -74,7 +74,7 @@ func TestQuerySchedule_PartialLeave_SlotsFilteredAndLeaveNoteShown(t *testing.T)
 		leaveStart, leaveEnd, storage.LeaveActionCancel)
 	storage.DB.Model(&storage.BarberLeave{}).
 		Where("barber_id = ?", "barber-Tony").
-		Update("reason", "私事")
+		Update("reason", "陪老婆产检")  // v4.13.0 隐私测试
 
 	out, err := runQuerySchedule(t, shop.ID, "Tony", dateStr)
 	if err != nil {
@@ -91,9 +91,10 @@ func TestQuerySchedule_PartialLeave_SlotsFilteredAndLeaveNoteShown(t *testing.T)
 	if !strings.Contains(out, "14:00") || !strings.Contains(out, "16:00") {
 		t.Errorf("leave note should include 14:00 and 16:00, got %q", out)
 	}
-	if !strings.Contains(out, "私事") {
-		t.Errorf("leave note should include reason, got %q", out)
+	if strings.Contains(out, "产检") || strings.Contains(out, "老婆") {
+		t.Errorf("v4.13.0 隐私：leave note 不应泄漏内部 reason, got %q", out)
 	}
+	_ = "" // marker
 	// "师傅请假占用" 段必须在"可预约时段"段之后
 	if idxList := strings.Index(out, "可预约时段"); idxList >= 0 {
 		if idxLeave := strings.Index(out, "师傅请假占用"); idxLeave >= 0 && idxLeave < idxList {
@@ -137,8 +138,9 @@ func TestQuerySchedule_FullDayLeave_FallbackShowsLeaveNote(t *testing.T) {
 	if !strings.Contains(out, "师傅请假占用") {
 		t.Errorf("full-day-leave output should have '师傅请假占用' section, got %q", out)
 	}
-	if !strings.Contains(out, "体检") {
-		t.Errorf("leave note should include reason '体检', got %q", out)
+	// v4.13.0 隐私：敏感 reason 绝不能出现在输出
+	if strings.Contains(out, "体检") {
+		t.Errorf("v4.13.0 隐私: leave note 不应泄漏内部 reason '体检', got %q", out)
 	}
 }
 

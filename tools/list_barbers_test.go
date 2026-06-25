@@ -86,9 +86,10 @@ func TestListBarbers_OngoingLeave_ShowsFullRange(t *testing.T) {
 	now := time.Now().In(loc)
 	leave := storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
 		now.Add(-30*time.Minute), now.Add(30*time.Minute), storage.LeaveActionCancel)
+	// v4.13.0 隐私：填敏感 reason 验证不泄漏
 	storage.DB.Model(&storage.BarberLeave{}).
 		Where("id = ?", leave.ID).
-		Update("reason", "体检")
+		Update("reason", "陪老婆产检")
 
 	out, err := runListBarbers(t, shop.ID)
 	if err != nil {
@@ -100,8 +101,9 @@ func TestListBarbers_OngoingLeave_ShowsFullRange(t *testing.T) {
 	if !strings.Contains(out, "请假") {
 		t.Errorf("output should mention '请假', got %q", out)
 	}
-	if !strings.Contains(out, "体检") {
-		t.Errorf("output should include reason '体检', got %q", out)
+	// v4.13.0 隐私：敏感 reason 字眼绝不能出现在输出
+	if strings.Contains(out, "产检") || strings.Contains(out, "老婆") {
+		t.Errorf("output should NOT leak internal reason, got %q", out)
 	}
 	// 区间显示：now 之前 30min HH:MM → now 之后 30min HH:MM
 	if !strings.Contains(out, "-") {
@@ -133,11 +135,12 @@ func TestListBarbers_UpcomingLeave_ShowsStartOnly(t *testing.T) {
 	if !strings.Contains(out, "起请假") {
 		t.Errorf("upcoming leave should say '起请假', got %q", out)
 	}
-	if !strings.Contains(out, "私事") {
-		t.Errorf("output should include reason '私事', got %q", out)
+	// v4.13.0 隐私：敏感 reason 字眼绝不能出现在输出
+	if strings.Contains(out, "私事") {
+		t.Errorf("v4.13.0 隐私: output should NOT leak internal reason '私事', got %q", out)
 	}
-	if strings.Contains(out, "起请假（原因：私事）-") {
-		t.Errorf("upcoming leave should NOT show '-HH:MM' end, got %q", out)
+	if strings.Contains(out, "起请假（") {
+		t.Errorf("output should NOT have '（原因）' suffix, got %q", out)
 	}
 }
 

@@ -118,18 +118,16 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 	}
 
 	// 请假占用段（v3.6 新增，PRD §11.7.10）
+	// v4.13.0 隐私保护：移除 lb.Reason（内部原因可能含敏感字眼），只返"HH:MM-HH:MM" 区间
+	//   之前会把"痔疮手术"等敏感字眼拼到输出，LLM 拿到后会复述给顾客
 	if len(breakdown.LeaveBlocks) > 0 {
 		result += "\n师傅请假占用："
 		parts := make([]string, 0, len(breakdown.LeaveBlocks))
 		for _, lb := range breakdown.LeaveBlocks {
-			if lb.Reason != "" {
-				parts = append(parts, fmt.Sprintf("%s-%s（%s）", lb.StartHM, lb.EndHM, lb.Reason))
-			} else {
-				parts = append(parts, fmt.Sprintf("%s-%s", lb.StartHM, lb.EndHM))
-			}
+			parts = append(parts, fmt.Sprintf("%s-%s", lb.StartHM, lb.EndHM))
 		}
 		result += strings.Join(parts, "、")
-		result += "\n（这些时段是师傅临时请假，建议换时间或换其他理发师）"
+		result += "\n（这些时段是师傅临时有事，建议换时间或换其他理发师）"
 	}
 
 	// 已约满提示（不展开明细，避免长尾刷屏）

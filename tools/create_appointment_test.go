@@ -129,7 +129,7 @@ func TestCreateAppointment_LeaveCovering_Rejected(t *testing.T) {
 	// Tony 在 [apptAt-1h, apptAt+1h] 请假（覆盖该时段）
 	leave := storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
 		apptAt.Add(-1*time.Hour), apptAt.Add(1*time.Hour), storage.LeaveActionCancel)
-	// 改一下 reason 让测试断言更明确
+	// v4.13.0 隐私保护：填一个敏感 reason，验证 LLM 拿不到
 	storage.DB.Model(&storage.BarberLeave{}).
 		Where("id = ?", leave.ID).
 		Update("reason", "感冒发烧")
@@ -138,14 +138,15 @@ func TestCreateAppointment_LeaveCovering_Rejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when barber on leave, got out=%q", out)
 	}
-	if !strings.Contains(err.Error(), "请假") {
-		t.Errorf("error should mention '请假', got %q", err.Error())
+	if !strings.Contains(err.Error(), "临时有事") {
+		t.Errorf("error should use neutral '临时有事' phrase, got %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "Tony") {
 		t.Errorf("error should mention barber name, got %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "感冒发烧") {
-		t.Errorf("error should include leave reason '感冒发烧', got %q", err.Error())
+	// v4.13.0 隐私：reason 字眼绝不能出现在错误消息里
+	if strings.Contains(err.Error(), "感冒") || strings.Contains(err.Error(), "发烧") {
+		t.Errorf("error should NOT leak internal leave reason, got %q", err.Error())
 	}
 	if strings.Contains(out, "预约创建成功") {
 		t.Errorf("output should NOT say success, got %q", out)

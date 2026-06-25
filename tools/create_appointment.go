@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -218,16 +217,14 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		fmt.Printf("[create_appointment] IsBarberOnLeaveAt query failed: %v\n", err)
 	}
 	if onLeave && leave != nil {
-		reason := strings.TrimSpace(leave.Reason)
-		if reason == "" {
-			reason = "临时有事"
-		}
+		// v4.13.0 隐私保护：永远显示"临时有事"，不暴露 leave.Reason 内部原因
+		//   之前会把"痔疮手术""陪老婆产检"等敏感字眼直接拼到错误消息里
+		//   LLM 拿到后会复述给顾客 → 改 hardcode "临时有事"
 		return "", fmt.Errorf(
-			"%s 师傅在 %s 至 %s 请假了（%s），要不要换 Kevin 师傅或换个时间？",
+			"%s 师傅在 %s 至 %s 临时有事，要不要换 Kevin 师傅或换个时间？",
 			params.BarberName,
 			leave.StartAt.In(loc).Format("01-02 15:04"),
 			leave.EndAt.In(loc).Format("01-02 15:04"),
-			reason,
 		)
 	}
 
