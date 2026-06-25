@@ -277,6 +277,19 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 			}()
 		}
 
+		// v4.13.1：kf_seen_msg TTL 清理（每天 3:00 删 7 天前的去重记录）
+		// 不依赖 wecom 客户端，独立启动
+		kfSeenCleaner := cronpkg.NewKfSeenMsgCleaner()
+		if err := kfSeenCleaner.Start(ctx); err != nil {
+			log.Printf("⚠️  启动 kf_seen_msg cleanup cron 失败: %v", err)
+		} else {
+			defer func() {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = kfSeenCleaner.Stop(stopCtx)
+			}()
+		}
+
 		// 周报触发器（PRD §8.2 / §11.12 v4.3 + v4.5 跨店增量 — 每周一 9:00）
 		//   - 复用同一份 SMTP 配（与 D+15 共用 sender）
 		//   - 收件人两路独立：
@@ -320,6 +333,11 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		WeComConfig:     wecomConfig,
 		WeComRouter:     wecomRouter,
 	})
+
+	// v4.13.1：AGENT_REPLY_MODE 环境变量控制 sendReply 是否打真实企业微信
+	//   - 真实发送（默认）：AGENT_REPLY_MODE 不设 或 =real
+	//   - 跳过企业微信：   AGENT_REPLY_MODE=mock（demo 兜底 / 调试用，写 event_logs）
+	server.SetReplyMode(os.Getenv("AGENT_REPLY_MODE"))
 
 	// 注册商户后台 + API 路由（PRD §11.2）
 	api.RegisterRoutes(srv.EnsureHertz(), api.AdminConfig{

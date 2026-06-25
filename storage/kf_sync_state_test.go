@@ -15,6 +15,7 @@ package storage
 //   go test ./storage/... -v -run "TestKf"
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -189,7 +190,7 @@ func TestKf_CleanupStaleEntries(t *testing.T) {
 	DB.Create(&KfSeenMsg{MsgID: "msg-boundary", SeenAt: boundary})
 
 	// 跑清理
-	deleted, err := CleanupKfSeenMsgs()
+	deleted, err := CleanupKfSeenMsgs(context.Background())
 	if err != nil {
 		t.Fatalf("CleanupKfSeenMsgs: %v", err)
 	}

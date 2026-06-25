@@ -22,6 +22,8 @@ import (
 	"log"
 	"strings"
 	"testing"
+
+	"github.com/yuterigele/openbook/storage"
 )
 
 // fakeReplySender 记录所有调用 + 可配置返回值
@@ -179,5 +181,125 @@ func TestSendReply_NoDeadFallback_No81013OnKfFailure(t *testing.T) {
 	if sender.textCalls > 0 {
 		t.Fatalf("死路复活！KF 失败时不应 fallback，但 textCalls=%d（这条路径下 81013 必然出现，会掩盖真因 95001）",
 			sender.textCalls)
+	}
+}
+
+// ===================== 6) AGENT_REPLY_MODE=mock 模式（v4.13.1 demo 兜底） =====================
+//
+// 验证 mock 模式下：
+//   - 不调真实 sender（kfCalls / textCalls 都是 0）
+//   - 写 event_logs（demo_reply 类型）
+//   - 永远返回 nil（假装成功，让上游不报错）
+
+func TestSendReply_MockMode_DoesNotCallRealSender(t *testing.T) {
+	// 切换到 mock 模式（测试结束恢复）
+	SetReplyMode("mock")
+	defer SetReplyMode("real") // 还原默认，避免污染其他测试
+
+	storage.SetupTestDB(t)
+
+	sender := &fakeReplySender{}
+	buf, restore := captureLog(t)
+	defer restore()
+
+	// mock 模式下：KF 路径应跳过真实 sender
+	sendReply(context.Background(), sender, "ext-mock-1", "kf-mock", "demo reply content", "shop-mock")
+
+	// 关键：real sender 一次都没被调
+	if sender.kfCalls != 0 {
+		t.Errorf("mock 模式不应调 SendKfTextMessage，got kfCalls=%d", sender.kfCalls)
+	}
+	if sender.textCalls != 0 {
+		t.Errorf("mock 模式不应调 SendTextMessage，got textCalls=%d", sender.textCalls)
+	}
+	// log 应含 demo-reply 标记
+	if !strings.Contains(buf.String(), "[demo-reply]") {
+		t.Errorf("mock 模式 log 应含 [demo-reply] 标记，got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "demo reply content") {
+		t.Errorf("mock 模式 log 应包含 reply 内容，got %q", buf.String())
+	}
+}
+
+func TestSendReply_MockMode_WritesEventLog(t *testing.T) {
+	SetReplyMode("mock")
+	defer SetReplyMode("real")
+
+	storage.SetupTestDB(t)
+
+	sender := &fakeReplySender{}
+	sendReply(context.Background(), sender, "ext-elog", "kf-elog", "reply for event log test", "shop-elog")
+
+	// 查 event_logs 验证
+	var rows []storage.EventLog
+	if err := storage.DB.Where("event_type = ?", storage.EventDemoReply).Find(&rows).Error; err != nil {
+		t.Fatalf("查 event_logs: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("event_logs 应有 1 条 demo_reply，got %d", len(rows))
+	}
+	if rows[0].ShopID != "shop-elog" {
+		t.Errorf("ShopID 不对：%q", rows[0].ShopID)
+	}
+}
+
+func TestSendReply_MockMode_RealModeAfterRestore(t *testing.T) {
+	// 防回归：测试 SetReplyMode 后是否正确恢复 real 模式
+	SetReplyMode("mock")
+	SetReplyMode("real") // 立即恢复
+
+	storage.SetupTestDB(t)
+	sender := &fakeReplySender{}
+
+	sendReply(context.Background(), sender, "ext", "kf", "real mode reply", "shop")
+
+	if sender.kfCalls != 1 {
+		t.Errorf("real 模式应调 SendKfTextMessage，got kfCalls=%d", sender.kfCalls)
+	}
+}
+
+func TestSendReply_MockMode_OpenKfIDEmptyAlsoMocked(t *testing.T) {
+	// mock 模式下，无论 openKfID 是否非空，都走 mock 路径
+	SetReplyMode("mock")
+	defer SetReplyMode("real")
+
+	storage.SetupTestDB(t)
+	sender := &fakeReplySender{}
+
+	// openKfID 空（admin API 路径）也应被 mock
+	sendReply(context.Background(), sender, "internal-user", "", "admin path mock reply", "shop")
+
+	if sender.textCalls != 0 {
+		t.Errorf("mock 模式（openKfID 空）也不应调 SendTextMessage，got textCalls=%d", sender.textCalls)
+	}
+}
+
+func TestSetReplyMode_DefaultReal(t *testing.T) {
+	// 重置 replyMode 到 "real" 然后验证 IsMockReplyMode 返回 false
+	SetReplyMode("real")
+	if IsMockReplyMode() {
+		t.Error("SetReplyMode(real) 后 IsMockReplyMode 应返回 false")
+	}
+}
+
+func TestSetReplyMode_MockActivates(t *testing.T) {
+	SetReplyMode("mock")
+	defer SetReplyMode("real")
+
+	if !IsMockReplyMode() {
+		t.Error("SetReplyMode(mock) 后 IsMockReplyMode 应返回 true")
+	}
+}
+
+func TestSetReplyMode_UnknownValueFallsBackToReal(t *testing.T) {
+	// 任何拼写错误 / 未知值都不应触发 mock（生产安全）
+	SetReplyMode("MOCK")     // 大小写错
+	SetReplyMode("mocky")    // 拼写错
+	SetReplyMode("")         // 空
+	SetReplyMode("anything") // 任意
+	defer SetReplyMode("real")
+
+	if IsMockReplyMode() {
+		t.Error("未知值不应触发 mock 模式（生产安全）")
 	}
 }

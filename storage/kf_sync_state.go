@@ -15,6 +15,7 @@ package storage
 //   - 启动后从 DB 恢复，进程重启不再丢状态
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -110,12 +111,14 @@ func MarkKfMsgSeen(msgID string) error {
 //
 // 返回删除条数。生产环境由 cron 定时调用（避免表无限增长）。
 // 测试环境可手动调。
-func CleanupKfSeenMsgs() (int64, error) {
+//
+// ctx 用于未来扩展（带 ctx 的 delete），目前只是透传，调用方可以传 context.Background()。
+func CleanupKfSeenMsgs(ctx context.Context) (int64, error) {
 	if DB == nil {
 		return 0, errors.New("storage.DB not initialized")
 	}
 	cutoff := time.Now().Add(-kfSeenTTL)
-	res := DB.Where("seen_at < ?", cutoff).Delete(&KfSeenMsg{})
+	res := DB.WithContext(ctx).Where("seen_at < ?", cutoff).Delete(&KfSeenMsg{})
 	if res.Error != nil {
 		return 0, res.Error
 	}

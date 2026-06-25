@@ -1314,7 +1314,19 @@ type replySender interface {
 // openKfID 空（非 KF 来源，从 admin API 进来的请求，FromUserName 可能是内部 userid）：
 //   - 走 SendTextMessage（应用消息接口）
 //   - 这是合理路径，不动
+//
+// AGENT_REPLY_MODE=mock（v4.13.1 demo 兜底）：
+//   - 跳过真实发送，调 logDemoReply 写 event_logs + log
+//   - 用途：企业未认证 / 接待人员接管时，agent 推理 + DB 写入仍然全跑通，
+//     demo 屏幕能展示完整业务流，不被企业微信配额限制
+//   - 默认 real（生产安全）
 func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, reply, shopID string) {
+	// mock 模式：跳过真实发送，写 event_logs + log
+	if IsMockReplyMode() {
+		logDemoReply(ctx, shopID, fromUser, openKfID, reply)
+		return
+	}
+
 	if openKfID != "" {
 		if err := sender.SendKfTextMessage(ctx, fromUser, openKfID, reply); err != nil {
 			// ⚠️ 顾客没收到回复——必须明显，商户好排查（95001 未认证 / 95018 真人接管 等）

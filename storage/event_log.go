@@ -49,6 +49,12 @@ const (
 	//   - 配套 handoff_to_human: 一个 handoff 可以被"已处理"多次（不强制 1:1），
 	//     前端 UI 把 resolved event 关联回原 handoff，按"已解决"过滤。
 	EventHandoffResolved = "handoff_resolved"
+	// EventDemoReply v4.13.1 demo 兜底：mock 模式下"回复"不真正发企业微信，写 event_logs
+	//   - AGENT_REPLY_MODE=mock 时启用
+	//   - ref_id = "" (无 appointment 关联)
+	//   - meta.to_user / meta.open_kfid / meta.reply 携带完整内容
+	//   - 商户后台事件流能直接看到 demo 期间的"回复历史"
+	EventDemoReply = "demo_reply"
 )
 
 // TrackEvent 写入一条埋点（no-op 当 DB 未初始化）
