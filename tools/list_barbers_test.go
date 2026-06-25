@@ -120,9 +120,11 @@ func TestListBarbers_UpcomingLeave_ShowsStartOnly(t *testing.T) {
 
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Now().In(loc)
-	// 2h 后开始 → 4h 后结束（now 落在 [start, end] 之前 → "起"）
+	// v4.13.5 fix：之前用 +2h/+4h，22:00 后跑测试会跨日（leave.start 落到明天），
+	// 工具合理地不显示（leave 不在 [今天 00:00, 明天 00:00) 窗口内），测试 fail。
+	// 改成 +30min/+1h 保证 23:30 之前跑都不跨日。
 	leave := storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
-		now.Add(2*time.Hour), now.Add(4*time.Hour), storage.LeaveActionCancel)
+		now.Add(30*time.Minute), now.Add(1*time.Hour), storage.LeaveActionCancel)
 	_ = leave
 	storage.DB.Model(&storage.BarberLeave{}).
 		Where("barber_id = ?", "barber-Tony").
@@ -203,9 +205,9 @@ func TestListBarbers_OtherBarberLeave_OnlyAffectsThatBarber(t *testing.T) {
 
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Now().In(loc)
-	// 只给 Kevin 请假
+	// 只给 Kevin 请假（v4.13.5 fix: +2h/+4h → +30min/+1h 防 22:00 后跑测试跨日）
 	storage.MakeBarberLeave(t, shop.ID, "barber-Kevin",
-		now.Add(2*time.Hour), now.Add(4*time.Hour), storage.LeaveActionCancel)
+		now.Add(30*time.Minute), now.Add(1*time.Hour), storage.LeaveActionCancel)
 
 	out, err := runListBarbers(t, shop.ID)
 	if err != nil {
