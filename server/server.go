@@ -1627,10 +1627,20 @@ func filterKfMsgsByWindow(msgList []wecom.KfMsgItem, now time.Time) (kept []weco
 //  3. "首次拉取跳过历史"逻辑改为按 send_time 过滤 48h（之前"前 N-1 条"会跳过用户刚发的消息）
 //  4. 单条消息 try-catch 隔离——一条炸了不影响其他
 //
+// v4.13.2 修复：同 session 的多条消息**同步串行处理**（之前 v4.13.1 加的 go func() 让 4 个
+// goroutine 并发处理同一 session 的 4 条消息，导致：
+//   - 4 个 agent 看到同一份 history snapshot（length=N），各自 prompt 只包含「N 条历史 + 自己这条」
+//   - agent 不知道其他 3 条同时存在的消息
+//   - 4 次推理给出语义雷同但措辞不同的 4 条回复
+//   - 4 次 sendReply 都执行 → 顾客看到 4 条混乱 spam
+// 同步串行后：msg1 处理完（session 状态从 N → N+2）才处理 msg2，agent 每次都看到完整有序 history。
+// 注意：handleKfCallback 本身已经在 goroutine 里跑（line 1122），所以同步处理不会阻塞 HTTP 回调。
+//
 // 修复动机（用户生产日志）：
 //   - 18:40 处理一条 msgid=Ajqv...
 //   - 19:02 进程重启 + cursor 丢失 + 重新"首次拉取" → 又拉到同一条 msgid → 重复处理
 //   - 用户连发 3 条，第 2 条被"前 N-1 条跳过"逻辑静默丢弃，第 3 条触发"多条回复 spam"
+//   - v4.13.2 补充：去重修了之后，4 条消息 4 个 goroutine 并发 → 4 条混乱回复
 func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher, callback *wecom.MessageXML, shopID string) {
 	openKfID := callback.OpenKfId
 	log.Printf("[kf] 收到客服事件: shop=%s token=%s openKfId=%s", shopID, callback.Token, openKfID)
@@ -1698,8 +1708,13 @@ func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher
 			MsgType:      "text",
 			Content:      kfMsg.Text.Content,
 		}
-		// v4.13.1：每条消息独立 try-catch 隔离——一条 panic 不影响其他
-		go func() {
+		// v4.13.2：同步串行处理——同 session 的多条消息必须按顺序处理，
+		//   否则 4 个并发 goroutine 互踩 session（GetMessages snapshot + Append 互相覆盖），
+		//   agent 看到的对话历史会混乱，4 次推理都基于残缺 history → 4 条混乱回复。
+		//   try-catch 隔离保留（一条 panic 不影响后续），但不再用 go func()。
+		//   handleKfCallback 本身已经在 goroutine 里跑（line 1122），
+		//   所以这里同步处理 N 条消息不会阻塞 HTTP 回调响应。
+		func() {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[kf] ⚠️ 处理消息 panic: msgid=%s err=%v", kfMsg.Msgid, r)

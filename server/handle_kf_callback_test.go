@@ -2,12 +2,14 @@ package server
 
 // handle_kf_callback_test.go
 //
-// 覆盖 v4.13.1 handleKfCallback 修复 + filterKfMsgsByWindow helper：
+// 覆盖 v4.13.1 + v4.13.2 handleKfCallback 修复 + filterKfMsgsByWindow helper：
 //  1. filterKfMsgsByWindow：纯函数，覆盖 origin/msgtype/窗口三条过滤规则
 //  2. handleKfCallback：cursor 持久化（重启不丢）+ 首次拉取按窗口过滤 + msgid 去重
+//  3. handleKfCallback：同 session 多条消息串行处理（v4.13.2 修 4 个 goroutine 互踩 session）
 //
 // 重点：用 fakeFetcher mock syncMsgFetcher interface，避免真打 HTTP。
-// handleWeComMessageWithOpenKfID 内部跑 goroutine，要等它跑完才能断言。
+// v4.13.2 改：handleWeComMessageWithOpenKfID 不再 go func()（同步串行），
+// waitForCalls 在同步模式下第一次轮询就过，但保留轮询逻辑以防后续改回异步。
 //
 // Run:
 //   go test ./server/... -v -run "TestFilterKf|TestHandleKfCallback"
@@ -93,7 +95,9 @@ func (f *fakeFetcher) SendTextMessage(_ context.Context, _, _ string) error {
 	return f.textErr
 }
 
-// waitForCalls 等异步 goroutine 跑完——handleKfCallback 里 handleWeComMessage 是 go func()
+// waitForCalls 等 kfCalls 计数达到 expected。
+// v4.13.2 起 handleKfCallback 内部同步串行处理（不再 go func()），
+// 但仍然保留轮询逻辑——主要是为了在同步情况下第一次轮询就过的情况下不破坏现有测试。
 func waitForCalls(t *testing.T, fetcher *fakeFetcher, expected int32, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -366,6 +370,57 @@ func TestHandleKfCallback_PanicIsolation(t *testing.T) {
 	c, _ := storage.GetKfCursor("wk-panic")
 	if c != "c-panic" {
 		t.Errorf("cursor 应在主流程写回（即使后续 panic），got %q", c)
+	}
+}
+
+// TestHandleKfCallback_SerialProcessing_SameSession v4.13.2 关键回归测试
+//
+// 场景：用户连发 3 条消息到同一 session，handleKfCallback 拉取后应按顺序处理：
+//   - msg1 处理完（agent 推理 + sendReply + session append）才处理 msg2
+//   - msg2 处理时 session 已包含 msg1 + agent 回复，agent 看到的是「正确累积」的历史
+//   - 3 次 sendReply 调用按顺序
+//
+// 修复前（v4.13.1）：3 个 goroutine 并发处理 → 3 个都看到同一份 history snapshot，
+// 3 次 sendReply 内容混乱。这是用户生产日志「4 条消息 4 个混乱回复」的根因。
+func TestHandleKfCallback_SerialProcessing_SameSession(t *testing.T) {
+	storage.SetupTestDB(t)
+
+	now := time.Now()
+	// 同一 external_userid，3 条文本消息，模拟「雷浩啊」「是滴」「明天上午吧」
+	msgList := []wecom.KfMsgItem{
+		mkTestMsg("msg-serial-1", "ext-serial-user", now.Unix()),
+		mkTestMsg("msg-serial-2", "ext-serial-user", now.Unix()),
+		mkTestMsg("msg-serial-3", "ext-serial-user", now.Unix()),
+	}
+	fetcher := &fakeFetcher{
+		results: []*wecom.SyncKfMsgResult{
+			{NextCursor: "c-serial", HasMore: 0, MsgList: msgList},
+		},
+	}
+
+	srv := newTestSrvWithAgent(t)
+	callback := &wecom.MessageXML{OpenKfId: "wk-serial", Token: "tok"}
+
+	srv.handleKfCallback(context.Background(), fetcher, callback, "shop-1")
+
+	// 关键断言 1：3 条消息都处理了，sendReply 调用 3 次
+	waitForCalls(t, fetcher, 3, 3*time.Second)
+	if got := atomic.LoadInt32(&fetcher.kfCalls); got != 3 {
+		t.Errorf("同 session 3 条消息应触发 3 次 SendKfTextMessage，got %d", got)
+	}
+
+	// 关键断言 2：3 条 msgid 都标 seen（防止下次 sync_msg 重复处理）
+	for _, msgid := range []string{"msg-serial-1", "msg-serial-2", "msg-serial-3"} {
+		seen, _ := storage.IsKfMsgSeen(msgid)
+		if !seen {
+			t.Errorf("msgid %s 应标 seen，但未标", msgid)
+		}
+	}
+
+	// 关键断言 3：cursor 已持久化
+	c, _ := storage.GetKfCursor("wk-serial")
+	if c != "c-serial" {
+		t.Errorf("cursor 应持久化到 DB，got %q", c)
 	}
 }
 
