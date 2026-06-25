@@ -1304,12 +1304,36 @@ type replySender interface {
 	SendTextMessage(ctx context.Context, userID, content string) error
 }
 
+// sendKfRateMu 控制 KF 发送速率（防 95001 send msg count limit）
+//
+// v4.13.2 加：用户连发 N 条消息 → agent N 次推理 → N 次 sendReply
+// 30 秒内连发 N 条触发企微"客服消息发送频率限制"（5 条/秒）。
+// 修复方案：全局串行 + 200ms 间隔 + 限流时退避重试。
+// 全局串行也保护跨 session 的并发发送（多次回调触发多个 handleKfCallback goroutine）。
+var sendKfRateMu sync.Mutex
+
+// isKfRateLimited 检测错误是否为 KF 限流（95001 send msg count limit）
+//
+// 区分两种 95001：
+//   - "95001 send msg count limit" — 限流，应重试
+//   - "95001 no valid kf account" / "95001 kf account not exist" — 未认证/无接待人员，**不**重试
+// 错误格式来自 wecom/client.go SendKfTextMessage（err 包含 errcode + errmsg）。
+func isKfRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "95001") && strings.Contains(s, "count limit")
+}
+
 // sendReply 发送 Agent 回复到顾客。
 //
 // openKfID 非空（KF 来源，FromUserName 是 external_userid）：
 //   - 走 SendKfTextMessage（KF 接口）
 //   - 失败不再 fallback 到 SendTextMessage（external user 走应用消息接口必报 81013 死路）
-//   - 失败时打 ⚠️ 日志，让错误明显，商户/开发者能看到真因（95001/95018/95002 等）
+//   - v4.13.2：限流错误（95001 send msg count limit）退避重试 3 次
+//   - v4.13.2：全局串行 + 200ms 间隔，防 30 秒内 N 条回复触发限流
+//   - 其他错误（如 95001 未认证 / 95018 真人接管）不重试，打 ⚠️ 日志让商户能排查
 //
 // openKfID 空（非 KF 来源，从 admin API 进来的请求，FromUserName 可能是内部 userid）：
 //   - 走 SendTextMessage（应用消息接口）
@@ -1328,13 +1352,39 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 	}
 
 	if openKfID != "" {
-		if err := sender.SendKfTextMessage(ctx, fromUser, openKfID, reply); err != nil {
-			// ⚠️ 顾客没收到回复——必须明显，商户好排查（95001 未认证 / 95018 真人接管 等）
-			log.Printf("[wecom] ⚠️ 客服消息发送失败（顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
-				fromUser, openKfID, shopID, err)
-			return
+		sendKfRateMu.Lock()
+		defer sendKfRateMu.Unlock()
+
+		// v4.13.2：全局串行 + 200ms 间隔（5 条/秒限流 → 200ms 安全）
+		// 注意：间隔是给整个 KF 发送路径用的，包括非当前 session 的并发 sendReply
+		time.Sleep(200 * time.Millisecond)
+
+		// v4.13.2：限流时退避重试 3 次（500ms / 1s / 1.5s）
+		// 非限流错误立即返回，不重试（避免无意义消耗 token / 错把未认证当成限流）
+		var lastErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			err := sender.SendKfTextMessage(ctx, fromUser, openKfID, reply)
+			if err == nil {
+				log.Printf("[wecom] 客服回复成功: to=%s openKfID=%s shop=%s (attempt=%d)",
+					fromUser, openKfID, shopID, attempt)
+				return
+			}
+			lastErr = err
+			if !isKfRateLimited(err) {
+				// 非限流错误（95001 未认证 / 95018 真人接管 / 95002 48h 超时 等）：不重试
+				log.Printf("[wecom] ⚠️ 客服消息发送失败（顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
+					fromUser, openKfID, shopID, err)
+				return
+			}
+			// 限流：递增退避
+			backoff := time.Duration(attempt) * 500 * time.Millisecond
+			log.Printf("[wecom] ⏳ KF 限流（attempt=%d/3），%v 后重试: to=%s err=%v",
+				attempt, backoff, fromUser, err)
+			time.Sleep(backoff)
 		}
-		log.Printf("[wecom] 客服回复成功: to=%s openKfID=%s shop=%s", fromUser, openKfID, shopID)
+		// 重试 3 次仍限流
+		log.Printf("[wecom] ⚠️ 客服消息发送失败（限流重试 3 次仍失败，顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
+			fromUser, openKfID, shopID, lastErr)
 		return
 	}
 	// 非 KF 来源（admin API 路径，line 1247），走应用消息接口

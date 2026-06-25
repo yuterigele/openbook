@@ -22,6 +22,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuterigele/openbook/storage"
 )
@@ -95,9 +96,12 @@ func TestSendReply_KfSuccess(t *testing.T) {
 // ===================== 2) KF 失败：⚠️ 警告 + 不调 SendTextMessage（关键约束） =====================
 
 func TestSendReply_KfFailure_NoFallback(t *testing.T) {
-	// 模拟真实生产日志里的 95001 错误
+	// 模拟真实生产日志里的 95001 错误（**非限流**——未认证场景）
+	// v4.13.2：限流（95001 send msg count limit）会重试 3 次，
+	// 但其他 95001（如 no valid kf account）不重试。
+	// 这里用 "95001 no valid kf account" 模拟**非限流**失败路径。
 	sender := &fakeReplySender{
-		kfErr:   errors.New("发送客服消息失败: 95001 send msg count limit"),
+		kfErr:   errors.New("发送客服消息失败: 95001 no valid kf account"),
 		textErr: nil, // 即使 text 不会成功，也配置成 nil，验证根本不会被调
 	}
 	buf, restore := captureLog(t)
@@ -109,8 +113,9 @@ func TestSendReply_KfFailure_NoFallback(t *testing.T) {
 	if sender.textCalls != 0 {
 		t.Errorf("KF 失败不应调 SendTextMessage（这是死路），calls = %d", sender.textCalls)
 	}
+	// 非限流错误：只调 1 次（不重试）
 	if sender.kfCalls != 1 {
-		t.Errorf("SendKfTextMessage 应只调一次, got %d", sender.kfCalls)
+		t.Errorf("非限流错误应只调 1 次（不重试），got %d", sender.kfCalls)
 	}
 	if !strings.Contains(buf.String(), "⚠️") {
 		t.Errorf("失败应打 ⚠️ 警告，got %q", buf.String())
@@ -301,5 +306,139 @@ func TestSetReplyMode_UnknownValueFallsBackToReal(t *testing.T) {
 
 	if IsMockReplyMode() {
 		t.Error("未知值不应触发 mock 模式（生产安全）")
+	}
+}
+
+// ===================== v4.13.2 限流重试 + 间隔（防 95001 send msg count limit） =====================
+
+// flakyReplySender 模拟"第 N 次调用前都返回限流错误，第 N 次后才成功"
+// 用于验证 sendReply 在限流时退避重试，第 N 次成功后不再重试。
+type flakyReplySender struct {
+	failTimes int        // 前 N 次返回 rateLimitErr
+	calls     int        // 总调用次数（线程不安全——sendReply 已用 sendKfRateMu 全局串行 KF 发送，所以无 race）
+	rateLimit error
+}
+
+func (f *flakyReplySender) SendKfTextMessage(_ context.Context, _, _, _ string) error {
+	f.calls++
+	if f.calls <= f.failTimes {
+		return f.rateLimit
+	}
+	return nil
+}
+
+func (f *flakyReplySender) SendTextMessage(_ context.Context, _, _ string) error {
+	return nil
+}
+
+// TestSendReply_RateLimit_RetrySuccess 限流：第 1 次失败，第 2 次成功 → 不应再重试
+func TestSendReply_RateLimit_RetrySuccess(t *testing.T) {
+	sender := &flakyReplySender{
+		failTimes: 1,
+		rateLimit: errors.New("发送客服消息失败: 95001 send msg count limit"),
+	}
+	_, restore := captureLog(t)
+	defer restore()
+
+	sendReply(context.Background(), sender, "ext-rate-1", "kf-rate-1", "hi", "shop-rate")
+
+	// 预期：第 1 次限流失败 → 退避重试 → 第 2 次成功 → 退出
+	if sender.calls != 2 {
+		t.Errorf("限流时第 2 次应成功，预期调用 2 次，got %d", sender.calls)
+	}
+}
+
+// TestSendReply_RateLimit_Retry3TimesAllFail 限流：3 次全失败 → kfCalls=3 + log 含"重试 3 次"
+func TestSendReply_RateLimit_Retry3TimesAllFail(t *testing.T) {
+	sender := &flakyReplySender{
+		failTimes: 99, // 永远限流
+		rateLimit: errors.New("发送客服消息失败: 95001 send msg count limit"),
+	}
+	buf, restore := captureLog(t)
+	defer restore()
+
+	sendReply(context.Background(), sender, "ext-rate-fail", "kf-rate-fail", "hi", "shop-rate-fail")
+
+	// 预期：3 次全失败
+	if sender.calls != 3 {
+		t.Errorf("限流 3 次后应停止，预期 3 次调用，got %d", sender.calls)
+	}
+	if !strings.Contains(buf.String(), "限流重试 3 次仍失败") {
+		t.Errorf("log 应含 '限流重试 3 次仍失败'，got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "⚠️") {
+		t.Errorf("最终失败应打 ⚠️ 警告，got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "95001") {
+		t.Errorf("log 应保留 errcode 95001 便于排查，got %q", buf.String())
+	}
+}
+
+// TestSendReply_NonRateLimitError_NoRetry 非限流错误不重试（避免错把未认证当限流）
+func TestSendReply_NonRateLimitError_NoRetry(t *testing.T) {
+	// 95001 no valid kf account——这是未认证/无接待人员，**不是**限流
+	sender := &flakyReplySender{
+		failTimes: 99, // 即使配成 99 次都失败
+		rateLimit: errors.New("发送客服消息失败: 95001 no valid kf account"),
+	}
+	_, restore := captureLog(t)
+	defer restore()
+
+	sendReply(context.Background(), sender, "ext-noauth", "kf-noauth", "hi", "shop-noauth")
+
+	// 非限流错误：只调 1 次（不重试）
+	if sender.calls != 1 {
+		t.Errorf("非限流错误不应重试，预期 1 次调用，got %d", sender.calls)
+	}
+}
+
+// TestSendReply_RateLimit_Interval 验证 sendReply 之间有间隔（防触发限流）
+//
+// v4.13.2 加：200ms 间隔在 KF 发送路径，3 次连续 sendReply 应 ≥ 600ms。
+// 但这测试**耗时**——3 次 * (200ms 间隔 + 假设 mock 立即返回) = ~600ms
+// 我们用 500ms 作为下限（留点调度余量），用 3 秒作为上限（防止 sleep 写错变成分钟级）
+func TestSendReply_RateLimit_Interval(t *testing.T) {
+	sender := &fakeReplySender{kfErr: nil} // 立即成功（不会被退避 sleep 影响断言）
+
+	_, restore := captureLog(t)
+	defer restore()
+
+	start := time.Now()
+	sendReply(context.Background(), sender, "u1", "kf-1", "hi", "shop-1")
+	sendReply(context.Background(), sender, "u2", "kf-2", "hi", "shop-2")
+	sendReply(context.Background(), sender, "u3", "kf-3", "hi", "shop-3")
+	elapsed := time.Since(start)
+
+	// 3 次 sendReply 串行：每次 200ms 间隔，期望 ≥ 600ms（3*200）
+	// 实际可能因调度略有偏差，500ms 是安全下限
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("3 次 sendReply 间隔应 ≥ 500ms（实际应 ~600ms），got %v", elapsed)
+	}
+	// 上限：不能太离谱（防止 sleep 写错变成分钟级）
+	if elapsed > 3*time.Second {
+		t.Errorf("3 次 sendReply 间隔应 ≤ 3s，got %v（可能 sleep 写错了）", elapsed)
+	}
+}
+
+// TestIsKfRateLimited 单元测试 isKfRateLimited 的判断逻辑
+func TestIsKfRateLimited(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"限流 95001 count limit", errors.New("发送客服消息失败: 95001 send msg count limit"), true},
+		{"未认证 95001 no valid kf", errors.New("发送客服消息失败: 95001 no valid kf account"), false},
+		{"95018 真人接管", errors.New("发送客服消息失败: 95018 kf session is closed"), false},
+		{"95002 48h 超时", errors.New("发送客服消息失败: 95002 expire"), false},
+		{"网络错误", errors.New("connection reset"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKfRateLimited(tc.err); got != tc.want {
+				t.Errorf("isKfRateLimited(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
