@@ -1283,22 +1283,50 @@ func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client *
 	log.Printf("[wecom] Agent回复: %s", reply)
 
 	// 发送回复消息
+	// v4.13.1：去掉 SendKfTextMessage 失败后 fallback 到 SendTextMessage 的死路
+	//   原代码：KF 接口失败 → fallback 应用消息接口 → 应用消息不能发给 external user，
+	//   必然 81013 user & party & tag all invalid，等于把真因掩盖了
+	//   真因可能是 95001（企业未认证 / 接待人员接管）/ 95018（session 状态无效）/
+	//   95002（48h 超时）等——必须让错误冒泡到日志，商户才好排查
+	sendReply(ctx, client, msg.FromUserName, openKfID, reply, shopID)
+}
+
+// replySender 抽象 wecom.Client 的发送方法，便于单测 mock
+//
+// v4.13.1 抽出来：让 sendReply 可单测，覆盖"KF 失败不再 fallback"这条新约束。
+// *wecom.Client 自动满足该接口（duck typing）。
+type replySender interface {
+	SendKfTextMessage(ctx context.Context, externalUserID, openKfID, content string) error
+	SendTextMessage(ctx context.Context, userID, content string) error
+}
+
+// sendReply 发送 Agent 回复到顾客。
+//
+// openKfID 非空（KF 来源，FromUserName 是 external_userid）：
+//   - 走 SendKfTextMessage（KF 接口）
+//   - 失败不再 fallback 到 SendTextMessage（external user 走应用消息接口必报 81013 死路）
+//   - 失败时打 ⚠️ 日志，让错误明显，商户/开发者能看到真因（95001/95018/95002 等）
+//
+// openKfID 空（非 KF 来源，从 admin API 进来的请求，FromUserName 可能是内部 userid）：
+//   - 走 SendTextMessage（应用消息接口）
+//   - 这是合理路径，不动
+func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, reply, shopID string) {
 	if openKfID != "" {
-		if err := client.SendKfTextMessage(ctx, msg.FromUserName, openKfID, reply); err != nil {
-			log.Printf("[wecom] 客服消息发送失败: %v, 尝试普通消息", err)
-			if err2 := client.SendTextMessage(ctx, msg.FromUserName, reply); err2 != nil {
-				log.Printf("[wecom] 普通消息也失败: %v", err2)
-			}
-		} else {
-			log.Printf("[wecom] 客服回复成功: to=%s openKfID=%s shop=%s", msg.FromUserName, openKfID, shopID)
+		if err := sender.SendKfTextMessage(ctx, fromUser, openKfID, reply); err != nil {
+			// ⚠️ 顾客没收到回复——必须明显，商户好排查（95001 未认证 / 95018 真人接管 等）
+			log.Printf("[wecom] ⚠️ 客服消息发送失败（顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
+				fromUser, openKfID, shopID, err)
+			return
 		}
-	} else {
-		if err := client.SendTextMessage(ctx, msg.FromUserName, reply); err != nil {
-			log.Printf("[wecom] 发送消息失败: %v", err)
-		} else {
-			log.Printf("[wecom] 发送回复成功: to=%s shop=%s", msg.FromUserName, shopID)
-		}
+		log.Printf("[wecom] 客服回复成功: to=%s openKfID=%s shop=%s", fromUser, openKfID, shopID)
+		return
 	}
+	// 非 KF 来源（admin API 路径，line 1247），走应用消息接口
+	if err := sender.SendTextMessage(ctx, fromUser, reply); err != nil {
+		log.Printf("[wecom] 发送消息失败: %v", err)
+		return
+	}
+	log.Printf("[wecom] 发送回复成功: to=%s shop=%s", fromUser, shopID)
 }
 
 // buildTodayContext 返回动态日期上下文（用作 Agent Run 的第一条 user message，
