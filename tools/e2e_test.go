@@ -44,8 +44,10 @@ func TestE2E_S1_FirstAppointment(t *testing.T) {
 		t.Fatalf("list_barbers 失败: %v / %s", err, barbersOut)
 	}
 
-	// 2) 顾客选 Tony，查今天 14:00 时段 → 调 query_schedule
-	date := time.Now().In(shanghaiLoc()).Format("2006-01-02")
+	// 2) 顾客选 Tony，查明天 14:00 时段 → 调 query_schedule
+	//   v4.13.4 fix：之前用 today + 14:00（硬编码），晚上 21:48 跑测试时
+	//   "今天 14:00" 已经是过去时间，create_appointment 拒收。改成明天规避。
+	date := time.Now().In(shanghaiLoc()).AddDate(0, 0, 1).Format("2006-01-02")
 	schedOut, err := (&QueryScheduleTool{}).InvokableRun(
 		WithShopID(context.Background(), shop.ID),
 		`{"barber_name":"Tony","date":"`+date+`"}`)
@@ -161,8 +163,11 @@ func TestE2E_S3_LeaveBlocksAppointment(t *testing.T) {
 	if err == nil {
 		t.Fatal("请假时段应被拒")
 	}
-	if !strings.Contains(err.Error(), "请假") {
-		t.Errorf("应提到请假: %v", err)
+	if !strings.Contains(err.Error(), "临时有事") {
+		// v4.13.0 隐私修复：create_appointment 不再暴露 leave 内部原因（如"痔疮手术"），
+		// 改成 hardcode "临时有事"（line 220-228 create_appointment.go）。
+		// e2e 期望词要从旧版"请假"同步到新版"临时有事"。
+		t.Errorf("应提到临时有事（v4.13.0 隐私修复后不暴露 leave 原因）: %v", err)
 	}
 	if !strings.Contains(err.Error(), "Kevin") {
 		t.Errorf("应建议换 Kevin 师傅: %v", err)
