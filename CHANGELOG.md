@@ -7,6 +7,101 @@
 
 ---
 
+## [v4.13.0] - 2026-06-25
+
+v4.10.1 把 `/subscription` 锁给 `platform_admin` 但 handler 内部仍用 `shopFromClaims` —— 实际上
+platform_admin 只能"管自己的 shop_id"（无意义）。v4.13.0 给 platform_admin 补齐真正的跨店管理能力：
+列全平台店铺、改任意店铺套餐、看 audit log。前端新增「平台超管」nav 分区（仅 platform_admin 可见）。
+
+投资人 demo 主操作屏：登录 platform_admin → 平台总览 / 店铺管理 / 套餐审计三屏流程。
+
+### Added
+
+- **后端 5 个 endpoint**（`api/admin_platform.go`）—— 全部 `RequireRole(RolePlatformAdmin)`
+  - `GET  /api/admin/platform/stats` —— 平台 KPI（总店数 / 会员数 / 累计预约 / 月度收入估 / 7 天到期 / 冻结 / 套餐分布）
+  - `GET  /api/admin/platform/shops` —— 全平台店铺列表（含 plan / 到期 / days_left / frozen / 成员数 / 累计预约 / 近 30 天活跃）
+  - `GET  /api/admin/platform/shops/:id` —— 单店详情 + 订阅历史 + 成员列表
+  - `PUT  /api/admin/platform/shops/:id/plan` —— 给某店开/改套餐（months 1-60，写 subscription + shop.plan + 取消旧 sub + 清 plan_active cache）
+  - `GET  /api/admin/platform/audit?limit=100` —— 套餐变更审计日志（`event_type=plan_changed_by_admin`）
+- **新 perm** `manage:platform` —— 只给 platform_admin，owner/staff 显式不列 → nav-item 自动隐藏 + 后端 403 双层防御
+- **前端 Platform Admin 区**（`static/admin.html`）：
+  - 新 nav 分区「平台超管」+ 3 个 nav-item（平台总览 / 店铺管理 / 套餐审计）
+  - 平台总览：5 个 KPI 卡 + 套餐分布表（店铺数 / 月费 / 月小计 / 占比条）
+  - 店铺管理：搜索 + plan / 状态过滤 + 表格 + 改套餐 modal + 详情 modal
+  - 改套餐 modal：选 plan / 续费月数 / 备注，备注写入 audit log
+  - 套餐审计：表格显示时间 / 店铺 / 原 plan / 新 plan / 月数 / 到期 / 操作人 / 备注 + 搜索
+- **Audit log**：每次改套餐写 `event_logs`（event_type=plan_changed_by_admin），含 old/new plan、months、expires_at、admin_id、admin_username、note
+- **测试** `api/admin_platform_test.go` —— 10 个用例覆盖 owner/staff 403、stats、shops list、shop detail、set plan（成功 + 400 各种 + 404）、audit 流
+
+### Changed
+
+- `storage/permissions.go`: 新增 `PermManagePlatform = "manage:platform"`，加入 `AllPermissions`，owner / staff 矩阵显式不列
+- `static/admin.html`: 加 4 个 view 渲染函数 + 2 个 modal + nav-section-divider 样式 + 数据状态字段
+- `api/api.go`: 注册 5 个新 platform 路由
+
+### Fixed
+
+- **platform_admin 改不了别店套餐**（v4.13.0 功能性 fix）—— 之前 `renewSubscriptionHandler` 用 `shopFromClaims`，platform_admin 实际只能改"自己 shop_id"（无意义）。Fix：走 `/api/admin/platform/shops/:id/plan`，从 path 参数拿 shop_id，platform_admin 真正能管全平台。
+
+### Security
+
+- 跨店改套餐严格 `RequireRole(RolePlatformAdmin)`，**单店 owner / staff 一律 403**（测试覆盖）
+- 审计日志不可篡改：写到 `event_logs` 表，包含操作人 username + note（事后追责）
+- 改套餐后立即 `auth.InvalidatePlanActiveCache(shopID)` —— 下次请求立刻看到新 plan，5 分钟缓存窗口缩短到 0
+
+### 部署注意
+
+**部署步骤**（v4.13.0 第一次部署）：
+
+```bash
+# 1) build + 部署后端
+pwsh scripts/build-linux.ps1
+scp -O chatwitheino-linux root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/
+# 2) 部署前端（带新 nav + 新 view + 新 modal）
+scp -O static/admin.html root@server:/home/www/wwwroot/agent.yuyuanyuan.cn/static/
+# 3) 重启
+ssh root@server "systemctl restart chatwitheino"
+# 4) 浏览器强刷
+```
+
+**DB 变化**：**无 schema 变化**（沿用 `subscriptions` / `shops` / `event_logs` / `admins` / `appointments` / `role_permissions` 表）。`role_permissions` 自动加新 perm `manage:platform`（platform_admin 通过 AllPermissions 拿到，owner / staff 不加）。
+
+**验证**：
+
+```bash
+# platform_admin 拿得到 stats（200）
+curl -H "Authorization: Bearer <platform_admin_token>" https://agent.yuyuanyuan.cn/api/admin/platform/stats
+
+# 单店 owner 拿不到（403）
+curl -H "Authorization: Bearer <owner_token>" https://agent.yuyuanyuan.cn/api/admin/platform/stats
+# → {"error":"role 不允许（需 platform_admin）"}
+
+# 验证新 perm 写进 role_permissions
+ssh root@server "mysql chatwitheino -e 'SELECT * FROM role_permissions WHERE permission = \"manage:platform\"'"
+# 期望：1 条（role=platform_admin）
+```
+
+### 投资人 Demo 路径（5 分钟流程）
+
+1. **登录 platform_admin 账号** → 看到「平台超管」nav 分区（店主账号看不到）
+2. **平台总览**：5 个 KPI + 套餐分布表（按 plan × 店铺数 × 月小计）
+3. **店铺管理**：
+   - 选一家 basic 店 → 点「改套餐」→ 选 flagship + 12 个月 + 备注"demo 升级" → 确认
+   - 表格实时刷新：plan / 到期 / days_left 全部更新
+4. **套餐审计**：
+   - 看到刚改的那条记录（操作人 / 原 plan / 新 plan / 月数 / 到期 / 备注）
+5. **回到「店铺管理」点「详情」** → 看订阅历史（之前 basic + 刚改的 flagship）+ 成员列表
+
+### 留 v4.13.1 / v4.14
+
+- 微信支付 + 续费 webhook（v4.13.1，platform_admin 仍可手动改套餐覆盖自动续费）
+- 跨店事件漏斗 dashboard（v4.13.1+）
+- 多 scope API key（v4.13.x）
+- 分店 owner 自动建（v4.14）
+- JS 测试基建（v4.14）
+
+---
+
 ## [v4.12.1] - 2026-06-24
 
 v4.12 plan 体系只列了 feature 没用 gate，v4.12.1 让 feature 真用起来：
