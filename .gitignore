@@ -36,6 +36,11 @@ data/**/*.jsonl
 coverage.html
 coverage.txt
 
+# Node / vitest (v4.13.0 JS 测试基建)
+node_modules/
+package-lock.json
+web/coverage/
+
 # Local scratch
 /tmp/
 
