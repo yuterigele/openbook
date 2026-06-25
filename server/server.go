@@ -1686,11 +1686,17 @@ func filterKfMsgsByWindow(msgList []wecom.KfMsgItem, now time.Time) (kept []weco
 // 同步串行后：msg1 处理完（session 状态从 N → N+2）才处理 msg2，agent 每次都看到完整有序 history。
 // 注意：handleKfCallback 本身已经在 goroutine 里跑（line 1122），所以同步处理不会阻塞 HTTP 回调。
 //
+// v4.13.3 修复：**debounce 合并**——同 session 的多条消息累积到 1.5 秒 / 5 条阈值才触发
+// 1 次 agent 推理 + 1 条 sendReply。修复"用户发 N 条 → agent 回 N 条"的啰嗦问题，
+// 同时也彻底消解 v4.13.2 的 95001 限流风险（11 条消息只发 1 条）。
+// 详见 server/kf_debounce.go。
+//
 // 修复动机（用户生产日志）：
 //   - 18:40 处理一条 msgid=Ajqv...
 //   - 19:02 进程重启 + cursor 丢失 + 重新"首次拉取" → 又拉到同一条 msgid → 重复处理
 //   - 用户连发 3 条，第 2 条被"前 N-1 条跳过"逻辑静默丢弃，第 3 条触发"多条回复 spam"
 //   - v4.13.2 补充：去重修了之后，4 条消息 4 个 goroutine 并发 → 4 条混乱回复
+//   - v4.13.3 补充：4 条消息 4 次串行推理 → 4 条不混乱但啰嗦的回复 + 95001 限流
 func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher, callback *wecom.MessageXML, shopID string) {
 	openKfID := callback.OpenKfId
 	log.Printf("[kf] 收到客服事件: shop=%s token=%s openKfId=%s", shopID, callback.Token, openKfID)
@@ -1752,30 +1758,45 @@ func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher
 		log.Printf("[kf] 处理: user=%s msg=%s msgid=%s",
 			kfMsg.ExternalUserid, kfMsg.Text.Content, kfMsg.Msgid)
 
-		msg := &wecom.MessageXML{
-			FromUserName: kfMsg.ExternalUserid,
-			OpenKfId:     kfMsg.OpenKfid,
-			MsgType:      "text",
-			Content:      kfMsg.Text.Content,
-		}
-		// v4.13.2：同步串行处理——同 session 的多条消息必须按顺序处理，
-		//   否则 4 个并发 goroutine 互踩 session（GetMessages snapshot + Append 互相覆盖），
-		//   agent 看到的对话历史会混乱，4 次推理都基于残缺 history → 4 条混乱回复。
-		//   try-catch 隔离保留（一条 panic 不影响后续），但不再用 go func()。
-		//   handleKfCallback 本身已经在 goroutine 里跑（line 1122），
-		//   所以这里同步处理 N 条消息不会阻塞 HTTP 回调响应。
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[kf] ⚠️ 处理消息 panic: msgid=%s err=%v", kfMsg.Msgid, r)
+		// v4.13.3：把消息塞进 per-session debounce 队列，1.5 秒内无新消息 →
+		// 合并 N 条消息成 1 次 agent 推理 + 1 条回复。详见 server/kf_debounce.go。
+		//
+		// 不再用 v4.13.2 的"for-loop 同步串行"——那能让 4 条消息不混乱，但
+		// 还是会触发 4 次 agent 推理 + 4 条回复，触发限流（v4.13.2 已修）和
+		// 用户感知的"agent 太啰嗦"问题。
+		//
+		// 关键：seen 标的是"已经收到"（同步），debounce 的是"何时处理"（异步）。
+		// 哪怕 debounce 期间服务挂了，下次 sync_msg 也会用 cursor + seen 跳过这些消息。
+		sessionID := "wecom_" + shopID + "_" + kfMsg.ExternalUserid
+		kfDebounceEnqueue(sessionID, &kfMsg, func(merged []*wecom.KfMsgItem) {
+			// 合并 N 条消息成 1 个 user message（用换行分隔，LLM 能识别"用户连发"）
+			var combined string
+			for i, m := range merged {
+				if i > 0 {
+					combined += "\n"
 				}
+				combined += m.Text.Content
+			}
+			msg := &wecom.MessageXML{
+				FromUserName: merged[0].ExternalUserid,
+				OpenKfId:     merged[0].OpenKfid,
+				MsgType:      "text",
+				Content:      combined,
+			}
+			// try-catch 隔离：一条消息 panic 不影响整个 batch
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[kf] ⚠️ debounce batch 处理 panic: count=%d err=%v", len(merged), r)
+					}
+				}()
+				s.handleWeComMessageWithOpenKfID(ctx, fetcher, msg, merged[0].OpenKfid, shopID)
 			}()
-			s.handleWeComMessageWithOpenKfID(ctx, fetcher, msg, kfMsg.OpenKfid, shopID)
-		}()
+		})
 		processed++
 	}
 
-	log.Printf("[kf] 完成: 总%d条 文本%d条 处理%d条", len(result.MsgList), len(textMsgs), processed)
+	log.Printf("[kf] 完成: 总%d条 文本%d条 入队%d条（debounce 中）", len(result.MsgList), len(textMsgs), processed)
 }
 
 // handleAddExternalContact 处理外部联系人添加事件（add_external_contact）

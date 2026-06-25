@@ -373,54 +373,58 @@ func TestHandleKfCallback_PanicIsolation(t *testing.T) {
 	}
 }
 
-// TestHandleKfCallback_SerialProcessing_SameSession v4.13.2 关键回归测试
+// TestHandleKfCallback_DebounceMerge_SameSession v4.13.3 关键回归测试
 //
-// 场景：用户连发 3 条消息到同一 session，handleKfCallback 拉取后应按顺序处理：
-//   - msg1 处理完（agent 推理 + sendReply + session append）才处理 msg2
-//   - msg2 处理时 session 已包含 msg1 + agent 回复，agent 看到的是「正确累积」的历史
-//   - 3 次 sendReply 调用按顺序
+// 场景：用户连发 3 条消息到同一 session，handleKfCallback 拉取后**合并**成 1 次处理：
+//   - 3 条消息累积到 debounce 队列
+//   - 1.5 秒后（或满 5 条）触发：合并成 1 个 user message（"\n" 分隔）→ 1 次 agent 推理
+//   - 只调 1 次 sendReply（不是 3 次）
 //
 // 修复前（v4.13.1）：3 个 goroutine 并发处理 → 3 个都看到同一份 history snapshot，
-// 3 次 sendReply 内容混乱。这是用户生产日志「4 条消息 4 个混乱回复」的根因。
-func TestHandleKfCallback_SerialProcessing_SameSession(t *testing.T) {
+// 3 次 sendReply 内容混乱。v4.13.2 改为串行后：3 次 sendReply 不混乱但啰嗦 + 触发 95001 限流。
+// v4.13.3 debounce 后：1 次 sendReply 简洁 + 不触发限流。
+func TestHandleKfCallback_DebounceMerge_SameSession(t *testing.T) {
 	storage.SetupTestDB(t)
+	kfDebounceReset() // 防测试间状态污染
+	defer kfDebounceReset()
 
 	now := time.Now()
-	// 同一 external_userid，3 条文本消息，模拟「雷浩啊」「是滴」「明天上午吧」
+	// 同一 external_userid，3 条文本消息
 	msgList := []wecom.KfMsgItem{
-		mkTestMsg("msg-serial-1", "ext-serial-user", now.Unix()),
-		mkTestMsg("msg-serial-2", "ext-serial-user", now.Unix()),
-		mkTestMsg("msg-serial-3", "ext-serial-user", now.Unix()),
+		mkTestMsg("msg-debounce-1", "ext-debounce-user", now.Unix()),
+		mkTestMsg("msg-debounce-2", "ext-debounce-user", now.Unix()),
+		mkTestMsg("msg-debounce-3", "ext-debounce-user", now.Unix()),
 	}
 	fetcher := &fakeFetcher{
 		results: []*wecom.SyncKfMsgResult{
-			{NextCursor: "c-serial", HasMore: 0, MsgList: msgList},
+			{NextCursor: "c-debounce", HasMore: 0, MsgList: msgList},
 		},
 	}
 
 	srv := newTestSrvWithAgent(t)
-	callback := &wecom.MessageXML{OpenKfId: "wk-serial", Token: "tok"}
+	callback := &wecom.MessageXML{OpenKfId: "wk-debounce", Token: "tok"}
 
 	srv.handleKfCallback(context.Background(), fetcher, callback, "shop-1")
 
-	// 关键断言 1：3 条消息都处理了，sendReply 调用 3 次
-	waitForCalls(t, fetcher, 3, 3*time.Second)
-	if got := atomic.LoadInt32(&fetcher.kfCalls); got != 3 {
-		t.Errorf("同 session 3 条消息应触发 3 次 SendKfTextMessage，got %d", got)
-	}
-
-	// 关键断言 2：3 条 msgid 都标 seen（防止下次 sync_msg 重复处理）
-	for _, msgid := range []string{"msg-serial-1", "msg-serial-2", "msg-serial-3"} {
+	// 关键断言 1：3 条 msgid 都标 seen（同步、立即；防下次 sync_msg 重复处理）
+	for _, msgid := range []string{"msg-debounce-1", "msg-debounce-2", "msg-debounce-3"} {
 		seen, _ := storage.IsKfMsgSeen(msgid)
 		if !seen {
-			t.Errorf("msgid %s 应标 seen，但未标", msgid)
+			t.Errorf("msgid %s 应立即标 seen（debounce 之前），但未标", msgid)
 		}
 	}
 
-	// 关键断言 3：cursor 已持久化
-	c, _ := storage.GetKfCursor("wk-serial")
-	if c != "c-serial" {
+	// 关键断言 2：cursor 已持久化（与 debounce 解耦）
+	c, _ := storage.GetKfCursor("wk-debounce")
+	if c != "c-debounce" {
 		t.Errorf("cursor 应持久化到 DB，got %q", c)
+	}
+
+	// 关键断言 3：等 1.5s debounce + 一些 agent 推理时间，3 条消息合并成 1 次 sendReply
+	// （不是 v4.13.2 的 3 次）
+	waitForCalls(t, fetcher, 1, 5*time.Second)
+	if got := atomic.LoadInt32(&fetcher.kfCalls); got != 1 {
+		t.Errorf("同 session 3 条消息 debounce 后应只调 1 次 SendKfTextMessage（合并），got %d（说明没合并）", got)
 	}
 }
 
