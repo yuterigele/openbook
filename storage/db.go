@@ -83,6 +83,8 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&RolePermission{}, // v4.7 RBAC：role → permission 映射表
 		&CustomerNotification{}, // v4.10 leave notify 持久化（2026-06-23）
 		&APIKey{},               // v4.12.1 api_access feature 实战
+		&KfSyncState{},          // v4.13.1 微信客服 sync cursor 持久化
+		&KfSeenMsg{},            // v4.13.1 微信客服 msgid 去重持久化
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}

@@ -199,6 +199,30 @@ type ReminderLog struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// KfSyncState 微信客服消息同步状态（v4.13.1 修 cursor 重启丢失）
+//
+// 背景：v4.13.1 之前 cursor 存在进程内 kfMessageTracker，进程重启 cursor 清零 → 下次 sync_msg
+// 又把历史消息拉一遍，触发"首次拉取跳过历史"逻辑，用户消息被静默丢弃 / 重复处理。
+//
+// 现在 cursor 持久化到 DB（按 open_kf_id 维度，多客服账号隔离），进程重启后从 DB 恢复。
+type KfSyncState struct {
+	OpenKfID  string    `gorm:"primaryKey;size:64" json:"open_kf_id"`
+	Cursor    string    `gorm:"size:128" json:"cursor"`
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// KfSeenMsg 微信客服已处理消息 msgid 去重表（v4.13.1 修重启后重复处理）
+//
+// 背景：v4.13.1 之前 seenMsgIDs 在进程内 map[string]time.Time，进程重启 map 清零 → 重复
+// 处理同一条历史消息（agent 多条回复 spam）。
+//
+// 现在 msgid 持久化到 DB（主键 = msg_id），TTL 由 KfSeenMsgCleanup 清理 seen_at < now-7d 的行。
+type KfSeenMsg struct {
+	MsgID  string    `gorm:"primaryKey;size:64" json:"msg_id"`
+	SeenAt time.Time `gorm:"index" json:"seen_at"`
+}
+
 // EventLog 续费转化漏斗埋点（PRD §11.2）
 //
 // 关键节点（按 §8.2 续费动作链）：

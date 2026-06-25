@@ -64,6 +64,8 @@ func SetupTestDB(t *testing.T) {
 		&RolePermission{}, // v4.7 RBAC 权限表
 		&CustomerNotification{}, // v4.10 leave notify 持久化
 		&APIKey{},               // v4.12.1 api_access feature
+		&KfSyncState{},          // v4.13.1 微信客服 sync cursor
+		&KfSeenMsg{},            // v4.13.1 微信客服 msgid 去重
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

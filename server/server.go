@@ -85,9 +85,10 @@ type Config[M adk.MessageType] struct {
 type Server[M adk.MessageType] struct {
 	cfg        Config[M]
 	turnStates sync.Map // sessionID → *sessionTurnState
-	// 微信客服消息追踪器（cursor分页 + msgid去重）
-	kfTracker sync.Map // openKfID → *kfMessageTracker
-	h         *hserver.Hertz // 暴露给 main 注册额外路由（商户后台 / API）
+	// v4.13.1：kfTracker 删除 —— cursor / msgid 去重改用 storage 持久化（kf_sync_state + kf_seen_msg）
+	//   原 in-memory sync.Map 在进程重启时全部丢失 → 历史消息重复拉取 + 用户消息被跳过
+	//   见 handleKfCallback 和 storage/kf_sync_state.go
+	h *hserver.Hertz // 暴露给 main 注册额外路由（商户后台 / API）
 }
 
 // Hertz 返回内部 *hertz.Hertz 实例，供外部注册路由用（PRD §11.2 商户后台 + API）
@@ -1263,7 +1264,10 @@ func (s *Server[M]) handleWeComMessage(ctx context.Context, client *wecom.Client
 }
 
 // handleWeComMessageWithOpenKfID 处理企业微信消息，带openKfID + shopID（多店版）
-func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client *wecom.Client, msg *wecom.MessageXML, openKfID, shopID string) {
+//
+// v4.13.1：参数 client 改成 replySender interface（*wecom.Client 自动满足），便于 handleKfCallback
+// 把 syncMsgFetcher mock 同时当 replySender mock 传进来——单测只需要一个 mock 对象。
+func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client replySender, msg *wecom.MessageXML, openKfID, shopID string) {
 	sessionID := "wecom_" + shopID + "_" + msg.FromUserName // 加 shopID 防止多店用户串号
 	sess, err := s.cfg.Store.GetOrCreate(sessionID)
 	if err != nil {
@@ -1549,119 +1553,128 @@ func (s *Server[M]) drainAgentEvents(events *adk.AsyncIterator[*adk.TypedAgentEv
 
 // handleWeComMessageWithOpenKfID 旧版已迁移到带 shopID 版本（见上）
 
-// kfMessageTracker 追踪微信客服消息的状态（分页游标 + msgid去重缓存）
-type kfMessageTracker struct {
-	mu          sync.Mutex
-	cursor      string               // 上一次 sync_msg 返回的 next_cursor
-	seenMsgIDs  map[string]time.Time // 已处理的msgid → 处理时间，保留最近100条
-	lastCleanup time.Time
+// kfMessageTracker / getKfTracker / markSeen / updateCursor / getCursor 已删除（v4.13.1）
+//
+//   - cursor / msgid 去重改用 storage 持久化（kf_sync_state + kf_seen_msg 表）
+//   - 原 in-memory sync.Map 在进程重启时全部丢失 → 历史消息重复拉取 + 用户消息被跳过
+//   - 详见 storage/kf_sync_state.go 和下方 handleKfCallback
+
+// kfSyncWindow 同步窗口（秒）
+//
+// 决定"多久之前的消息会被处理"：
+//   - 太短 → 老的活跃用户消息被丢
+//   - 太长 → 历史积压 spam（重启后第一次拉取就触发一堆历史回复）
+// 48 小时匹配企业微信"客服消息 48 小时窗口"配额（95002 errcode 的来源）—— 一致。
+const kfSyncWindow = 48 * time.Hour
+
+// syncMsgFetcher 抽象 wecom.Client 的 SyncMsg 方法 + replySender（KF 处理消息链路需要发送）
+//
+// v4.13.1 抽出来：让 handleKfCallback 可单测（覆盖重启恢复、首次拉取逻辑、去重等）。
+// *wecom.Client 自动满足该接口（duck typing）。
+//
+// 嵌入 replySender 的原因：handleKfCallback 拉消息后调 handleWeComMessageWithOpenKfID → sendReply，
+// 发送链路（SendKfTextMessage）走同一个 client。测试时一个 mock 满足两个接口即可。
+type syncMsgFetcher interface {
+	SyncMsg(ctx context.Context, cursor, token string, limit int) (*wecom.SyncKfMsgResult, error)
+	replySender
 }
 
-// getKfTracker 获取或创建客服消息追踪器
-func (s *Server[M]) getKfTracker(openKfID string) *kfMessageTracker {
-	val, _ := s.kfTracker.LoadOrStore(openKfID, &kfMessageTracker{
-		seenMsgIDs: make(map[string]time.Time),
-	})
-	return val.(*kfMessageTracker)
-}
-
-// markSeen 标记消息已处理，返回false表示已存在（重复）
-func (t *kfMessageTracker) markSeen(msgID string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// 清理过期记录（1小时）
-	now := time.Now()
-	if now.Sub(t.lastCleanup) > 5*time.Minute {
-		for id, ts := range t.seenMsgIDs {
-			if now.Sub(ts) > time.Hour {
-				delete(t.seenMsgIDs, id)
-			}
+// filterKfMsgsByWindow 过滤出需要处理的客服消息（v4.13.1 替代"前 N-1 条"逻辑）
+//
+// 规则：
+//  1. origin=3（客户发的；origin 4/5 是客服/系统发的，我们不处理）
+//  2. msgtype=text
+//  3. text 非空
+//  4. send_time >= now - kfSyncWindow（48h 内）——防止 sync_msg 偶尔拉回更老的消息时还处理
+//
+// 返回过滤后的 KfMsgItem 切片（保持原顺序）+ 被过滤跳过的条数（用于日志）。
+//
+// 关键修复：原代码"cursor="" 时只取最后 1 条"会让用户刚发的非最后一条消息被静默丢弃。
+// 现在统一按窗口过滤，所有符合的都进后续去重 + 处理流程。
+func filterKfMsgsByWindow(msgList []wecom.KfMsgItem, now time.Time) (kept []wecom.KfMsgItem, skipped int) {
+	windowStart := now.Add(-kfSyncWindow).Unix()
+	for _, kfMsg := range msgList {
+		if kfMsg.Origin != 3 || kfMsg.MsgType != "text" || kfMsg.Text == nil {
+			skipped++
+			continue
 		}
-		t.lastCleanup = now
-	}
-
-	if _, exists := t.seenMsgIDs[msgID]; exists {
-		return false
-	}
-
-	// 保留最近100条
-	if len(t.seenMsgIDs) >= 100 {
-		var oldestID string
-		var oldestTime time.Time
-		for id, ts := range t.seenMsgIDs {
-			if oldestID == "" || ts.Before(oldestTime) {
-				oldestID = id
-				oldestTime = ts
-			}
+		if kfMsg.SendTime < windowStart {
+			skipped++
+			continue
 		}
-		delete(t.seenMsgIDs, oldestID)
+		kept = append(kept, kfMsg)
 	}
-
-	t.seenMsgIDs[msgID] = now
-	return true
-}
-
-// updateCursor 更新同步游标
-func (t *kfMessageTracker) updateCursor(newCursor string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.cursor = newCursor
-}
-
-// getCursor 获取当前游标
-func (t *kfMessageTracker) getCursor() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.cursor
+	return kept, skipped
 }
 
 // handleKfCallback 处理微信客服回调事件
-func (s *Server[M]) handleKfCallback(ctx context.Context, client *wecom.Client, callback *wecom.MessageXML, shopID string) {
+//
+// v4.13.1 修复：
+//  1. cursor 从 storage.DB 读（之前进程内 sync.Map，重启丢失）
+//  2. msgid 去重从 storage.DB 读（同样原因）
+//  3. "首次拉取跳过历史"逻辑改为按 send_time 过滤 48h（之前"前 N-1 条"会跳过用户刚发的消息）
+//  4. 单条消息 try-catch 隔离——一条炸了不影响其他
+//
+// 修复动机（用户生产日志）：
+//   - 18:40 处理一条 msgid=Ajqv...
+//   - 19:02 进程重启 + cursor 丢失 + 重新"首次拉取" → 又拉到同一条 msgid → 重复处理
+//   - 用户连发 3 条，第 2 条被"前 N-1 条跳过"逻辑静默丢弃，第 3 条触发"多条回复 spam"
+func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher, callback *wecom.MessageXML, shopID string) {
 	openKfID := callback.OpenKfId
 	log.Printf("[kf] 收到客服事件: shop=%s token=%s openKfId=%s", shopID, callback.Token, openKfID)
 
-	tracker := s.getKfTracker(openKfID)
-
-	// 使用 cursor 只拉取增量消息
-	cursor := tracker.getCursor()
+	// v4.13.1：从 storage 读 cursor（重启不丢）
+	cursor, err := storage.GetKfCursor(openKfID)
+	if err != nil {
+		log.Printf("[kf] ⚠️ 读 cursor 失败（不影响拉取，用空 cursor）: %v", err)
+		cursor = ""
+	}
 	log.Printf("[kf] 使用cursor拉取: cursor=%q (首次=%v)", cursor, cursor == "")
 
-	result, err := client.SyncMsg(ctx, cursor, callback.Token, 50)
+	result, err := fetcher.SyncMsg(ctx, cursor, callback.Token, 50)
 	if err != nil {
 		log.Printf("[kf] 拉取消息失败: %v", err)
 		return
 	}
 
-	// 更新cursor
+	// v4.13.1：立刻把 next_cursor 写回 storage（持久化）
+	// 即使中途 panic，下一次 sync_msg 也能从持久化 cursor 续上，不会丢消息也不会重复拉
 	if result.NextCursor != "" {
-		tracker.updateCursor(result.NextCursor)
+		if setErr := storage.SetKfCursor(openKfID, result.NextCursor); setErr != nil {
+			log.Printf("[kf] ⚠️ 持久化 cursor 失败（下次可能重复处理）: %v", setErr)
+		}
 	}
 
 	log.Printf("[kf] 拉取到 %d 条消息, has_more=%d next_cursor=%s",
 		len(result.MsgList), result.HasMore, result.NextCursor)
 
-	// 过滤客户文本消息
-	var textMsgs []wecom.KfMsgItem
-	for _, kfMsg := range result.MsgList {
-		if kfMsg.Origin == 3 && kfMsg.MsgType == "text" && kfMsg.Text != nil {
-			textMsgs = append(textMsgs, kfMsg)
-		}
+	// 过滤客户文本消息 + 按 send_time 过滤（v4.13.1 替代"前 N-1 条"逻辑）
+	now := time.Now()
+	textMsgs, skippedOld := filterKfMsgsByWindow(result.MsgList, now)
+	if skippedOld > 0 {
+		log.Printf("[kf] 过滤掉 %d 条非客户文本 / 窗口外消息", skippedOld)
 	}
 
-	// 关键优化：如果cursor为空(首次拉取)且有多条消息，只处理最后一条
-	// 历史积压消息直接跳过，后续用cursor只拉增量就不会有问题
-	if cursor == "" && len(textMsgs) > 1 {
-		log.Printf("[kf] 首次拉取，跳过前%d条历史消息，只处理最后1条",
-			len(textMsgs)-1)
-		textMsgs = textMsgs[len(textMsgs)-1:]
+	if cursor == "" {
+		// 首次拉取也按窗口过滤后，正常处理——不再"前 N-1 条跳过"
+		log.Printf("[kf] 首次拉取 (cursor 为空)，按 48h 窗口过滤后 %d 条文本消息", len(textMsgs))
 	}
 
+	processed := 0
 	for _, kfMsg := range textMsgs {
-		// msgid去重
-		if !tracker.markSeen(kfMsg.Msgid) {
+		// v4.13.1：从 storage 去重
+		seen, seenErr := storage.IsKfMsgSeen(kfMsg.Msgid)
+		if seenErr != nil {
+			log.Printf("[kf] ⚠️ 查 msgid seen 失败（放过，可能重复）: %v", seenErr)
+		} else if seen {
 			log.Printf("[kf] 重复消息跳过: msgid=%s", kfMsg.Msgid)
 			continue
+		}
+
+		// 先标 seen 再处理（防止并发 race 重复处理；如果处理失败，下次 sync_msg 会再拉一次，
+		// 由 IsKfMsgSeen 再挡一次——但 seen 表写已经发生，所以"最多处理一次"，正好）
+		if markErr := storage.MarkKfMsgSeen(kfMsg.Msgid); markErr != nil {
+			log.Printf("[kf] ⚠️ 标 seen 失败（可能重复）: %v", markErr)
 		}
 
 		log.Printf("[kf] 处理: user=%s msg=%s msgid=%s",
@@ -1673,10 +1686,19 @@ func (s *Server[M]) handleKfCallback(ctx context.Context, client *wecom.Client, 
 			MsgType:      "text",
 			Content:      kfMsg.Text.Content,
 		}
-		go s.handleWeComMessageWithOpenKfID(ctx, client, msg, kfMsg.OpenKfid, shopID)
+		// v4.13.1：每条消息独立 try-catch 隔离——一条 panic 不影响其他
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[kf] ⚠️ 处理消息 panic: msgid=%s err=%v", kfMsg.Msgid, r)
+				}
+			}()
+			s.handleWeComMessageWithOpenKfID(ctx, fetcher, msg, kfMsg.OpenKfid, shopID)
+		}()
+		processed++
 	}
 
-	log.Printf("[kf] 完成: 总%d条 文本%d条 处理%d条", len(result.MsgList), len(textMsgs), len(textMsgs))
+	log.Printf("[kf] 完成: 总%d条 文本%d条 处理%d条", len(result.MsgList), len(textMsgs), processed)
 }
 
 // handleAddExternalContact 处理外部联系人添加事件（add_external_contact）
