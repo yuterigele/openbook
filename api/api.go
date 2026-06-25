@@ -150,8 +150,19 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	//   - 商户不需要关心订阅状态——订阅是平台/运营层的事
 	//   - 列表 + 续费都用 RequireRole 强约束
 	//   - 商户后台 subscription nav-item 前端会按 role 隐藏
+	//   - v4.13.0：/api/admin/subscription/renew 仍走 renewSubscriptionHandler（超管改本店）
+	//     —— 跨店改套餐走 /api/admin/platform/shops/:id/plan（v4.13.0 新增）
 	protected.GET("/subscription", auth.RequireRole(storage.RolePlatformAdmin), listSubscriptionsHandler)
 	protected.POST("/subscription/renew", auth.RequireRole(storage.RolePlatformAdmin), renewSubscriptionHandler)
+
+	// 平台超管跨店管理（v4.13.0）
+	//   - 列全平台店铺 / 改任意店套餐 / 看 audit log
+	//   - 全部 RequireRole(RolePlatformAdmin) —— 单店 owner/staff 一律 403
+	protected.GET("/platform/stats", auth.RequireRole(storage.RolePlatformAdmin), platformStatsHandler)
+	protected.GET("/platform/shops", auth.RequireRole(storage.RolePlatformAdmin), platformShopsHandler)
+	protected.GET("/platform/shops/:id", auth.RequireRole(storage.RolePlatformAdmin), platformShopDetailHandler)
+	protected.PUT("/platform/shops/:id/plan", auth.RequireRole(storage.RolePlatformAdmin), platformSetShopPlanHandler)
+	protected.GET("/platform/audit", auth.RequireRole(storage.RolePlatformAdmin), platformAuditHandler)
 
 	// 服务目录
 	protected.GET("/services", auth.RequirePerm(storage.PermViewServices), listServicesHandler)
