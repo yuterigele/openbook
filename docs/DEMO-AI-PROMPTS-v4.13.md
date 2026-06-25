@@ -14,6 +14,28 @@
 
 ---
 
+## 品牌吉祥物（v4.13 demo 用）
+
+**柴犬（Shiba Inu）**——5 段 AI 视频的固定主角
+
+**为什么选柴犬**：
+- 中国认知度极高，柴犬表情包统治微信
+- 拟人化插画 AI 生成最稳（比猫/熊猫/兔子都强）
+- "社畜打工人"人设自带——疲倦 / 喝咖啡 / 骄傲都画得出
+- 跟"老板"形象匹配：柴犬常被画成穿西装/围裙的店主
+
+**角色 Bible**（每段 prompt 必带，保证 5 段一致）：
+```
+Character: anthropomorphic Shiba Inu dog standing on hind legs,
+orange-cream fur with white chest and curled tail,
+wearing a clean white apron (slight wrinkles for texture),
+expressive eyes capable of emotion (tired / focused / proud / relaxed),
+small pink nose, perked or slightly drooped ears depending on mood,
+about 1.3 meters tall in frame proportions
+```
+
+---
+
 ## 视觉风格指南（每段 prompt 都加这段）
 
 ```
@@ -59,16 +81,18 @@
 > "30 万家美发店老板的日常——"
 
 **画面描述**：
-- 角色：中国中年男性（40-50 岁），穿围裙，店里
+- 角色：**柴犬老板**（穿白围裙，拟人化站立）
 - 道具：手里拿着手机，**屏幕朝镜头但内容模糊**，周围漂浮抽象红色感叹号 / 圆点（暗示消息多）
 - 表情：揉太阳穴，疲惫、皱眉
 - 环境：背景是镜台 / 理发椅（虚化）
 
 **AI Prompt**（英文，直接粘贴）：
 ```
-A tired Chinese male hair salon owner in his 40s wearing a work apron, 
-looking down at his phone in his hands with a stressed expression, 
-rubbing his temple with his other hand, 
+A tired anthropomorphic Shiba Inu dog standing on hind legs, 
+orange-cream fur with white chest and curled tail, 
+wearing a clean white apron with slight wrinkles, 
+looking down at his phone in his paws with a stressed expression, 
+rubbing his temple with his other paw, 
 phone screen facing camera but INTENTIONALLY BLURRED showing only 
 abstract colorful notification dots (no readable text), 
 abstract floating red exclamation marks and notification icons hovering nearby, 
@@ -90,15 +114,17 @@ Chinese hair salon interior background softly blurred,
 > "每天花两小时手动登记预约、改期、回微信、解释爽约。"
 
 **画面描述**：
-- 同角色
+- 同角色（柴犬老板）
 - 道具：面前本子上**只有色块和形状**（无字）、撕碎的小纸条堆在桌角、收银机、笔筒
-- 动作：边写边看手机、叹口气
+- 动作：柴犬用爪子握笔在本子上写、边写边看手机、叹口气
 - 环境：收银台后面，挂钟显示 18:00（晚上，**数字清晰**，钟表数字 AI 普遍画得对）
 
 **AI Prompt**：
 ```
-A Chinese male hair salon owner in his 40s writing abstract shapes 
-and color blocks in a messy paper notebook (no readable text in the notebook), 
+An anthropomorphic Shiba Inu dog standing on hind legs, 
+orange-cream fur with white chest and curled tail, 
+wearing a clean white apron, 
+writing abstract shapes and color blocks in a messy paper notebook with a pen held in his paw (no readable text in the notebook), 
 surrounded by torn paper slips and a small calculator, 
 glancing at his phone with a sigh, the wall clock shows 6 PM, 
 warm interior lighting, 
@@ -118,17 +144,20 @@ warm orange and olive green palette, 16:9 composition
 > "如果 AI 帮他们接住呢？"
 
 **画面描述**：
-- 同角色，**穿围裙但表情轻松**
-- 道具：手里端着咖啡杯，**旁边悬浮一个发光的半透明 UI 面板**（只有色块和勾选标记，无字）
+- 同角色（柴犬老板），**穿围裙但表情轻松**
+- 道具：爪子端着咖啡杯，**旁边悬浮一个发光的半透明 UI 面板**（只有色块和勾选标记，无字）
 - 表情：微笑、放松、眼神看屏幕
 - 环境：吧台角落，柔和光
 
 **AI Prompt**：
 ```
-A Chinese male hair salon owner in his 40s, now wearing apron but with a 
-calm and proud smile, holding a coffee cup, beside him a glowing semi-transparent 
-chat interface panel with abstract color blocks and checkmark icons 
-(no readable text), soft warm lighting, 
+An anthropomorphic Shiba Inu dog standing on hind legs, 
+orange-cream fur with white chest and curled tail, 
+wearing a clean white apron, 
+with a calm and proud smile, holding a coffee cup in his paw, 
+beside him a glowing semi-transparent chat interface panel with 
+abstract color blocks and checkmark icons (no readable text), 
+soft warm lighting, 
 modern flat illustration style, soft cinematic lighting, 
 warm orange and olive green palette with subtle blue glow from the panel, 
 16:9 composition, peaceful atmosphere
@@ -163,14 +192,17 @@ warm orange and olive green palette with subtle blue glow from the panel,
 > "30 秒看完，老板喝咖啡，AI 帮他搞定。"
 
 **画面描述**：
-- 同角色，靠在吧台边
-- 道具：手机**屏幕朝向镜头但内容模糊**，只能看到一个**绿色勾选图标**和**彩色小色块**（暗示成功通知）
+- 同角色（柴犬老板），靠在吧台边
+- 道具：爪子握着手机，**屏幕朝向镜头但内容模糊**，只能看到一个**绿色勾选图标**和**彩色小色块**（暗示成功通知）
 - 表情：欣慰、满足、点个头
 - 环境：店里轻松氛围，背景镜子里能看见空的理发椅
 
 **AI Prompt**：
 ```
-A Chinese male hair salon owner leaning casually at his counter, 
+An anthropomorphic Shiba Inu dog standing on hind legs, 
+orange-cream fur with white chest and curled tail, 
+wearing a clean white apron, 
+leaning casually at his counter, 
 looking at his phone with a satisfied and proud smile, 
 phone screen facing camera INTENTIONALLY BLURRED showing only a large 
 green checkmark icon and abstract color blocks (no readable text), 
@@ -205,12 +237,29 @@ warm orange and olive green palette, golden hour lighting,
 ## 跑 AI 视频的实操技巧
 
 1. **先跑场景 1 + 3 试水**（风格基调先定下来），满意后再批量跑
-2. 每段 prompt 都把上面「视觉风格指南」原样贴开头——避免 5 段风格漂移
-3. 角色一致性：5 段都是「40-50 岁中国男性、围裙」，**关键词完全一致**
+2. 每段 prompt 都把上面「视觉风格指南」**+「角色 Bible」**原样贴开头——避免 4 段风格漂移
+3. 角色一致性：4 段都是**同一只柴犬**（白围裙、橘白毛色、卷尾巴），关键词完全一致
 4. 每段跑 2-3 个备选，挑最好的；不满意的局部重跑
 5. 输出分辨率选 **1920×1080 / 16:9 / 24fps**（剪映里好处理）
 6. 视频生成失败/质量差时：缩短 prompt 描述、加 "highly detailed, masterpiece" 关键词
 7. 商业用注意：AI 视频版权问题，建议**在末尾加一行小字 "本视频含 AI 生成素材"**
+
+---
+
+## 🐕 4 段一致性检查（生成完后必做）
+
+**生成完 4 段 AI 视频后，逐项检查**：
+
+- [ ] 柴犬是**同一只**（橘白配色、白围裙、卷尾巴）
+- [ ] 5 段是**同一风格**（扁平插画、暖色调、电影光）
+- [ ] 围裙是**同款**（白、有点褶皱、围裙带可辨）
+- [ ] 眼睛 / 表情能传达情绪（场景 1 愁 / 场景 2 累 / 场景 3 松 / 场景 5 骄傲）
+- [ ] 体型比例**一致**（约 1.3 米高，站立姿态）
+
+**如果某段不通过**：
+- 整体风格漂移 → 重跑那段，把**视觉风格指南 + 角色 Bible**整段重贴
+- 角色长相变了 → 加 "same character, same Shiba Inu as previous scene" 关键词
+- 表情没出来 → 单独强调情绪（"very tired expression, droopy ears"）
 
 ---
 
