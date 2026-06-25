@@ -86,6 +86,12 @@ const (
 	//   - retry: 补发失败/跳过的通知（避免重复打扰已 sent 顾客）
 	PermViewNotifications    = "view:notifications"
 	PermRetryNotifications   = "retry:notifications"
+
+	// 平台超管跨店管理（v4.13.0）：列全平台店铺 / 改任意店套餐 / 看 audit log
+	//   - 只给 platform_admin（owner / staff 都不该有——避免单店店主管到其他店）
+	//   - 通过 AllPermissions 默认给 platform_admin
+	//   - owner 矩阵显式不列 → nav-item 自动隐藏 + middleware 直接 403
+	PermManagePlatform = "manage:platform"
 )
 
 // AllPermissions 列出所有已知权限（init seed / API 校验用）
@@ -106,6 +112,7 @@ var AllPermissions = []string{
 	PermChangeOwnPassword,
 	PermViewNotifications, PermRetryNotifications,
 	PermViewPlan,
+	PermManagePlatform, // v4.13.0: 平台超管跨店管理（仅 platform_admin）
 }
 
 // Role 角色枚举
