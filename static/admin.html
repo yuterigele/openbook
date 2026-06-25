@@ -293,6 +293,16 @@
     .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
     .nav-item .badge { margin-left: auto; padding: 0 6px; font-size: 10px; min-width: 18px; text-align: center; }
 
+    /* v4.13.0: nav 分区标题（如 "平台超管"） */
+    .nav-section-divider {
+      padding: 14px 12px 6px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink-subtle);
+    }
+
     .sidebar-foot {
       padding: 12px 16px;
       border-top: 1px solid var(--line);
@@ -1360,6 +1370,36 @@
         </svg>
         <span>店铺设置</span>
       </a>
+
+      <!-- v4.13.0: 平台超管专属区（data-perm="manage:platform"） -->
+      <div class="nav-section-divider" data-perm="manage:platform">平台超管</div>
+      <a class="nav-item" data-view="platform-overview" data-perm="manage:platform" href="#platform-overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+        <span>平台总览</span>
+      </a>
+      <a class="nav-item" data-view="platform-shops" data-perm="manage:platform" href="#platform-shops">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18"/>
+          <path d="M5 21V7l7-4 7 4v14"/>
+          <path d="M9 9h.01M15 9h.01M9 13h.01M15 13h.01M9 17h.01M15 17h.01"/>
+        </svg>
+        <span>店铺管理</span>
+        <span class="badge" id="platformShopsBadge" style="display:none;">0</span>
+      </a>
+      <a class="nav-item" data-view="platform-audit" data-perm="manage:platform" href="#platform-audit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="9" y1="13" x2="15" y2="13"/>
+          <line x1="9" y1="17" x2="15" y2="17"/>
+        </svg>
+        <span>套餐审计</span>
+      </a>
     </nav>
 
     <div class="sidebar-foot">
@@ -1458,6 +1498,12 @@ const App = (() => {
     // Chain view 时间窗口（v4.6 PRD §11.10.8）
     chainWindow: 'month', // today | week | month
 
+    // v4.13.0 平台超管
+    platformStats: null,     // /api/admin/platform/stats
+    platformShops: null,     // /api/admin/platform/shops
+    platformShopDetail: null, // /api/admin/platform/shops/:id
+    platformAudit: null,     // /api/admin/platform/audit
+
     // Filters
     apptDate: todayStr(),
     apptStatus: '',
@@ -1543,7 +1589,10 @@ const App = (() => {
       'chain-weekly': '跨店周报',
       members: '成员管理',
       plans: '套餐与升级',
-      notifications: '通知中心'
+      notifications: '通知中心',
+      'platform-overview': '平台总览',
+      'platform-shops': '店铺管理',
+      'platform-audit': '套餐审计'
     };
     $('#crumbView').textContent = labels[v] || v;
     render();
@@ -1568,6 +1617,9 @@ const App = (() => {
     else if (state.view === 'notifications') c.innerHTML = renderNotifications();
     else if (state.view === 'members') c.innerHTML = renderMembers();
     else if (state.view === 'plans') c.innerHTML = renderPlans();
+    else if (state.view === 'platform-overview') c.innerHTML = renderPlatformOverview();
+    else if (state.view === 'platform-shops') c.innerHTML = renderPlatformShops();
+    else if (state.view === 'platform-audit') c.innerHTML = renderPlatformAudit();
   }
 
   function renderEmpty(title, hint, iconName = 'inbox') {
@@ -2592,6 +2644,378 @@ const App = (() => {
     if (slot) slot.innerHTML = renderPlanBanner();
   }
 
+  // ============================================================
+  // v4.13.0 平台超管跨店管理
+  //   - 总览（KPI + plan 分布 + 7 天到期 / 冻结计数）
+  //   - 店铺管理（全平台店铺表 + 改套餐 modal）
+  //   - 套餐审计（plan_changed_by_admin 事件流）
+  // ============================================================
+
+  // ---------- Platform Overview ----------
+  function renderPlatformOverview() {
+    return `<div class="view-head">
+      <h1>平台总览</h1>
+      <p>全平台店铺经营快照。给投资人 demo 时第一屏</p>
+    </div>
+
+    <div id="platformOverviewBody">
+      <div class="kpi-grid">${renderSkeleton(5)}</div>
+      <div class="section"><div class="card card-pad">${renderSkeleton(3)}</div></div>
+    </div>`;
+  }
+
+  async function loadPlatformOverview() {
+    const el = $('#platformOverviewBody');
+    if (!el) return;
+    try {
+      const data = await api('/api/admin/platform/stats');
+      state.platformStats = data;
+      el.innerHTML = renderPlatformOverviewBody(data);
+    } catch (e) {
+      el.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function renderPlatformOverviewBody(s) {
+    // 顶部 KPI（给投资人看的"门面"）
+    const planDistHTML = (s.plan_distribution || []).map(b => {
+      const fillPct = s.total_shops > 0 ? (b.shop_count / s.total_shops * 100).toFixed(0) : 0;
+      return `<tr>
+        <td><span class="plan-pill plan-${esc(b.plan)}">${esc(b.plan_name)}</span> <span class="text-muted">(${esc(b.plan)})</span></td>
+        <td class="num"><b>${b.shop_count}</b> 家</td>
+        <td class="num">¥${(b.monthly_cents / 100).toLocaleString('zh-CN')}</td>
+        <td class="num"><b>¥${b.subtotal_yuan.toLocaleString('zh-CN')}</b></td>
+        <td>
+          <div class="bar" style="height: 6px;"><div class="fill" style="width:${fillPct}%; background: linear-gradient(90deg, var(--brand) 0%, #e89175 100%);"></div></div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="kpi-grid stagger">
+        ${kpiCard('全平台店铺', s.total_shops || 0, 'normal', '累计接入的店铺数', 'platform-shops')}
+        ${kpiCard('累计会员账号', s.total_members || 0, 'normal', '商户后台登录账号总数')}
+        ${kpiCard('累计预约量', s.total_appointments || 0, 'success', '全平台预约总数')}
+        ${kpiCard('月度订阅收入（估）', '¥' + (s.monthly_revenue_yuan || 0).toLocaleString('zh-CN'), 'normal', '按 plan 月费 × 店铺数', 'platform-shops')}
+        ${kpiCard('即将到期 / 冻结', (s.expiring_soon || 0) + ' / ' + (s.frozen || 0), (s.frozen > 0 ? 'alert' : 'success'), '7 天内到期 / 已冻结', 'platform-audit')}
+      </div>
+
+      <div class="section">
+        <div class="card card-pad">
+          <div class="section-head">
+            <h2>套餐分布与收入</h2>
+            <span class="sub">按当前 plan 分组 · 月费合计</span>
+          </div>
+          ${(s.plan_distribution || []).length === 0
+            ? renderEmpty('还没有店铺', null, 'building')
+            : `<table class="table">
+                <thead><tr>
+                  <th>套餐</th>
+                  <th class="num">店铺数</th>
+                  <th class="num">月费</th>
+                  <th class="num">月小计</th>
+                  <th style="width: 30%;">占比</th>
+                </tr></thead>
+                <tbody>${planDistHTML}</tbody>
+              </table>`}
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Platform Shops ----------
+  function renderPlatformShops() {
+    return `<div class="view-head">
+      <h1>店铺管理</h1>
+      <p>全平台店铺列表 · 点击「改套餐」可开 / 升 / 降级任意店。投资人 demo 时主操作屏</p>
+    </div>
+
+    <div class="filterbar">
+      <div class="field" style="min-width: 200px;">
+        <label>搜索</label>
+        <input class="input" id="platformShopQuery" type="text" placeholder="按店名 / ID 模糊匹配" oninput="App.filterPlatformShops()" />
+      </div>
+      <div class="field" style="min-width: 140px;">
+        <label>套餐</label>
+        <select class="select" id="platformShopPlan" onchange="App.filterPlatformShops()">
+          <option value="">全部</option>
+          <option value="basic">基础版</option>
+          <option value="pro">专业版</option>
+          <option value="flagship">旗舰版</option>
+          <option value="enterprise">企业定制</option>
+        </select>
+      </div>
+      <div class="field" style="min-width: 140px;">
+        <label>状态</label>
+        <select class="select" id="platformShopStatus" onchange="App.filterPlatformShops()">
+          <option value="">全部</option>
+          <option value="active">正常</option>
+          <option value="expiring">7 天内到期</option>
+          <option value="frozen">已冻结</option>
+        </select>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn" onclick="App.loadPlatformShops()">
+        ${icon('refresh', 14)} 刷新
+      </button>
+    </div>
+
+    <div id="platformShopsBody">
+      <div class="card">${renderSkeleton(6)}</div>
+    </div>`;
+  }
+
+  function renderPlatformShopsTable(shops, query, planFilter, statusFilter) {
+    const q = (query || '').trim().toLowerCase();
+    const filtered = (shops || []).filter(s => {
+      if (q && !((s.name || '').toLowerCase().includes(q) || (s.id || '').toLowerCase().includes(q))) return false;
+      if (planFilter && s.plan !== planFilter) return false;
+      if (statusFilter === 'frozen' && !s.frozen) return false;
+      if (statusFilter === 'expiring' && (s.frozen || (s.days_left || 0) > 7 || s.days_left < 0)) return false;
+      if (statusFilter === 'active' && (s.frozen || (s.days_left || 0) <= 7 && s.days_left >= 0)) return false;
+      return true;
+    });
+    if (filtered.length === 0) {
+      return '<div class="card card-pad">' + renderEmpty('没有匹配的店铺', '调整筛选条件后重试', 'search') + '</div>';
+    }
+    return `<div class="card"><div style="overflow-x:auto;"><table class="table">
+      <thead><tr>
+        <th>店铺</th>
+        <th>套餐</th>
+        <th class="num">到期</th>
+        <th class="num">账号数</th>
+        <th class="num">累计预约</th>
+        <th class="num">近 30 天</th>
+        <th class="num">操作</th>
+      </tr></thead>
+      <tbody>${filtered.map(s => renderPlatformShopRow(s)).join('')}</tbody>
+    </table></div></div>`;
+  }
+
+  function renderPlatformShopRow(s) {
+    const daysText = s.frozen
+      ? '<span class="plan-pill plan-pill-status-danger">已冻结</span>'
+      : (s.days_left != null && s.days_left <= 7 && s.days_left >= 0
+          ? '<span class="plan-pill plan-pill-status-warning">' + s.days_left + ' 天</span>'
+          : (s.expires_at
+              ? '<span class="text-muted">' + s.days_left + ' 天 · ' + esc(s.expires_at.slice(0, 10)) + '</span>'
+              : '<span class="text-muted">—</span>'));
+    const planPillCls = s.plan === 'flagship' ? 'plan-flagship' : s.plan === 'pro' ? 'plan-pro' : '';
+    return `<tr>
+      <td>
+        <strong>${esc(s.name || s.id)}</strong>
+        <div class="text-muted text-mono" style="font-size: 11px;">${esc(s.id)}${s.parent_shop_id ? ' · <span class="tag-chip">' + esc(s.parent_shop_id) + '</span>' : ''}</div>
+      </td>
+      <td><span class="plan-pill ${planPillCls}">${esc(s.plan_name)}</span> <span class="text-muted" style="font-size: 11px;">${esc(s.plan)}</span></td>
+      <td class="num">${daysText}</td>
+      <td class="num">${s.member_count || 0}</td>
+      <td class="num">${s.appt_count || 0}</td>
+      <td class="num">${s.appt_count_30d != null ? s.appt_count_30d : 0}</td>
+      <td class="num">
+        <button class="btn btn-sm btn-primary" onclick="App.openPlatformSetPlanModal('${esc(s.id)}','${esc(s.name)}','${esc(s.plan)}')">改套餐</button>
+        <button class="btn btn-sm" onclick="App.openPlatformShopDetail('${esc(s.id)}')">详情</button>
+      </td>
+    </tr>`;
+  }
+
+  async function loadPlatformShops() {
+    const el = $('#platformShopsBody');
+    if (!el) return;
+    el.innerHTML = '<div class="card">' + renderSkeleton(6) + '</div>';
+    try {
+      const data = await api('/api/admin/platform/shops');
+      state.platformShops = data.shops || [];
+      el.innerHTML = renderPlatformShopsTable(state.platformShops);
+      // 顶部 badge 显示总店数
+      const badge = $('#platformShopsBadge');
+      if (badge) {
+        badge.textContent = data.total || 0;
+        badge.style.display = data.total > 0 ? '' : 'none';
+      }
+    } catch (e) {
+      el.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function filterPlatformShops() {
+    const el = $('#platformShopsBody');
+    if (!el || !state.platformShops) return;
+    const q = $('#platformShopQuery').value;
+    const plan = $('#platformShopPlan').value;
+    const status = $('#platformShopStatus').value;
+    el.innerHTML = renderPlatformShopsTable(state.platformShops, q, plan, status);
+  }
+
+  // 改套餐 modal
+  function openPlatformSetPlanModal(shopId, shopName, currentPlan) {
+    const planOptions = ['basic', 'pro', 'flagship', 'enterprise'].map(p => {
+      const meta = ({
+        basic:      { name: '基础版 ¥99/月',   desc: '1 店 / 3 barber / 无数据导出' },
+        pro:        { name: '专业版 ¥299/月',  desc: '1 店 / 10 barber / CSV 导出' },
+        flagship:   { name: '旗舰版 ¥999/月',  desc: '5 店 / 不限 barber / API + 多店' },
+        enterprise: { name: '企业定制（按需谈）', desc: '全功能 + 专属客服 + SLA' },
+      })[p];
+      return `<option value="${p}" ${p === currentPlan ? 'selected' : ''}>${meta.name} — ${meta.desc}</option>`;
+    }).join('');
+
+    openModal('platformSetPlan', { shopId, shopName, currentPlan, planOptions });
+  }
+
+  async function submitPlatformSetPlan(shopId) {
+    const plan = $('#pspm_plan').value;
+    const months = parseInt($('#pspm_months').value, 10);
+    const note = $('#pspm_note').value.trim();
+    if (!plan || !months || months < 1) {
+      showToast('请填完整：套餐 + 月数', 'error');
+      return;
+    }
+    try {
+      const data = await api('/api/admin/platform/shops/' + shopId + '/plan', {
+        method: 'PUT',
+        body: { plan, months, note },
+      });
+      showToast('已改套餐：' + (data.shop_name || shopId) + ' → ' + data.new_plan + '（' + months + ' 个月）', 'success');
+      closeModal();
+      // 重新拉数据
+      if (state.view === 'platform-shops') await loadPlatformShops();
+      else if (state.view === 'platform-overview') await loadPlatformOverview();
+      else if (state.view === 'platform-audit') await loadPlatformAudit();
+    } catch (e) {
+      showToast('改套餐失败：' + e.message, 'error');
+    }
+  }
+
+  // 单店详情 modal
+  async function openPlatformShopDetail(shopId) {
+    openModal('platformShopDetail', { shopId });
+    try {
+      const data = await api('/api/admin/platform/shops/' + shopId);
+      state.platformShopDetail = data;
+      renderPlatformShopDetailModal(data);
+    } catch (e) {
+      const body = $('#platformShopDetailBody');
+      if (body) body.innerHTML = '<div class="empty">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function renderPlatformShopDetailModal(d) {
+    const body = $('#platformShopDetailBody');
+    if (!body) return;
+    const subs = (d.subscriptions || []).map(s => `<tr>
+      <td>${esc(s.plan_name)} <span class="text-muted" style="font-size:11px;">${esc(s.plan)}</span></td>
+      <td class="text-mono">${esc((s.started_at || '').slice(0, 10))}</td>
+      <td class="text-mono">${esc((s.expires_at || '').slice(0, 10))}</td>
+      <td>${s.is_current ? '<span class="badge badge-active">生效中</span>' : (s.cancelled_at ? '<span class="badge badge-cancelled">已取消</span>' : '<span class="badge badge-warning">已过期</span>')}</td>
+    </tr>`).join('');
+    const mems = (d.members || []).map(m => `<tr>
+      <td>${esc(m.username)}</td>
+      <td><span class="role-pill role-pill-${esc(m.role)}">${esc(m.role)}</span></td>
+      <td>${m.status === 'active' ? '<span class="status-pill status-pill-active">active</span>' : '<span class="status-pill status-pill-disabled">' + esc(m.status) + '</span>'}</td>
+      <td class="text-mono text-muted" style="font-size:11px;">${esc((m.created_at || '').slice(0, 10))}</td>
+    </tr>`).join('');
+    const s = d.shop || {};
+    body.innerHTML = `
+      <div class="kv-list" style="margin-bottom: 14px;">
+        <div class="k">店铺</div><div class="v"><b>${esc(s.name || s.id)}</b> <span class="text-muted text-mono" style="font-size:11px;">${esc(s.id)}</span></div>
+        <div class="k">当前套餐</div><div class="v"><span class="plan-pill ${s.plan === 'flagship' ? 'plan-flagship' : s.plan === 'pro' ? 'plan-pro' : ''}">${esc(s.plan_name)}</span> <span class="text-muted">${esc(s.plan)}</span></div>
+        <div class="k">到期</div><div class="v mono">${s.expires_at ? esc(s.expires_at.slice(0, 10)) + ' (' + s.days_left + ' 天)' : '—'}</div>
+        <div class="k">地址</div><div class="v">${esc(s.address || '—')}</div>
+        <div class="k">账号数</div><div class="v">${s.member_count || 0}</div>
+        <div class="k">累计预约</div><div class="v">${s.appt_count || 0}（近 30 天 ${s.appt_count_30d || 0}）</div>
+      </div>
+
+      <h3 style="font-size: 13px; margin: 12px 0 8px;">订阅历史（${(d.subscriptions || []).length}）</h3>
+      ${subs ? `<table class="table"><thead><tr><th>套餐</th><th>开始</th><th>到期</th><th>状态</th></tr></thead><tbody>${subs}</tbody></table>` : '<div class="text-muted text-mono" style="font-size:12px;">无</div>'}
+
+      <h3 style="font-size: 13px; margin: 16px 0 8px;">成员（${(d.members || []).length}）</h3>
+      ${mems ? `<table class="table"><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>创建</th></tr></thead><tbody>${mems}</tbody></table>` : '<div class="text-muted text-mono" style="font-size:12px;">无</div>'}
+    `;
+  }
+
+  // ---------- Platform Audit ----------
+  function renderPlatformAudit() {
+    return `<div class="view-head">
+      <h1>套餐审计</h1>
+      <p>所有平台超管改套餐的记录（event_type = plan_changed_by_admin）。给投资人看的"合规 + 可追溯"门面</p>
+    </div>
+
+    <div class="filterbar">
+      <div class="field" style="min-width: 200px;">
+        <label>搜索</label>
+        <input class="input" id="platformAuditQuery" type="text" placeholder="按店名 / 操作人" oninput="App.filterPlatformAudit()" />
+      </div>
+      <span class="spacer"></span>
+      <button class="btn" onclick="App.loadPlatformAudit()">
+        ${icon('refresh', 14)} 刷新
+      </button>
+    </div>
+
+    <div id="platformAuditBody">
+      <div class="card">${renderSkeleton(5)}</div>
+    </div>`;
+  }
+
+  async function loadPlatformAudit() {
+    const el = $('#platformAuditBody');
+    if (!el) return;
+    el.innerHTML = '<div class="card">' + renderSkeleton(5) + '</div>';
+    try {
+      const data = await api('/api/admin/platform/audit?limit=200');
+      state.platformAudit = data.items || [];
+      el.innerHTML = renderPlatformAuditTable(state.platformAudit);
+    } catch (e) {
+      el.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function renderPlatformAuditTable(items, query) {
+    const q = (query || '').trim().toLowerCase();
+    const filtered = (items || []).filter(a => {
+      if (!q) return true;
+      return ((a.shop_name || '').toLowerCase().includes(q)
+        || (a.shop_id || '').toLowerCase().includes(q)
+        || (a.admin_user || '').toLowerCase().includes(q)
+        || (a.note || '').toLowerCase().includes(q));
+    });
+    if (filtered.length === 0) {
+      return '<div class="card card-pad">' + renderEmpty('没有审计记录', '改套餐后会自动写入这里', 'inbox') + '</div>';
+    }
+    return `<div class="card"><div style="overflow-x:auto;"><table class="table">
+      <thead><tr>
+        <th>时间</th>
+        <th>店铺</th>
+        <th>原套餐</th>
+        <th>新套餐</th>
+        <th class="num">月数</th>
+        <th>到期</th>
+        <th>操作人</th>
+        <th>备注</th>
+      </tr></thead>
+      <tbody>${filtered.map(a => `<tr>
+        <td class="text-mono" style="font-size:12px;">${esc((a.created_at || '').slice(0, 19).replace('T', ' '))}</td>
+        <td><strong>${esc(a.shop_name || a.shop_id)}</strong> <span class="text-muted text-mono" style="font-size:11px;">${esc(a.shop_id)}</span></td>
+        <td>${a.old_plan ? '<span class="plan-pill">' + esc(a.old_plan) + '</span>' : '<span class="text-muted">—</span>'}</td>
+        <td><span class="plan-pill ${a.new_plan === 'flagship' ? 'plan-flagship' : a.new_plan === 'pro' ? 'plan-pro' : ''}">${esc(a.new_plan)}</span></td>
+        <td class="num">${a.months || 0}</td>
+        <td class="text-mono" style="font-size:12px;">${esc(a.expires_at || '—')}</td>
+        <td>${esc(a.admin_user || '—')} <span class="text-muted text-mono" style="font-size:11px;">#${a.admin_id || 0}</span></td>
+        <td class="text-muted" style="font-size:12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${esc(a.note || '')}">${esc(a.note || '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div></div>`;
+  }
+
+  function filterPlatformAudit() {
+    const el = $('#platformAuditBody');
+    if (!el || !state.platformAudit) return;
+    const q = $('#platformAuditQuery').value;
+    el.innerHTML = renderPlatformAuditTable(state.platformAudit, q);
+  }
+
+  // 平台超管 view 入口（在 setView 时根据 view 调对应 load）
+  // 把 loadPlatformOverview / loadPlatformShops / loadPlatformAudit 接到 view 切换流程
+  // 现有 setView 调 render()，不调 load()——所以这里用 state.view 监视器
+  // 简化：把 load 调用放进 render() 末尾（参照其他 view 的 pattern）
+
   // ---------- Subscription view (v4.4) ----------
   function renderSubscription() {
     // v4.10.1：只有 platform_admin 能进这个页面（前端 nav-item 已按 role 隐藏）
@@ -3034,6 +3458,8 @@ const App = (() => {
     else if (kind === 'planUpgrade') body = planUpgradeModal(data);
     else if (kind === 'subsidiaryCreate') body = subsidiaryCreateModal();
     else if (kind === 'apiKeyManage') { body = apiKeyManageModal(); setTimeout(loadApiKeysInto, 50); }
+    else if (kind === 'platformSetPlan') body = platformSetPlanModal(data);
+    else if (kind === 'platformShopDetail') { body = platformShopDetailModal(); }
     else if (kind === 'apiKeyCreate') body = apiKeyCreateModal();
     else return;
     root.innerHTML = body;
@@ -4053,6 +4479,59 @@ const App = (() => {
     }
   }
 
+  // ---------- v4.13.0 平台超管 modals ----------
+  function platformSetPlanModal(data) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>改套餐：<span style="color:var(--brand);">${esc(data.shopName || data.shopId)}</span></h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="kv-list" style="margin-bottom: 12px;">
+            <div class="k">店铺</div><div class="v mono">${esc(data.shopId)}</div>
+            <div class="k">当前套餐</div><div class="v"><span class="plan-pill">${esc(data.currentPlan)}</span></div>
+          </div>
+          <div class="field">
+            <label>新套餐</label>
+            <select class="select" id="pspm_plan">${data.planOptions}</select>
+          </div>
+          <div class="field">
+            <label>续费月数 <span class="text-muted" style="font-weight:400;">(1-60)</span></label>
+            <input class="input" type="number" id="pspm_months" min="1" max="60" value="12" />
+          </div>
+          <div class="field">
+            <label>备注 <span class="text-muted" style="font-weight:400;">(可选，写入 audit log)</span></label>
+            <input class="input" type="text" id="pspm_note" maxlength="256" placeholder="例：投资人 demo 升级 / 客户投诉补偿 3 个月" />
+          </div>
+          <div class="hint" style="color:#d97706;font-size:12px; background: rgba(217, 119, 6, 0.08); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(217, 119, 6, 0.2);">
+            ⚠ 改套餐会立即生效，原订阅会被取消并写入审计日志。投资人 demo 时可大胆操作（可撤销）。
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitPlatformSetPlan('${esc(data.shopId)}')">确认改套餐</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function platformShopDetailModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h2>店铺详情</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body" id="platformShopDetailBody">
+          <div class="card card-pad">${renderSkeleton(4)}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
   // v4.12.1: CSV 导出（data_export feature 实战）
   // basic plan 店主点会收到 403 + 引导升级文案
   async function exportAppointmentsCSV() {
@@ -4441,6 +4920,10 @@ const App = (() => {
         else if (view === 'appointments') loadAppointments();
         else if (view === 'customers') loadCustomers();
         else if (view === 'notifications') loadNotifications();
+        // v4.13.0: 平台超管 3 个 view 也要拉数据（之前漏了 → KPI 卡片跳进来卡骨架屏）
+        else if (view === 'platform-overview') loadPlatformOverview();
+        else if (view === 'platform-shops') loadPlatformShops();
+        else if (view === 'platform-audit') loadPlatformAudit();
       }, 50);
     }
   }
@@ -5064,6 +5547,9 @@ const App = (() => {
     else if (state.view === 'notifications') loadNotifications();
     else if (state.view === 'members') loadMembers();
     else if (state.view === 'plans') loadPlans();
+    else if (state.view === 'platform-overview') loadPlatformOverview();
+    else if (state.view === 'platform-shops') loadPlatformShops();
+    else if (state.view === 'platform-audit') loadPlatformAudit();
   }
 
   // ---------- Init ----------
@@ -5089,6 +5575,9 @@ const App = (() => {
       else if (v === 'notifications') loadNotifications();
       else if (v === 'members') loadMembers();
       else if (v === 'plans') loadPlans();
+      else if (v === 'platform-overview') loadPlatformOverview();
+      else if (v === 'platform-shops') loadPlatformShops();
+      else if (v === 'platform-audit') loadPlatformAudit();
     }));
     // v4.12: nav click 也刷一下 plan（拿最新 grace_days）— loadPlans 内有 cache 兜底
     // 顾客搜索回车支持（v4.4 轻打磨）
@@ -5132,6 +5621,10 @@ const App = (() => {
     resetCustFilters,
     refreshCurrent,
     loadNotifications, retryOneNotification, retryAllFailedNotifications,
+    // v4.13.0 平台超管（onclick / oninput / onchange 直接调，必须挂到 App）
+    loadPlatformOverview, loadPlatformShops, loadPlatformAudit,
+    filterPlatformShops, filterPlatformAudit,
+    openPlatformSetPlanModal, submitPlatformSetPlan, openPlatformShopDetail,
   };
 })();
 
