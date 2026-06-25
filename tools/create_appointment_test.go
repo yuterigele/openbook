@@ -241,3 +241,155 @@ func TestCreateAppointment_OtherBarberOnLeave_Allowed(t *testing.T) {
 		t.Errorf("output should confirm success, got %q", out)
 	}
 }
+
+// ===================== v4.13.1：顾客纠正姓名必须同步到 customers.name =====================
+//
+// 业务背景：之前 upsertCustomerInTx 命中现有顾客时只回填 phone / openID / external_user_id，
+// 不回填 name。后果：顾客第二次来纠正"我上次说错了，我叫 XXX"，customers.name 仍是老名字，
+// leave notify / admin 详情 / 黑名单判定全用错名（v4.13.1 修复）。
+//
+// 这些测试走完整工具链路：CreateAppointmentTool.InvokableRun → storage.CreateAppointmentFull
+// → upsertCustomerInTx，覆盖 4 个查重分支的姓名更新。
+
+// TestCreateAppointment_NameCorrection_PhoneHit 同一 phone 第二次预约，顾客纠正姓名
+func TestCreateAppointment_NameCorrection_PhoneHit(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-name1", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	// 第一次：张三 / phone="13800000099" → 新建顾客档案，customer.Name="张三"
+	// 用 daysFromNow=1 + time=10:00，避免 hoursFromNow 在跨天后被 snap 到同一 slot
+	phone := "13800000099"
+	_, _, args1 := buildApptArgsAt("张三", "Tony", 1, "10:00", phone)
+	out1, err := runCreate(t, shop.ID, args1)
+	if err != nil {
+		t.Fatalf("首次预约失败：%v / %s", err, out1)
+	}
+
+	// 验证 customer.Name="张三"
+	var cust1 storage.Customer
+	if err := storage.DB.Where("phone = ?", phone).First(&cust1).Error; err != nil {
+		t.Fatalf("查首次顾客：%v", err)
+	}
+	if cust1.Name != "张三" {
+		t.Fatalf("首次 customer.Name 应为'张三'，got=%q", cust1.Name)
+	}
+	firstCustID := cust1.ID
+
+	// 第二次：同 phone，顾客说"我上次名字记错了，我叫张三丰" → customer.Name 应更新
+	// 走 daysFromNow=2 + time=10:00，确保不撞同一 slot
+	_, _, args2 := buildApptArgsAt("张三丰", "Tony", 2, "10:00", phone)
+	out2, err := runCreate(t, shop.ID, args2)
+	if err != nil {
+		t.Fatalf("第二次预约失败：%v / %s", err, out2)
+	}
+
+	// 验证：customer.ID 应保持（合并档案），customer.Name 应更新成"张三丰"
+	var cust2 storage.Customer
+	if err := storage.DB.Where("phone = ?", phone).First(&cust2).Error; err != nil {
+		t.Fatalf("查第二次顾客：%v", err)
+	}
+	if cust2.ID != firstCustID {
+		t.Errorf("phone 命中应复用同一顾客：first=%q second=%q", firstCustID, cust2.ID)
+	}
+	if cust2.Name != "张三丰" {
+		t.Errorf("customer.Name 未更新：got=%q want='张三丰'（这就是 bug 报告的现象）", cust2.Name)
+	}
+
+	// 验证：第二次预约的 Appointment.Customer 字段也是新名
+	var appts []storage.Appointment
+	storage.DB.Where("customer_id = ?", cust2.ID).Order("created_at ASC").Find(&appts)
+	if len(appts) != 2 {
+		t.Fatalf("应有 2 条预约，实际 %d", len(appts))
+	}
+	if appts[0].Customer != "张三" {
+		t.Errorf("第 1 条预约 Customer 应为'张三'，got=%q", appts[0].Customer)
+	}
+	if appts[1].Customer != "张三丰" {
+		t.Errorf("第 2 条预约 Customer 应为'张三丰'，got=%q", appts[1].Customer)
+	}
+}
+
+// TestCreateAppointment_NameCorrection_SameNameNoOp 同 phone 同 name（不纠正），DB 不应重复刷
+func TestCreateAppointment_NameCorrection_SameNameNoOp(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-name2", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	phone := "13800000098"
+	_, _, args1 := buildApptArgsAt("Alice", "Tony", 1, "10:00", phone)
+	if _, err := runCreate(t, shop.ID, args1); err != nil {
+		t.Fatalf("首次失败：%v", err)
+	}
+	var cust1 storage.Customer
+	storage.DB.Where("phone = ?", phone).First(&cust1)
+	updatedAtBefore := cust1.UpdatedAt
+
+	// 第二次：完全一样的参数（顾客没纠正）
+	time.Sleep(10 * time.Millisecond) // 确保如果 Updates 触发，UpdatedAt 会变
+	_, _, args2 := buildApptArgsAt("Alice", "Tony", 2, "10:00", phone)
+	if _, err := runCreate(t, shop.ID, args2); err != nil {
+		t.Fatalf("第二次失败：%v", err)
+	}
+
+	var cust2 storage.Customer
+	storage.DB.Where("phone = ?", phone).First(&cust2)
+	if cust2.Name != "Alice" {
+		t.Errorf("Name 应保持 Alice，got=%q", cust2.Name)
+	}
+	if !cust2.UpdatedAt.Equal(updatedAtBefore) {
+		t.Errorf("同 name 不应刷 UpdatedAt：before=%v after=%v", updatedAtBefore, cust2.UpdatedAt)
+	}
+}
+
+// TestCreateAppointment_NameCorrection_OpenIDHit openID 命中分支
+//
+// 模拟场景：顾客 A 第一次通过微信进店，openID="wx-old"，传"李四"，建档。
+// 第二次 LLM 拿到正确名字"李四哥"（顾客纠正），但 openID 仍是同一个（同一微信）。
+// → 应按 openID 命中现有顾客，customer.Name 更新。
+func TestCreateAppointment_NameCorrection_OpenIDHit(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-name3", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	// 现有顾客：只有 openID，没 phone
+	existing := storage.MakeCustomer(t, "李四", 0, 0)
+	existing.WechatOpenID = "wx-fix-test"
+	existing.Phone = ""
+	if err := storage.DB.Save(existing).Error; err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	custID := existing.ID
+
+	// 模拟"第二次预约"：ctx 注入 openID + 新 phone + 新 name
+	phone := "13800000097"
+	_, _, args := buildApptArgsAt("李四哥", "Tony", 1, "10:00", phone)
+	ctx := WithShopID(WithOpenID(context.Background(), "wx-fix-test"), shop.ID)
+	out, err := (&CreateAppointmentTool{}).InvokableRun(ctx, args)
+	if err != nil {
+		t.Fatalf("create_appointment 失败：%v / %s", err, out)
+	}
+
+	// 验证：openID 命中，customer.Name 更新
+	var cust storage.Customer
+	storage.DB.Where("id = ?", custID).First(&cust)
+	if cust.Name != "李四哥" {
+		t.Errorf("openID 命中但 Name 未更新：got=%q want='李四哥'", cust.Name)
+	}
+	if cust.Phone != phone {
+		t.Errorf("Phone 未回填：got=%q", cust.Phone)
+	}
+}
+
+// buildApptArgsAt 构造指定 daysFromNow + 固定 HH:MM 的 args JSON（phone 由调用方指定）
+//
+// 用于"同一 phone 多次预约"测试，避免 buildApptArgs 随机 phone / snap 撞同一 slot。
+//   - daysFromNow=1 是明天，daysFromNow=2 是后天
+//   - timeStr 必须在 DefaultSlots 里（如 10:00 / 14:00），否则 IsValidSlot 拒
+func buildApptArgsAt(customer, barberName string, daysFromNow int, timeStr, phone string) (date, tm, argsJSON string) {
+	at := time.Now().AddDate(0, 0, daysFromNow)
+	date = at.Format("2006-01-02")
+	argsJSON = `{"customer":"` + customer + `","barber_name":"` + barberName +
+		`","phone":"` + phone + `","date":"` + date + `","time":"` + timeStr + `","service":"剪发"}`
+	return
+}

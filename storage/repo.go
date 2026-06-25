@@ -328,8 +328,12 @@ func CreateAppointmentFull(shopID, barberName, customer, phone, openID, external
 //
 // 全部 miss → 用 phone/openID/externalUserID/name 新建一条
 //
-// 顺带：命中任一分支但 phone / wechat_open_id / external_user_id 是空时，
+// 顺带：命中任一分支但 phone / wechat_open_id / external_user_id / name 是空时，
 // 会回填缺失字段（让后续匹配更准，避免重复建档案）。
+//
+// 重要：name 在命中任一分支时也会同步更新——顾客纠正姓名（"我上次说错了，我叫 XXX"）
+// 时，新预约传的 name 会覆盖 customer.Name。否则 customer.Name 永远是第一次记录的老名字，
+// leave notify / admin 详情都拿错名字（v4.13.1 修复）。
 //
 // 重要：所有 SQL 在事务里（tx），并发安全。
 // 重要：phone 没在事务里做 unique 检查，靠 MySQL index 兜底；并发极端情况下
@@ -347,7 +351,17 @@ func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string)
 	if phone != "" {
 		if err := tx.Where("phone = ?", phone).First(&c).Error; err == nil {
 			// 命中 → 把缺的字段补上（让后续匹配更准）
-			updates := map[string]string{}
+			// v4.13.1：必须用 map[string]any，map[string]string 在 sqlite driver 下会报
+			//   "unsupported data"（GORM 反射识别问题，原代码 map[string]string 实际从未
+			//   走到 Updates 分支——只在 updates 空时跳过，所以隐藏多年）
+			updates := map[string]any{}
+			// v4.13.1：顾客纠正姓名时同步更新 customer.Name
+			//   否则 customer.Name 永远停在第一次记录的老名字，
+			//   leave notify / admin 详情 / 黑名单判定全用错名
+			if c.Name != name {
+				updates["name"] = name
+				c.Name = name
+			}
 			if c.WechatOpenID == "" && openID != "" {
 				updates["wechat_open_id"] = openID
 				c.WechatOpenID = openID
@@ -366,8 +380,12 @@ func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string)
 	// 2) 按 openID 查
 	if openID != "" {
 		if err := tx.Where("wechat_open_id = ?", openID).First(&c).Error; err == nil {
-			// 顺便回填 phone / external_user_id
-			updates := map[string]string{}
+			// 顺便回填 phone / external_user_id / name
+			updates := map[string]any{}
+			if c.Name != name {
+				updates["name"] = name
+				c.Name = name
+			}
 			if c.Phone == "" && phone != "" {
 				updates["phone"] = phone
 				c.Phone = phone
@@ -386,7 +404,11 @@ func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string)
 	// 3) 按 externalUserID 查
 	if externalUserID != "" {
 		if err := tx.Where("external_user_id = ?", externalUserID).First(&c).Error; err == nil {
-			updates := map[string]string{}
+			updates := map[string]any{}
+			if c.Name != name {
+				updates["name"] = name
+				c.Name = name
+			}
 			if c.Phone == "" && phone != "" {
 				updates["phone"] = phone
 				c.Phone = phone
@@ -405,7 +427,7 @@ func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string)
 	// 4) 按 name 兜底（同名老顾客复用档案，不重复建）
 	if err := tx.Where("name = ?", name).First(&c).Error; err == nil {
 		// 顺便把缺的字段都补上
-		updates := map[string]string{}
+		updates := map[string]any{}
 		if c.Phone == "" && phone != "" {
 			updates["phone"] = phone
 			c.Phone = phone
