@@ -467,63 +467,6 @@ func TestListPendingNotifications(t *testing.T) {
 	}
 }
 
-// ===================== resolveCustomerFacingReason =====================
-
-func TestResolveCustomerFacingReason_ExplicitField(t *testing.T) {
-	leave := &BarberLeave{
-		Reason:               "痔疮手术",
-		CustomerFacingReason: "师傅身体不适",
-	}
-	got := resolveCustomerFacingReason(leave)
-	if got != "师傅身体不适" {
-		t.Errorf("got %q, want 师傅身体不适（显式字段优先）", got)
-	}
-}
-
-func TestResolveCustomerFacingReason_PublicReasonWhitelist(t *testing.T) {
-	cases := []struct {
-		reason string
-		want   string
-	}{
-		{"病假", "病假"},
-		{"家中有事", "家中有事"},
-		{"紧急出差", "紧急出差"},
-		{"sick leave", "sick leave"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.reason, func(t *testing.T) {
-			got := resolveCustomerFacingReason(&BarberLeave{Reason: tc.reason})
-			if got != tc.want {
-				t.Errorf("resolveCustomerFacingReason(%q) = %q, want %q", tc.reason, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestResolveCustomerFacingReason_SensitiveFallsBack(t *testing.T) {
-	cases := []string{
-		"痔疮手术",
-		"陪老婆产检",
-		"感冒发烧39度",
-		"和老婆吵架",
-	}
-	for _, r := range cases {
-		t.Run(r, func(t *testing.T) {
-			got := resolveCustomerFacingReason(&BarberLeave{Reason: r})
-			if got != "师傅临时有事" {
-				t.Errorf("sensitive reason %q should fallback to 师傅临时有事, got %q", r, got)
-			}
-		})
-	}
-}
-
-func TestResolveCustomerFacingReason_NilLeave(t *testing.T) {
-	got := resolveCustomerFacingReason(nil)
-	if got != "师傅临时有事" {
-		t.Errorf("nil leave should fallback to 师傅临时有事, got %q", got)
-	}
-}
-
 // ===================== ListNotificationsForShop =====================
 
 func TestListNotificationsForShop_FilterByStatus(t *testing.T) {

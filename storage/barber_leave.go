@@ -810,17 +810,16 @@ func TrackEventInTx(ctx context.Context, tx *gorm.DB, shopID, eventType string, 
 
 // buildLeaveNotification 构造请假通知文案（取消 / 改派 两种）
 //
-// v4.10 升级：
+// v4.13.0 简化：
 //   - 顾客姓名：优先用 customer.Name（反查，避免 appt.Customer 冗余字段为空时显示"亲爱的 ，..."）
 //     → fallback 用 appt.Customer
 //     → 都为空时省略"亲爱的 X"前缀，直接开始正文（避免半句话尴尬）
-//   - 请假原因：用 leave.CustomerFacingReason（商户填的对顾客文案）
-//     → fallback "师傅临时有事"（隐私脱敏：避免暴露"痔疮手术""陪老婆产检"）
-//     → 当 leave.CustomerFacingReason 为空且 leave.Reason 是常见公开原因（病假/家中有事/紧急出差）
-//       时原样显示；其他敏感内容都走兜底
+//   - 请假原因：**永远 hardcode "师傅临时有事"**，绝不返 leave.Reason（内部原因）
+//     之前有过 resolveCustomerFacingReason + 白名单机制（"病假/家中有事"返，其他兜底），
+//     但白名单外的"陪老婆产检"等仍可能走白名单误判，统一硬编码更安全
 func buildLeaveNotification(ctx context.Context, appt *Appointment, leave *BarberLeave, actionTaken string) string {
 	name := resolveCustomerName(ctx, appt)
-	reason := resolveCustomerFacingReason(leave)
+	reason := "师傅临时有事" // v4.13.0 隐私：永不暴露内部 Reason
 
 	switch actionTaken {
 	case LeaveActionCancel:
@@ -888,40 +887,9 @@ func resolveCustomerName(ctx context.Context, appt *Appointment) string {
 	return cust.Name
 }
 
-// resolveCustomerFacingReason 解析对顾客展示的请假原因（v4.10 P1-5 隐私脱敏）
-//
-// 优先级：leave.CustomerFacingReason → leave.Reason（仅当是公开短语时）→ "师傅临时有事"
-//
-// 公开短语白名单：商户填写的内部备注常常很具体（"陪老婆产检""痔疮手术"），
-// 但"病假/家中有事/紧急出差/休息"等是公认安全的对外表达。
-// 白名单外的所有 reason 走兜底，避免尴尬。
-var publicReasonWhitelist = map[string]bool{
-	"病假":         true,
-	"家中有事":       true,
-	"紧急出差":       true,
-	"休息":         true,
-	"事假":         true,
-	"调休":         true,
-	"个人事务":       true,
-	"事":          true,
-	"临时有事":       true,
-	"师傅临时有事":     true,
-	"barber sick":  true,
-	"barber busy":  true,
-	"on leave":     true,
-	"sick leave":   true,
-	"family issue": true,
-}
-
-func resolveCustomerFacingReason(leave *BarberLeave) string {
-	if leave == nil {
-		return "师傅临时有事"
-	}
-	if leave.CustomerFacingReason != "" {
-		return leave.CustomerFacingReason
-	}
-	if leave.Reason != "" && publicReasonWhitelist[strings.ToLower(strings.TrimSpace(leave.Reason))] {
-		return leave.Reason
-	}
-	return "师傅临时有事"
-}
+// v4.13.0 删除：resolveCustomerFacingReason + publicReasonWhitelist
+//   - 之前有过 "Reason 白名单 → 原样展示" 机制（"病假"等公开短语返，其他兜底）
+//   - 实际问题：白名单不全（"陪老婆产检"白名单外但仍可能误判其他情况）
+//   - 简化方案：buildLeaveNotification 直接 hardcode "师傅临时有事"
+//   - 删除理由：1 个函数 + 1 个白名单 = 减少 30+ 行代码 + 4 个测试 + 1 个 DB 列
+//   - 等价安全：所有 reason（"病假""陪老婆产检"等）统一走兜底，对顾客端体验**一致**

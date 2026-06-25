@@ -54,7 +54,7 @@ func (t *BarberLeaveTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 			"\n" +
 			"【输出软约定 — 隐私硬约束】\n" +
 			"  - 返回的「原因」**永远是固定文案「师傅临时有事」**，**不返回任何具体原因**\n" +
-			"  - 这是 v4.13.0 隐私保护设计：商户在 admin 填的内部 Reason / CustomerFacingReason\n" +
+			"  - 这是 v4.13.0 隐私保护设计：商户在 admin 填的内部 Reason\n" +
 			"    （可能含「痔疮手术」「陪老婆产检」等敏感字眼）**永远不返给 LLM**\n" +
 			"  - **禁止**根据请假时长 / 时间点推测未在返回中明示的信息\n" +
 			"    （如「他大概是生病了」「估计是感冒」→ 这种推论让顾客尴尬，**禁止**）\n" +
@@ -144,10 +144,9 @@ func (t *BarberLeaveTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 	}
 
 	// 渲染请假区间
-	// v4.13.0 隐私保护：内部 Reason / CustomerFacingReason 都不返给 LLM
+	// v4.13.0 隐私保护：内部 Reason 永远不返给 LLM
 	//   - Reason 是商户填的内部原因（"痔疮手术""陪老婆产检"等敏感信息）
-	//   - CustomerFacingReason 即使脱敏，仍可能"临时有事 → 陪产检"这种
-	//   - LLM 拿到任何具体原因都可能在回复时复述给顾客 → 全部硬编码"师傅临时有事"
+	//   - LLM 拿到任何具体原因都可能在回复时复述给顾客 → 硬编码"师傅临时有事"
 	//   - 真实原因商户在 admin 后台自己看，顾客端只看到一致的"临时有事"
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("师傅 %s 在 %s 的请假安排：\n", params.BarberName, params.Date))

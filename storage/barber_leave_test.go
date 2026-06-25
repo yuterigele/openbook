@@ -1430,7 +1430,10 @@ func TestBuildLeaveNotification_NoNameOmitsPrefix(t *testing.T) {
 	}
 }
 
-func TestBuildLeaveNotification_CustomerFacingReason(t *testing.T) {
+func TestBuildLeaveNotification_NeverExposesInternalReason(t *testing.T) {
+	// v4.13.0 简化后 buildLeaveNotification 永远 hardcode "师傅临时有事"
+	//   不再白名单/不再 CustomerFacingReason 字段
+	//   这个测试覆盖：无论 Reason 填什么敏感字眼，文案都不会泄漏
 	SetupTestDB(t)
 	shop := MakeShop(t, "shop-1", "")
 	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
@@ -1438,55 +1441,38 @@ func TestBuildLeaveNotification_CustomerFacingReason(t *testing.T) {
 	date, tm := buildApptTime(t, 2)
 	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
 
-	leave := &BarberLeave{
-		BarberName:           "Tony",
-		Reason:               "陪老婆产检",               // 内部原因（敏感）
-		CustomerFacingReason: "师傅家中有事，需请假一天", // 对顾客文案
+	sensitiveReasons := []string{
+		"痔疮手术",
+		"陪老婆产检",
+		"感冒发烧39度",
+		"和老婆吵架",
+		"病假",  // 之前走白名单原样展示；现在也走兜底
+		"家中有事",
+		"紧急出差",
 	}
-	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
+	for _, r := range sensitiveReasons {
+		t.Run(r, func(t *testing.T) {
+			leave := &BarberLeave{BarberName: "Tony", Reason: r}
+			text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
 
-	if strings.Contains(text, "陪老婆产检") {
-		t.Errorf("文案不应暴露内部原因\"陪老婆产检\"，got: %s", text)
-	}
-	if !strings.Contains(text, "师傅家中有事") {
-		t.Errorf("文案应使用 CustomerFacingReason，got: %s", text)
-	}
-}
-
-func TestBuildLeaveNotification_SensitiveReasonFallback(t *testing.T) {
-	SetupTestDB(t)
-	shop := MakeShop(t, "shop-1", "")
-	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
-	cust := MakeCustomer(t, "Alice", 0, 0)
-	date, tm := buildApptTime(t, 2)
-	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
-
-	// 没填 CustomerFacingReason，但 Reason 是敏感内容 → fallback
-	leave := &BarberLeave{BarberName: "Tony", Reason: "痔疮手术"}
-	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
-
-	if strings.Contains(text, "痔疮手术") {
-		t.Errorf("敏感原因\"痔疮手术\"不应暴露给顾客，got: %s", text)
-	}
-	if !strings.Contains(text, "师傅临时有事") {
-		t.Errorf("敏感原因应 fallback 到\"师傅临时有事\"，got: %s", text)
-	}
-}
-
-func TestBuildLeaveNotification_PublicReasonAllowed(t *testing.T) {
-	SetupTestDB(t)
-	shop := MakeShop(t, "shop-1", "")
-	barber := MakeBarber(t, "barber-Tony", shop.ID, "Tony")
-	cust := MakeCustomer(t, "Alice", 0, 0)
-	date, tm := buildApptTime(t, 2)
-	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", barber.Name, date, tm)
-
-	// "病假" 是公开短语白名单内 → 原样展示
-	leave := &BarberLeave{BarberName: "Tony", Reason: "病假"}
-	text := buildLeaveNotification(WithCtx(), appt, leave, LeaveActionCancel)
-
-	if !strings.Contains(text, "病假") {
-		t.Errorf("公开短语\"病假\"应原样展示，got: %s", text)
+			// 敏感字眼绝不能出现在文案里
+			for _, sensitive := range []string{"痔疮", "产检", "老婆", "发烧", "吵架"} {
+				if r == "家中有事" || r == "紧急出差" || r == "病假" {
+					// 这三个本身含"中""紧""假"等普通字眼，不会误判
+					// 跳过对它们的"老婆/痔疮"等敏感检查
+					if sensitive == "老婆" || sensitive == "痔疮" || sensitive == "产检" {
+						continue
+					}
+				}
+				if strings.Contains(text, sensitive) {
+					t.Errorf("reason=%q 文案泄漏敏感词 %q, got: %s", r, sensitive, text)
+				}
+			}
+			// 必须 hardcode "师傅临时有事"
+			if !strings.Contains(text, "师傅临时有事") {
+				t.Errorf("reason=%q 应展示固定文案\"师傅临时有事\"，got: %s", r, text)
+			}
+		})
 	}
 }
 
@@ -1544,8 +1530,9 @@ func TestCreateLeaveV2_NotificationPersistedAsSent(t *testing.T) {
 	if !strings.Contains(n.TextPreview, "Alice") {
 		t.Errorf("TextPreview should contain customer name 'Alice', got: %s", n.TextPreview)
 	}
-	if !strings.Contains(n.TextPreview, "病假") {
-		t.Errorf("TextPreview should contain reason '病假', got: %s", n.TextPreview)
+	// v4.13.0：所有 reason 走兜底"师傅临时有事"，不再白名单展示
+	if !strings.Contains(n.TextPreview, "师傅临时有事") {
+		t.Errorf("TextPreview should contain fallback '师傅临时有事', got: %s", n.TextPreview)
 	}
 }
 

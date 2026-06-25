@@ -93,7 +93,7 @@ func TestBarberLeave_NeverExposesSensitiveReason(t *testing.T) {
 		StartAt: start,
 		EndAt:   end,
 		Reason:  "痔疮手术",  // 模拟商户填了敏感字眼
-		CustomerFacingReason: "陪老婆产检",  // 模拟 CustomerFacingReason 也被填了
+		// v4.13.0：CustomerFacingReason 字段已删除
 		Action:  storage.LeaveActionCancel,
 		Status:  storage.LeaveStatusActive,
 		CreatedBy: "test",

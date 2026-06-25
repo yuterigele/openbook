@@ -240,11 +240,13 @@ type BarberLeave struct {
 	BarberName string     `gorm:"size:64" json:"barber_name"` // 冗余，便于审计
 	StartAt    time.Time  `gorm:"index;not null" json:"start_at"`
 	EndAt      time.Time  `gorm:"index;not null" json:"end_at"`
-	Reason     string     `gorm:"size:256" json:"reason"`           // 内部原因（病假/家中有事/紧急出差，商户后台可见）
-	// CustomerFacingReason 对顾客展示的原因（隐私脱敏）
-	//   - 商户填表时可单独填；不填时 fallback 到 "师傅临时有事"
-	//   - 真实场景避免暴露"痔疮手术""陪老婆产检"等敏感信息
-	CustomerFacingReason string `gorm:"size:256;default:" json:"customer_facing_reason,omitempty"`
+	Reason     string     `gorm:"size:256" json:"reason"`           // 内部原因（病假/家中有事/紧急出差，**仅商户后台可见**；绝不返给顾客）
+	// v4.13.0 移除 CustomerFacingReason 字段：
+	//   - 设计意图：商户填一个脱敏版本（"师傅家中有事"）给顾客
+	//   - 实际问题：商户经常不填或填得也很具体，"陪老婆产检"仍会泄漏
+	//   - 简化：顾客通知一律 hardcode "师傅临时有事"（见 buildLeaveNotification）
+	//   - DB 列 customer_facing_reason 保留在 prod（不破坏老数据），但 Go 不再读写
+	//   - 未来可加 migration: ALTER TABLE barber_leaves DROP COLUMN customer_facing_reason
 	Action     string     `gorm:"size:16;not null" json:"action"`   // cancel / reschedule
 	Status     string     `gorm:"size:16;default:active;index" json:"status"`
 	AffectedCount int      `gorm:"default:0" json:"affected_count"` // 影响的预约数（cancel 或 reschedule 总和）
