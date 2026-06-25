@@ -86,6 +86,8 @@ func QueryAvailableSlots(barberName, date string) []string {
 		}
 		out = append(out, slot)
 	}
+	// v4.13.5 过滤今天已过去的 slot（避免 22:00 后还推 14:00 给顾客）
+	out = filterPastSlotsToday(out, date, time.Now(), loc)
 	return out
 }
 
@@ -111,6 +113,42 @@ func leaveCoveredSlots(leaves []BarberLeave, date string, loc *time.Location) ma
 			if !slotAt.Before(l.StartAt) && !slotAt.After(l.EndAt) {
 				out[slot] = true
 			}
+		}
+	}
+	return out
+}
+
+// filterPastSlotsToday 过滤今天已过去的 slot（v4.13.5 加）
+//
+// 修复：query_schedule 在 22:00 后还推今天 14:00 给顾客（已经过去 8 小时）。
+// 之前 QueryAvailableSlots / QueryScheduleBreakdown 只过滤 booked + leave，
+// 没考虑"今天"窗口里"已经过去的 slot"。
+//
+// 行为：
+//   - date == 今天：过滤掉 slot <= now 的（带 5 分钟容差，避免"现在能约吗"的边界问题）
+//   - date != 今天：原样返回（明天的 slot 都在未来，不过滤）
+//
+// 注意：
+//   - 调用方传 now 进来（time.Now() 调一次即可，避免多次 time.Now() 时间漂移）
+//   - 5 分钟容差：顾客"现在能约 14:30 吗"如果 now=14:31，仍当"可约"——避免刚过的 slot 被静默掉
+func filterPastSlotsToday(slots []string, date string, now time.Time, loc *time.Location) []string {
+	// 用 date 字符串比较（不依赖 dayStart 计算）
+	todayStr := now.Format("2006-01-02")
+	if date != todayStr {
+		return slots // 不是今天，原样返回
+	}
+	out := make([]string, 0, len(slots))
+	for _, slot := range slots {
+		hm, err := time.ParseInLocation("15:04", slot, loc)
+		if err != nil {
+			out = append(out, slot)
+			continue
+		}
+		slotAt := time.Date(now.Year(), now.Month(), now.Day(),
+			hm.Hour(), hm.Minute(), 0, 0, loc)
+		// 5 分钟容差：slot 与 now 差 ≤ 5min 时仍保留（顾客"现在能约 14:30 吗"如果 now=14:31 → 14:30 保留）
+		if slotAt.After(now) || now.Sub(slotAt) <= 5*time.Minute {
+			out = append(out, slot)
 		}
 	}
 	return out
@@ -185,6 +223,8 @@ func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown {
 		}
 		out.Available = append(out.Available, slot)
 	}
+	// v4.13.5 过滤今天已过去的 slot（避免 22:00 后还推 14:00 给顾客）
+	out.Available = filterPastSlotsToday(out.Available, date, time.Now(), loc)
 
 	// 构造 LeaveBlocks（按 start_at ASC，ListBarberLeavesInRange 已排序）
 	out.LeaveBlocks = make([]LeaveBlock, 0, len(leaves))
