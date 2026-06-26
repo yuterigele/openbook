@@ -163,7 +163,9 @@ func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
 		shop := Shop{
 			ID:                shopID,
 			Name:              getenv("DEFAULT_SHOP_NAME", "默认理发店"),
-			Address:           getenv("DEFAULT_SHOP_ADDRESS", "请到 .env 配置"),
+			// v4.14 修：地址不再走 .env 配置。Owner 在店铺设置 UI 里手填。
+			//   之前默认 "请到 .env 配置" 提示很奇怪——顾客看不到，店主不填。
+			Address:           "",
 			Timezone:          "Asia/Shanghai",
 			OpenHour:          9,
 			CloseHour:         18,

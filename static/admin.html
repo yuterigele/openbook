@@ -1126,6 +1126,8 @@
     .plan-features li.text-muted::before { content: "—"; color: var(--ink-muted); }
     .plan-note { font-size: 12px; color: var(--ink-muted); margin-top: auto; padding-top: 8px; border-top: 1px dashed var(--line); }
     .plan-upgrade { margin-top: 8px; }
+    .plan-downgrade { margin-top: 8px; background: transparent; color: var(--ink-muted); border: 1px solid var(--line); }
+    .plan-downgrade:hover { background: var(--surface-2); }
     .plan-pill-status-success { background: var(--olive-soft); color: var(--olive); }
     .plan-pill-status-warning { background: rgba(217, 119, 6, 0.12); color: #b45309; }
     .plan-pill-status-danger { background: rgba(220, 38, 38, 0.12); color: #b91c1c; }
@@ -1242,6 +1244,7 @@
         </svg>
         <span>实时看板</span>
       </a>
+      <div class="nav-section-divider">日常运营</div>
       <a class="nav-item" data-view="appointments" data-perm="view:appointments" href="#appointments">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/>
@@ -1249,33 +1252,13 @@
         </svg>
         <span>预约管理</span>
       </a>
-      <a class="nav-item" data-view="barbers" data-perm="view:barbers" href="#barbers">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-          <circle cx="12" cy="7" r="4"/>
-        </svg>
-        <span>理发师</span>
-      </a>
       <a class="nav-item" data-view="leaves" data-perm="create:barber_leave" href="#leaves">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/>
           <path d="M8 2v4M16 2v4"/>
         </svg>
-        <span>请假管理</span>
+        <span>请假记录</span>
         <span class="badge badge-warning" id="activeLeavesBadge" style="display:none;">0</span>
-      </a>
-      <a class="nav-item" data-view="notifications" data-perm="view:notifications" href="#notifications">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-        </svg>
-        <span>通知中心</span>
-        <span class="badge badge-noshow" id="failedNotifsBadge" style="display:none;">0</span>
-      </a>
-      <a class="nav-item" data-view="events" data-perm="view:events" href="#events">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        <span>事件日志</span>
       </a>
       <a class="nav-item" data-view="handoffs" data-perm="view:handoffs" href="#handoffs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -1286,6 +1269,39 @@
         <span>转人工</span>
         <span class="badge badge-warning" id="handoffsBadge" style="display:none;">0</span>
       </a>
+      <a class="nav-item" data-view="notifications" data-perm="view:notifications" href="#notifications">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <span>通知中心</span>
+        <span class="badge badge-noshow" id="failedNotifsBadge" style="display:none;">0</span>
+      </a>
+      <a class="nav-item" data-view="barbers" data-perm="view:barbers" href="#barbers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+          <circle cx="12" cy="7" r="4"/>
+        </svg>
+        <span>理发师</span>
+      </a>
+      <a class="nav-item" data-view="customers" data-perm="view:customers" href="#customers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span>顾客</span>
+      </a>
+      <a class="nav-item" data-view="services" data-perm="view:services" href="#services">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="9" y1="13" x2="15" y2="13"/>
+          <line x1="9" y1="17" x2="13" y2="17"/>
+        </svg>
+        <span>服务目录</span>
+      </a>
+      <div class="nav-section-divider">经营分析</div>
       <a class="nav-item" data-view="weekly" data-perm="view:weekly_report" href="#weekly">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2"/>
@@ -1306,36 +1322,25 @@
         </svg>
         <span>跨店周报</span>
       </a>
-      <a class="nav-item" data-view="customers" data-perm="view:customers" href="#customers">
+      <a class="nav-item" data-view="chain" data-perm="view:chain_dashboard" href="#chain">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-          <circle cx="9" cy="7" r="4"/>
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          <path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/>
         </svg>
-        <span>顾客</span>
+        <span>多店看板</span>
       </a>
-      <a class="nav-item" data-view="services" data-perm="view:services" href="#services">
+      <a class="nav-item" data-view="events" data-perm="view:events" href="#events">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <line x1="9" y1="13" x2="15" y2="13"/>
-          <line x1="9" y1="17" x2="13" y2="17"/>
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
         </svg>
-        <span>服务目录</span>
+        <span>事件日志</span>
       </a>
+      <div class="nav-section-divider">系统设置</div>
       <a class="nav-item" data-view="subscription" data-perm="view:subscription" href="#subscription">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="5" width="20" height="14" rx="2"/>
           <line x1="2" y1="10" x2="22" y2="10"/>
         </svg>
         <span>订阅</span>
-      </a>
-      <a class="nav-item" data-view="chain" data-perm="view:chain_dashboard" href="#chain">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/>
-        </svg>
-        <span>多店看板</span>
       </a>
       <a class="nav-item" data-view="members" data-perm="manage:members" href="#members">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -1583,7 +1588,7 @@ const App = (() => {
     $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === v));
     const labels = {
       dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
-      leaves: '请假管理', events: '事件日志', chain: '多店看板',
+      leaves: '请假记录', events: '事件日志', chain: '多店看板',
       handoffs: '转人工', customers: '顾客', services: '服务目录',
       subscription: '订阅', shop: '店铺设置', weekly: '单店周报',
       'chain-weekly': '跨店周报',
@@ -1914,12 +1919,33 @@ const App = (() => {
     </table>`;
   }
 
-  // ---------- Leaves view ----------
+  // ---------- Leaves view (v4.14 重命名为"请假记录") ----------
   function renderLeaves() {
     return `
       <div class="view-head">
-        <h1>请假管理</h1>
-        <p>理发师请假会自动通知受影响的顾客，可在开始时间前撤销</p>
+        <h1>请假记录</h1>
+        <p>所有请假的历史记录与影响（改派 / 取消的预约数）。新请假请到「理发师」页操作</p>
+      </div>
+      <div class="filterbar">
+        <div class="field">
+          <label>状态</label>
+          <select class="select" id="leaveStatusFilter" onchange="App.loadLeaves()">
+            <option value="">进行中</option>
+            <option value="active">仅 active</option>
+            <option value="cancelled">已撤销</option>
+            <option value="expired">已过期</option>
+            <option value="all">全部</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>理发师</label>
+          <select class="select" id="leaveBarberFilter" onchange="App.loadLeaves()">
+            <option value="">全部</option>
+            ${(state.barbers || []).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}
+          </select>
+        </div>
+        <span class="spacer"></span>
+        <span class="text-muted" id="leaveTs" style="font-size:12px;"></span>
       </div>
       <div class="card" id="leavesCard">
         <div style="padding:20px;">${renderSkeleton(4)}</div>
@@ -1927,30 +1953,55 @@ const App = (() => {
     `;
   }
 
+  // v4.14 改成扁平表：每行一条 leave 记录，列出改派 / 取消影响
   function renderLeaveRows() {
-    const barbers = state.barbers.filter(b => b.active);
-    if (!barbers.length) {
-      return '<div style="padding:20px;">' + renderEmpty('还没有在职理发师', '请先到「理发师」页添加', 'user') + '</div>';
+    const rows = state.leavesList || [];
+    if (!rows.length) {
+      return '<div style="padding:20px;">' + renderEmpty('没有请假记录', '到「理发师」页给某位师傅请假，会出现在这里', 'calendar') + '</div>';
     }
     return `<table class="table">
-      <thead><tr><th>理发师</th><th>最近请假</th><th class="num">操作</th></tr></thead>
-      <tbody>${barbers.map(b => {
-        const leaves = (state.leavesByBarber || {})[b.id] || [];
-        const hist = leaves.length === 0
-          ? '<span class="text-muted">无请假记录</span>'
-          : '<div class="text-mono" style="font-size:12px;line-height:1.7;">' + leaves.map(l => {
-              const st = l.status === 'active' ? '<span class="badge badge-warning">进行中</span>'
-                       : l.status === 'cancelled' ? '<span class="badge badge-cancelled">已撤销</span>'
-                       : '<span class="badge badge-cancelled">已过期</span>';
-              const act = l.action === 'cancel' ? '取消' : '改派';
-              return `${st} ${(l.start_at || '').slice(0, 16).replace('T', ' ')} → ${(l.end_at || '').slice(11, 16)}（${act} · 影响 ${l.affected_count || 0}）`;
-            }).join('<br/>') + '</div>';
+      <thead><tr>
+        <th>理发师</th>
+        <th>开始</th>
+        <th>结束</th>
+        <th>处理</th>
+        <th class="num">影响预约</th>
+        <th class="num">改派</th>
+        <th class="num">取消</th>
+        <th>状态</th>
+        <th>创建时间</th>
+        <th class="num">操作</th>
+      </tr></thead>
+      <tbody>${rows.map(l => {
+        const st = l.status === 'active' ? '<span class="badge badge-warning">进行中</span>'
+                 : l.status === 'cancelled' ? '<span class="badge badge-cancelled">已撤销</span>'
+                 : '<span class="badge badge-completed">已过期</span>';
+        const actBadge = l.action === 'cancel'
+          ? '<span class="badge badge-cancelled">全部取消</span>'
+          : '<span class="badge badge-info">改派优先</span>';
+        // 跨日显示：end_at 与 start_at 不同天就标"次日"
+        const startStr = (l.start_at || '').slice(0, 16).replace('T', ' ');
+        const endStr = (l.end_at || '').slice(0, 16).replace('T', ' ');
+        const crossDay = (l.start_at || '').slice(0, 10) !== (l.end_at || '').slice(0, 10);
+        const endDisplay = crossDay
+          ? `${endStr}<br/><span class="text-muted" style="font-size:10px;">次日</span>`
+          : endStr;
+        const createdStr = (l.created_at || '').slice(0, 16).replace('T', ' ');
+        const ops = [];
+        if (l.status === 'active') {
+          ops.push(`<button class="btn btn-sm btn-danger" onclick="App.cancelLeave('${l.id}')">撤销</button>`);
+        }
         return `<tr>
-          <td><strong>${esc(b.name)}</strong></td>
-          <td>${hist}</td>
-          <td class="num">
-            <button class="btn btn-sm btn-primary" onclick="App.openLeaveModal('${b.id}','${esc(b.name)}')">请假</button>
-          </td>
+          <td><strong>${esc(l.barber_name || '—')}</strong></td>
+          <td class="text-mono" style="font-size:12px;">${esc(startStr)}</td>
+          <td class="text-mono" style="font-size:12px;">${endDisplay}</td>
+          <td>${actBadge}</td>
+          <td class="num">${l.affected_count || 0}</td>
+          <td class="num" style="color:${(l.rescheduled_count || 0) > 0 ? 'var(--olive)' : 'var(--ink-muted)'};">${l.rescheduled_count || 0}</td>
+          <td class="num" style="color:${(l.cancelled_count || 0) > 0 ? 'var(--danger, #b91c1c)' : 'var(--ink-muted)'};">${l.cancelled_count || 0}</td>
+          <td>${st}</td>
+          <td class="text-muted text-mono" style="font-size:11px;">${esc(createdStr)}</td>
+          <td class="num">${ops.join(' ')}</td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -2383,13 +2434,20 @@ const App = (() => {
     const me = state.user || {};
     const isMe = m.id === me.admin_id;
     const status = (m.status === 'active' || !m.status) ? 'active' : 'disabled';
+    // v4.14 修：当前 viewer 是 owner 时，platform_admin 行不显示 platform 标签
+    //   平台超管与本店 owner 无业务关系，混在一起 UI 噪音 + 信息泄漏
+    const viewerIsOwner = me.role === 'owner';
+    const isPlatformRow = m.role === 'platform_admin';
+    const hidePlatformInfo = viewerIsOwner && isPlatformRow;
     // role 中文 + 3 色 pill（owner / staff / platform_admin）
     const rolePill = m.role === 'owner'
       ? '<span class="role-pill role-pill-owner">店主</span>'
       : m.role === 'staff'
         ? '<span class="role-pill role-pill-staff">店员</span>'
         : m.role === 'platform_admin'
-          ? '<span class="role-pill role-pill-platform">平台超管</span>'
+          ? (hidePlatformInfo
+              ? '<span class="role-pill role-pill-platform" title="平台超管（owner 无权操作）">超管</span>'
+              : '<span class="role-pill role-pill-platform">平台超管</span>')
           : `<span class="role-pill">${esc(m.role || '?')}</span>`;
     const statusPill = status === 'active'
       ? '<span class="status-pill status-pill-active">活跃</span>'
@@ -2398,13 +2456,13 @@ const App = (() => {
     // 操作按钮规则：
     //   - 自己：所有操作禁掉（防误操作把自己降级 / 停用；改自己密码走 /change-password 单独流程）
     //   - 对方：可改 role / 重置密码 / 停用
-    //   - platform_admin 行：不显示操作按钮（platform_admin 跨店超管，UI 不应误改）
+    //   - platform_admin 行：v4.14 owner viewer 完全不显示操作按钮（避免误改平台超管）
     //   - last-owner 保护在 changeMemberRoleHandler / disableMemberHandler 服务端做
     const actions = [];
     if (isMe) {
       actions.push(`<span class="text-muted" style="font-size:11px;">自己</span>`);
-    } else if (m.role === 'platform_admin') {
-      actions.push(`<span class="text-muted" style="font-size:11px;">平台超管（不可改）</span>`);
+    } else if (isPlatformRow) {
+      actions.push(`<span class="text-muted" style="font-size:11px;">${viewerIsOwner ? '超管（不可改）' : '平台超管（不可改）'}</span>`);
     } else {
       const newRole = m.role === 'owner' ? 'staff' : 'owner';
       actions.push(`<button class="btn btn-sm" onclick="App.changeMemberRole(${m.id},'${newRole}')">改为${newRole === 'owner' ? '店主' : '店员'}</button>`);
@@ -2526,21 +2584,37 @@ const App = (() => {
     return `¥${yuan.toLocaleString('zh-CN')}/月`;
   };
   // 单档 plan 卡
-  function renderPlanCard(p, currentPlan) {
+  function renderPlanCard(p, currentPlan, planRank) {
     const isCurrent = p.id === currentPlan;
+    const currentRank = planRank[currentPlan];
+    const myRank = planRank[p.id];
+    // v4.14 修：只在**高于**当前套餐的卡上显示「升级到此套餐」按钮
+    //   - 同档：当前套餐 → 只显示「当前」tag
+    //   - 高档：currentRank < myRank → 显示升级按钮
+    //   - 低端：currentRank > myRank → 只显示「降级联系商务」，避免诱导自降级
+    const isUpgrade = isCurrent ? false : (currentRank !== undefined && myRank !== undefined && myRank > currentRank);
+    const isDowngrade = !isCurrent && !isUpgrade;
     const features = (p.features || []).length > 0
       ? `<ul class="plan-features">${p.features.map(f => `<li>${esc(planFeatureLabel(f))}</li>`).join('')}</ul>`
       : '<ul class="plan-features"><li class="text-muted">基础功能</li></ul>';
     const limitLine = p.max_barbers < 0
       ? `不限 barber`
       : `最多 ${p.max_barbers} 个 barber`;
+    let actionBtn = '';
+    if (isCurrent) {
+      actionBtn = '';
+    } else if (isUpgrade) {
+      actionBtn = `<button class="btn btn-primary plan-upgrade" onclick="App.openUpgradeModal('${esc(p.id)}','${esc(p.name)}','${esc(planPriceYuan(p.price_cents))}')">升级到此套餐</button>`;
+    } else if (isDowngrade) {
+      actionBtn = `<button class="btn plan-downgrade" onclick="App.openUpgradeModal('${esc(p.id)}','${esc(p.name)}','${esc(planPriceYuan(p.price_cents))}')" title="降级请联系商务">降级联系商务</button>`;
+    }
     return `<div class="plan-card ${isCurrent ? 'plan-current' : ''}">
       <div class="plan-name">${esc(p.name)}${isCurrent ? '<span class="plan-current-tag">当前</span>' : ''}</div>
       <div class="plan-price">${esc(planPriceYuan(p.price_cents))}</div>
       <div class="plan-limit">${esc(limitLine)}</div>
       ${features}
       <div class="plan-note">${esc(p.note || '')}</div>
-      ${isCurrent ? '' : `<button class="btn btn-primary plan-upgrade" onclick="App.openUpgradeModal('${esc(p.id)}','${esc(p.name)}','${esc(planPriceYuan(p.price_cents))}')">升级到此套餐</button>`}
+      ${actionBtn}
     </div>`;
   }
   // feature id → 中文标签
@@ -2563,12 +2637,30 @@ const App = (() => {
       state.plans = data;
       // v4.12: 任何 view 都显示宽限期 / frozen banner
       applyPlanBanner();
+      // v4.14: 套餐档位排序（按价格升序，用来判断"升级"还是"降级"）
+      //   AllPlanIDs 来自后端 storage.AllPlanIDs（basic=0, pro=1, flagship=2, enterprise=3）
+      const planRank = {
+        basic: 0, pro: 1, flagship: 2, enterprise: 3,
+      };
       // 渲染当前 plan 卡
       if (cardEl) {
         const s = planStatusText(data);
         const expiresLine = data.expires_at
           ? `<div class="k">到期</div><div class="v mono">${esc(data.expires_at.slice(0, 10))}</div>`
           : '<div class="k">到期</div><div class="v text-muted">—</div>';
+        // v4.14 修：当前套餐卡的"操作"行只在**有更高档**时才显示升级按钮
+        //   enterprise 用户看当前卡时显示"已是最高档"
+        const myRank = planRank[data.current_plan];
+        const hasUpgrade = data.plans && data.plans.some(p => (planRank[p.id] ?? 0) > (myRank ?? 0));
+        const currentAction = !hasUpgrade
+          ? '<span class="text-muted" style="font-size:12px;">已是最高档</span>'
+          : (() => {
+              // 找下一个更高档
+              const next = (data.plans || [])
+                .filter(p => (planRank[p.id] ?? 0) > (myRank ?? 0))
+                .sort((a, b) => (planRank[a.id] ?? 0) - (planRank[b.id] ?? 0))[0];
+              return `<button class="btn btn-primary" onclick="App.openUpgradeModal('${esc(next.id)}','${esc(next.name)}','${esc(planPriceYuan(next.price_cents))}')">升级到${esc(next.name)}</button>`;
+            })();
         cardEl.innerHTML = `<div class="card card-pad">
           <div class="section-head">
             <h2>当前套餐</h2>
@@ -2579,13 +2671,13 @@ const App = (() => {
             <div class="k">套餐</div><div class="v"><b>${esc(data.current_name)}</b>（${esc(data.current_plan)}）</div>
             ${expiresLine}
             <div class="k">操作</div>
-            <div class="v"><button class="btn btn-primary" onclick="App.openUpgradeModal('flagship','旗舰版','¥999/月')">升级到旗舰版</button></div>
+            <div class="v">${currentAction}</div>
           </div>
         </div>`;
       }
       // 渲染 4 档对比
       if (gridEl) {
-        const cards = (data.plans || []).map(p => renderPlanCard(p, data.current_plan)).join('');
+        const cards = (data.plans || []).map(p => renderPlanCard(p, data.current_plan, planRank)).join('');
         gridEl.innerHTML = cards;
       }
       // v4.12.1: API 访问 卡片（api_access feature 实战）
@@ -3086,6 +3178,9 @@ const App = (() => {
   // ---------- Shop view (v4.4) ----------
   function renderShop() {
     const s = state.shop;
+    const me = state.user || {};
+    // v4.14 修：地址 / 营业时间等店主可编辑；企业微信配置与 owner 无关，不显示
+    const isPlatformAdmin = me.role === 'platform_admin';
     if (!s) {
       return `<div class="view-head">
         <h1>店铺设置</h1>
@@ -3093,9 +3188,13 @@ const App = (() => {
       </div>
       <div class="card card-pad">${renderSkeleton(4)}</div>`;
     }
+    // v4.14：地址为空时给个明确提示，引导去编辑填
+    const addressDisplay = s.address
+      ? esc(s.address)
+      : '<span class="text-muted" style="font-size:12px;">未填写 · 点右上角「编辑」补一下，顾客下单时能看到</span>';
     return `<div class="view-head">
       <h1>店铺设置</h1>
-      <p>仅影响本店；wecom / plan / expires_at 走专门入口</p>
+      <p>仅影响本店；订阅套餐 / 到期日 走「套餐与升级」页</p>
     </div>
     <div class="card card-pad">
       <div class="section-head">
@@ -3105,7 +3204,7 @@ const App = (() => {
       </div>
       <div class="kv-list">
         <div class="k">店铺名</div><div class="v">${esc(s.name || '—')}</div>
-        <div class="k">地址</div><div class="v">${esc(s.address || '—')}</div>
+        <div class="k">地址</div><div class="v">${addressDisplay}</div>
         <div class="k">时区</div><div class="v mono">${esc(s.timezone || 'Asia/Shanghai')}</div>
         <div class="k">营业时间</div><div class="v mono">${pad(s.open_hour)}:00 - ${pad(s.close_hour)}:00</div>
         <div class="k">午休</div><div class="v mono">${pad(s.lunch_start)}:00 - ${pad(s.lunch_end)}:${pad(s.lunch_end_min || 0)}</div>
@@ -3114,11 +3213,13 @@ const App = (() => {
         <div class="k">到期日</div><div class="v mono">${esc((s.expires_at || '').slice(0,10) || '—')}</div>
       </div>
     </div>
+    ${isPlatformAdmin ? `
     <div class="section">
       <div class="card card-pad text-muted" style="font-size:12px;">
         <strong>企业微信配置</strong>不在此处修改（多店版本按店独立，走 env 注入；如需变更请改 <span class="text-mono">.env</span> 后重启服务）
       </div>
-    </div>`;
+    </div>
+    ` : ''}`;
   }
 
   function pad(n) { return String(n).padStart(2, '0'); }
@@ -4613,24 +4714,58 @@ const App = (() => {
   async function loadLeaves() {
     const card = $('#leavesCard');
     try {
-      // 1) active barbers
-      const barbers = await api('/api/admin/barbers?include_inactive=false');
-      const activeBarbers = Array.isArray(barbers) ? barbers : [];
-      // 2) leaves for each (parallel)
-      const leavesByBarber = {};
-      await Promise.all(activeBarbers.map(async b => {
+      // v4.14 改：扁平化所有 leave 记录（不再按 barber 分组显示）
+      //   数据源：/api/admin/leave/list（跨 barber 聚合）
+      const status = $('#leaveStatusFilter')?.value || '';
+      const barberID = $('#leaveBarberFilter')?.value || '';
+      // 先确保 barber 列表（用于顶部筛选下拉）
+      if (!state.barbers || !state.barbers.length) {
         try {
-          const ls = await api(`/api/admin/barber/${b.id}/leaves?limit=5`);
-          leavesByBarber[b.id] = Array.isArray(ls) ? ls : [];
-        } catch (_) { leavesByBarber[b.id] = []; }
-      }));
-      state.barbers = activeBarbers;
-      state.leavesByBarber = leavesByBarber;
-      if (state.view === 'leaves' && card) {
+          const bs = await api('/api/admin/barbers?include_inactive=false');
+          state.barbers = Array.isArray(bs) ? bs : [];
+        } catch (_) { state.barbers = []; }
+      }
+      // 构建 query
+      let url = '/api/admin/leave/list?limit=200';
+      if (status === 'active') url += '&status=active';
+      else if (status === 'cancelled') url += '&status=cancelled';
+      else if (status === 'expired') url += '&status=expired';
+      else if (status === 'all') url += '&status=all';
+      // status 为空（默认）：listLeavesHandler 已经只返 active
+      if (barberID) url += '&barber_id=' + encodeURIComponent(barberID);
+      const data = await api(url);
+      // /api/admin/leave/list 默认 status='' 只返 active；显式 status=all 后端还没实现 → 客户端 fallback
+      let leaves = Array.isArray(data) ? data : [];
+      // v4.14 客户端兜底：如果用户要"全部"，后端没返非 active 的，前端去单 barber 查
+      if (status === 'all' && barberID) {
+        try {
+          const all = await api(`/api/admin/barber/${encodeURIComponent(barberID)}/leaves?limit=200`);
+          if (Array.isArray(all)) leaves = all;
+        } catch (_) {}
+      }
+      // 排序：start_at DESC（按开始时间倒序）
+      leaves.sort((a, b) => (b.start_at || '').localeCompare(a.start_at || ''));
+      state.leavesList = leaves;
+      $('#leaveTs').textContent = '共 ' + leaves.length + ' 条 · ' + new Date().toLocaleTimeString();
+      if (card) {
         card.innerHTML = '<div style="overflow-x:auto;">' + renderLeaveRows() + '</div>';
       }
     } catch (e) {
       if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  // v4.14 撤销 leave（仅 active + 未开始的允许撤销）
+  async function cancelLeave(id) {
+    if (!confirm('确定撤销这条请假？已通知的顾客会自动收到一条「请假取消」消息。')) return;
+    try {
+      // /api/admin/leave/cancel 接受 { leave_id } in body
+      await api('/api/admin/leave/cancel', { method: 'POST', body: { leave_id: id } });
+      showToast('已撤销', 'success');
+      loadLeaves();
+      loadLeavesBadge();
+    } catch (e) {
+      showToast('撤销失败：' + e.message, 'error');
     }
   }
 
@@ -5615,6 +5750,7 @@ const App = (() => {
     resolveHandoff, switchChainWindow, toggleResolvedHandoffs,
     deleteBarber, activateBarber,
     markCompleted, markCancelled,
+    cancelLeave,
     loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain, loadShops,
     loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop, loadMembers, loadPlans,
     loadWeekly, loadChainWeekly, resetWeekly, loadAlerts, drillDown,

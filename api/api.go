@@ -691,7 +691,11 @@ func listAppointmentsHandler(ctx context.Context, c *app.RequestContext) {
 		q = q.Where("status = ?", status)
 	}
 	var appts []storage.Appointment
-	if err := q.Order("date DESC, time DESC").Limit(200).Find(&appts).Error; err != nil {
+	// v4.14 改：默认按日期 + 时间**升序**排（最早的在最上面）
+	//   之前 DESC 是给"历史"看的，但预约管理页主要场景是"今天 + 接下来几天"
+	//   → ASC 更符合从早到晚看预约的直觉
+	//   想看历史选日期筛选即可
+	if err := q.Order("date ASC, time ASC").Limit(200).Find(&appts).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
