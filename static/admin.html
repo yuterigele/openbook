@@ -149,6 +149,34 @@
     .btn-danger:hover { background: #fef2f2; border-color: #fecaca; }
     .btn-sm { padding: 5px 10px; font-size: 12px; }
 
+    /* v4.16: 行内操作下拉（预约管理 ··· 菜单） */
+    .appt-menu {
+      position: absolute; right: 0; top: 100%;
+      z-index: 50;
+      min-width: 180px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-md);
+      padding: 4px 0;
+      margin-top: 4px;
+    }
+    .appt-menu button {
+      display: flex; align-items: center; gap: 8px;
+      width: 100%;
+      padding: 8px 12px;
+      border: none; background: none;
+      text-align: left; font-size: 13px;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .appt-menu button:hover { background: var(--surface-2); }
+    .appt-menu button.danger { color: var(--red); }
+    .appt-menu button.danger:hover { background: #fef2f2; }
+    .appt-menu button.primary { color: var(--brand); font-weight: 600; }
+    .appt-menu .menu-divider { height: 1px; background: var(--line); margin: 4px 0; }
+    .menu-anchor { position: relative; display: inline-block; }
+
     .card {
       background: var(--surface);
       border: 1px solid var(--line);
@@ -1802,7 +1830,9 @@ const App = (() => {
         <div class="name">${esc(a.barber_name)} · ${esc(a.customer || '匿名顾客')}</div>
         <div class="meta">${esc(a.service || '')}</div>
       </div>
-      <button class="btn btn-sm" onclick="App.markCompleted('${a.id}')">完成</button>
+      <div class="menu-anchor">
+        <button class="btn btn-sm" title="快速操作" onclick="App.toggleApptMenu(event, '${a.id}')">···</button>
+      </div>
     </div>`;
   }
 
@@ -1858,7 +1888,7 @@ const App = (() => {
   }
 
   function renderApptTable(rows) {
-    return `<table class="table">
+return `<table class="table">
       <thead><tr>
         <th>日期</th><th>时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>状态</th><th class="num">操作</th>
       </tr></thead>
@@ -1871,10 +1901,9 @@ const App = (() => {
           <td>${esc(a.service || '—')}</td>
           <td><span class="badge badge-${esc(a.status)}">${statusLabel(a.status)}</span></td>
           <td class="num">
-            ${a.status === 'active' ? `
-              <button class="btn btn-sm" onclick="App.markCompleted('${a.id}')">完成</button>
-              <button class="btn btn-sm btn-danger" onclick="App.markCancelled('${a.id}')">取消</button>
-            ` : '—'}
+            ${a.status === 'active' ? `<div class="menu-anchor">
+              <button class="btn btn-sm" title="快速操作" onclick="App.toggleApptMenu(event, '${a.id}')">···</button>
+            </div>` : '<span class="text-muted" style="font-size:11px;">—</span>'}
           </td>
         </tr>
       `).join('')}</tbody>
@@ -3971,6 +4000,9 @@ const App = (() => {
     else if (kind === 'cardAdjust') body = adjustModal(data.ccId, data.type);
     else if (kind === 'sellCard') body = sellCardToCustomerModal(data.customerId);
     else if (kind === 'customerCard') body = customerCardModal();
+    // v4.16 预约管理优化 modals
+    else if (kind === 'apptCompletePay') body = apptCompletePayModal(data.apptId, data.skipPay);
+    else if (kind === 'apptCancel') body = apptCancelModal(data.apptId);
     else return;
     root.innerHTML = body;
     // wire submit buttons by id
@@ -4138,6 +4170,123 @@ const App = (() => {
         <div class="modal-foot">
           <button class="btn" onclick="App.closeModal()">取消</button>
           <button class="btn ${data.danger ? 'btn-primary' : 'btn-primary'} js-confirm-btn">${esc(data.confirmText || '确定')}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.16 「完成 + 扣减」合并 modal
+  // 商户点「完成」时弹这个 modal：选支付方式 + 选卡（如果走卡） + 备注 → 一次操作完成两件事
+  function apptCompletePayModal(apptId, skipPay) {
+    const appt = (state.appointments || []).find(a => a.id === apptId)
+      || ((state.dashboard && state.dashboard.upcoming) || []).find(a => a.id === apptId);
+    const cards = state._apptCompleteCards || [];
+    const svCards = cards.filter(c => c.type === 'stored_value' && c.status === 'active');
+    const countCards = cards.filter(c => c.type === 'count' && c.status === 'active');
+    const hasAnyCard = svCards.length + countCards.length > 0;
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 520px;">
+        <div class="modal-head">
+          <h2>完成预约${hasAnyCard ? ' + 扣减' : ''}</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          ${appt ? `<div class="card-pad-sm" style="background:var(--surface-2); border-radius:var(--radius); margin-bottom: 14px; font-size: 12px;">
+            <strong>${esc(appt.customer || '匿名顾客')}</strong> · ${esc(appt.barber_name || '—')} · ${esc(appt.date)} ${esc(appt.time)} · ${esc(appt.service || '—')}
+          </div>` : ''}
+          ${skipPay ? `<div class="card-pad-sm" style="background:var(--warn-soft); border-radius:var(--radius); font-size: 12px; color:var(--warn); margin-bottom: 12px;">
+            标记为已完成（不收款）
+          </div>` : ''}
+          ${!skipPay ? `
+          <div class="field">
+            <label>收款方式 <span class="text-muted" style="font-weight:400;">（现金 / 微信商户自行处理，这里只做记录）</span></label>
+            <select class="select" id="payMethod" onchange="App.togglePayFields()">
+              <option value="none">不收款（仅完成）</option>
+              <option value="cash">现金</option>
+              <option value="wechat">微信</option>
+              <option value="alipay">支付宝</option>
+              ${hasAnyCard ? '<option value="card">储值卡 / 次卡</option>' : ''}
+            </select>
+          </div>
+          <div id="payMethodHint" class="text-muted" style="font-size:11px; margin-top:-6px; margin-bottom: 12px;">
+            仅做完成标记，金额不记入系统
+          </div>
+          <div id="payCardFields" style="display:none;">
+            ${svCards.length > 0 ? `
+            <div class="field">
+              <label>储值卡</label>
+              <select class="select" id="paySvCardId">
+                <option value="">-- 选择储值卡 --</option>
+                ${svCards.map(c => `<option value="${esc(c.id)}" data-balance="${c.balance_cents}">${esc(c.card_name)}（余额 ${(c.balance_cents/100).toFixed(2)} 元）</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label>扣减金额（元）</label>
+              <input class="input" id="paySvAmountYuan" type="number" step="0.01" min="0.01" placeholder="50.00" />
+            </div>
+            ` : ''}
+            ${countCards.length > 0 ? `
+            <div class="field">
+              <label>次卡</label>
+              <select class="select" id="payCountCardId">
+                <option value="">-- 选择次卡（扣 1 次） --</option>
+                ${countCards.map(c => `<option value="${esc(c.id)}">${esc(c.card_name)}（${esc(c.service_name || '')} · 剩 ${c.remaining_count}/${c.initial_count} 次）</option>`).join('')}
+              </select>
+            </div>
+            ` : ''}
+          </div>
+          ` : ''}
+          <div class="field">
+            <label>备注（可选）</label>
+            <input class="input" id="payNote" maxlength="256" placeholder="例：剪发 by 张师傅" />
+          </div>
+          <div id="payErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitApptComplete('${esc(apptId)}', ${!!skipPay})">${icon('check', 14)} 确认完成</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.16 取消预约带原因 modal
+  function apptCancelModal(apptId) {
+    const appt = (state.appointments || []).find(a => a.id === apptId)
+      || ((state.dashboard && state.dashboard.upcoming) || []).find(a => a.id === apptId);
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 480px;">
+        <div class="modal-head">
+          <h2>取消预约</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          ${appt ? `<div class="card-pad-sm" style="background:var(--surface-2); border-radius:var(--radius); margin-bottom: 14px; font-size: 12px;">
+            <strong>${esc(appt.customer || '匿名顾客')}</strong> · ${esc(appt.barber_name || '—')} · ${esc(appt.date)} ${esc(appt.time)}
+          </div>` : ''}
+          <div class="field">
+            <label>取消原因 <span class="text-muted" style="font-weight:400;">（必选，便于追溯）</span></label>
+            <select class="select" id="cancelReason">
+              <option value="顾客打电话取消">顾客打电话取消</option>
+              <option value="顾客临时有事">顾客临时有事</option>
+              <option value="顾客改约时间">顾客改约时间</option>
+              <option value="师傅请假">师傅请假</option>
+              <option value="顾客迟到 15min 以上">顾客迟到 15min 以上</option>
+              <option value="重复预约">重复预约</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>补充说明（可选）</label>
+            <textarea class="textarea" id="cancelNote" maxlength="256" rows="2" placeholder="例：改到下周三 14:00"></textarea>
+          </div>
+          <div id="cancelErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">不取消</button>
+          <button class="btn btn-danger" onclick="App.submitApptCancel('${esc(apptId)}')">${icon('x', 14)} 确认取消</button>
         </div>
       </div>
     </div>`;
@@ -5841,33 +5990,161 @@ const App = (() => {
     if (redirect) showLogin();
   }
 
-  function markCompleted(id) {
-    openModal('confirm', {
-      title: '标记为已完成？',
-      message: '该预约会被记录为「已完成」，用于统计完成率。',
-      confirmText: '标记完成',
-      onConfirm: async () => {
-        try {
-          await api('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: id } });
-          showToast('已标记为完成', 'success');
-          refreshAll(); loadAppointments();
-        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
-      }
-    });
+  // v4.16 完成 + 扣减合并 modal（核心痛点优化）
+  // 点「完成」时弹一个 modal：选支付方式（纯完成/现金/微信/储值卡/次卡）
+  // 如果选卡，自动调 consume API 再调 complete API
+  // 把原本 9 步的"完成+扣储值"压缩到 3 步
+  async function openCompleteWithPayModal(apptId, opts = {}) {
+    const appt = (state.appointments || []).find(a => a.id === apptId)
+      || (state.dashboard && state.dashboard.upcoming || []).find(a => a.id === apptId);
+    if (!appt) {
+      // 兜底：从列表里查不到时直接走纯完成
+      showToast('找不到该预约，直接标记完成', 'info');
+      await api('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: apptId } });
+      refreshAll(); loadAppointments();
+      return;
+    }
+    // 拉顾客的卡（active only）
+    let customerCards = [];
+    if (appt.customer_id) {
+      try {
+        customerCards = await api(`/api/admin/customers/${encodeURIComponent(appt.customer_id)}/cards?status=active`);
+        if (!Array.isArray(customerCards)) customerCards = [];
+      } catch (_) { /* 顾客无卡或拉取失败，忽略 */ }
+    }
+    state._apptCompleteCards = customerCards;
+    openModal('apptCompletePay', { apptId, skipPay: !!opts.skipPay });
   }
-  function markCancelled(id) {
-    openModal('confirm', {
-      title: '确认取消预约？',
-      message: '取消后顾客会收到通知，且不会计入爽约。',
-      confirmText: '确认取消',
-      onConfirm: async () => {
-        try {
-          await api('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: id, reason: 'admin manual' } });
-          showToast('已取消', 'success');
-          refreshAll(); loadAppointments();
-        } catch (e) { showToast('操作失败：' + e.message, 'error'); }
-      }
+
+  // v4.16 取消预约带原因 modal
+  function openCancelModal(apptId) {
+    openModal('apptCancel', { apptId });
+  }
+
+  // v4.16 行内「···」菜单
+  function toggleApptMenu(event, apptId) {
+    event.stopPropagation();
+    // 关闭其他已打开的菜单
+    $$('.appt-menu').forEach(m => m.remove());
+    const a = state.appointments.find(x => x.id === apptId) ||
+              ((state.dashboard && state.dashboard.upcoming) || []).find(x => x.id === apptId);
+    if (!a) return;
+    const anchor = event.currentTarget;
+    const menu = document.createElement('div');
+    menu.className = 'appt-menu';
+    menu.onclick = e => e.stopPropagation();
+    menu.innerHTML = `
+      <button class="primary" data-act="complete_pay">${icon('check', 14)} 完成 + 扣减</button>
+      <button data-act="complete_only">${icon('check', 14)} 仅完成（不收款）</button>
+      <button data-act="cancel">${icon('x', 14)} 取消预约</button>
+      <div class="menu-divider"></div>
+      <button data-act="view_customer">${icon('user', 14)} 查看顾客</button>
+    `;
+    anchor.parentElement.appendChild(menu);
+    menu.querySelectorAll('button').forEach(btn => {
+      btn.onclick = () => {
+        menu.remove();
+        const act = btn.dataset.act;
+        if (act === 'complete_pay') App.openCompleteWithPayModal(apptId);
+        else if (act === 'complete_only') App.openCompleteWithPayModal(apptId, { skipPay: true });
+        else if (act === 'cancel') App.openCancelModal(apptId);
+        else if (act === 'view_customer' && a.customer_id) App.openCustomerDetail(a.customer_id);
+      };
     });
+    // 点别处关闭
+    setTimeout(() => {
+      const close = () => { menu.remove(); document.removeEventListener('click', close); };
+      document.addEventListener('click', close, { once: true });
+    }, 0);
+  }
+
+  // v4.16 完成+扣减 modal 切换支付方式时显示/隐藏卡选择
+  function togglePayFields() {
+    const method = $('#payMethod')?.value;
+    const cardFields = $('#payCardFields');
+    const hint = $('#payMethodHint');
+    if (!cardFields || !hint) return;
+    if (method === 'card') {
+      cardFields.style.display = 'block';
+      hint.textContent = '储值卡扣余额，次卡扣 1 次。金额会写流水留痕。';
+    } else {
+      cardFields.style.display = 'none';
+      hint.textContent = '仅做完成标记，金额不记入系统';
+    }
+  }
+
+  // v4.16 提交「完成 + 扣减」
+  async function submitApptComplete(apptId, skipPay) {
+    const err = $('#payErr');
+    err.classList.add('hidden');
+    const note = $('#payNote')?.value.trim() || '';
+    let payInfo = { method: skipPay ? 'none' : ($('#payMethod')?.value || 'none'), note };
+
+    // 如果走卡：先调 consume，再 complete
+    if (!skipPay && payInfo.method === 'card') {
+      const svId = $('#paySvCardId')?.value;
+      const countId = $('#payCountCardId')?.value;
+      if (svId) {
+        const cents = yuanToCents($('#paySvAmountYuan')?.value);
+        if (cents <= 0) {
+          err.textContent = '扣减金额必须 > 0'; err.classList.remove('hidden'); return;
+        }
+        try {
+          await api(`/api/admin/customer-cards/${encodeURIComponent(svId)}/consume`, {
+            method: 'POST', body: { amount_cents: cents, reason: note || '消费扣减（预约完成）' }
+          });
+          payInfo.card_id = svId;
+          payInfo.amount_cents = cents;
+        } catch (e) {
+          err.textContent = '扣储值卡失败：' + e.message; err.classList.remove('hidden'); return;
+        }
+      } else if (countId) {
+        try {
+          await api(`/api/admin/customer-cards/${encodeURIComponent(countId)}/consume`, {
+            method: 'POST', body: { reason: note || '次卡扣次（预约完成）' }
+          });
+          payInfo.card_id = countId;
+        } catch (e) {
+          err.textContent = '扣次卡失败：' + e.message; err.classList.remove('hidden'); return;
+        }
+      } else {
+        err.textContent = '请选择一张卡'; err.classList.remove('hidden'); return;
+      }
+    }
+
+    // 调完成
+    try {
+      await api('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: apptId } });
+      let msg = '已标记完成';
+      if (payInfo.method === 'card') msg = '已完成 + 扣卡';
+      else if (payInfo.method === 'cash') msg = '已完成 · 现金';
+      else if (payInfo.method === 'wechat') msg = '已完成 · 微信';
+      else if (payInfo.method === 'alipay') msg = '已完成 · 支付宝';
+      showToast(msg, 'success');
+      closeModal();
+      state._apptCompleteCards = null;
+      refreshAll(); loadAppointments();
+    } catch (e) {
+      err.textContent = '标记完成失败：' + e.message + (payInfo.method === 'card' ? '（已扣卡，请手动确认）' : '');
+      err.classList.remove('hidden');
+    }
+  }
+
+  // v4.16 提交取消预约
+  async function submitApptCancel(apptId) {
+    const err = $('#cancelErr');
+    err.classList.add('hidden');
+    const reason = $('#cancelReason')?.value || '';
+    const note = $('#cancelNote')?.value.trim() || '';
+    const fullReason = note ? `${reason} · ${note}` : reason;
+    try {
+      await api('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: apptId, reason: fullReason } });
+      showToast('已取消：' + reason, 'success');
+      closeModal();
+      refreshAll(); loadAppointments();
+    } catch (e) {
+      err.textContent = e.message; err.classList.remove('hidden');
+    }
   }
 
   function openLeaveModal(barberId, barberName) {
@@ -6438,7 +6715,6 @@ const App = (() => {
     submitHandoffResolve, submitServiceImport, onServiceImportFile, downloadServiceTemplate,
     resolveHandoff, switchChainWindow, toggleResolvedHandoffs,
     deleteBarber, activateBarber,
-    markCompleted, markCancelled,
     cancelLeave,
     loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain, loadShops,
     loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop, loadMembers, loadPlans,
@@ -6460,6 +6736,10 @@ const App = (() => {
     openConsumeModal, submitConsume,
     openAdjustModal, submitAdjust,
     openSellCardToCustomerModal, submitSellCard,
+    // v4.16 预约管理 UX 优化
+    openCompleteWithPayModal, openCancelModal,
+    toggleApptMenu, togglePayFields,
+    submitApptComplete, submitApptCancel,
   };
 })();
 

@@ -123,6 +123,7 @@ describe('admin.html IIFE return object audit', () => {
       // 大部分 loadXxx 是 nav click handler 内部调（裸函数名，不是 App.X）
       'loadAlerts', 'loadChain', 'loadHandoffs', 'loadLeaves', 'loadMembers',
       'loadPlans', 'loadPlatformOverview', 'loadShop', 'loadShops', 'loadSubscription',
+      'loadCards', 'loadSoldCards',  // v4.15 卡管理：tab 切换 + refreshCurrent 内部调
     ]);
 
     const deadExports = [...exposed].filter(name => !refs.has(name) && !ALLOWED_NO_REFS.has(name));
