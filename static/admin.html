@@ -4388,16 +4388,15 @@ return `<table class="table">
             <tbody>
               <tr><td class="text-mono"><kbd>?</kbd></td><td>显示本帮助</td></tr>
               <tr><td class="text-mono"><kbd>Esc</kbd></td><td>关闭弹窗 / 行内菜单</td></tr>
-              <tr><td class="text-mono"><kbd>/</kbd></td><td>聚焦当前页面搜索框</td></tr>
-              <tr><td class="text-mono"><kbd>C</kbd></td><td>跳到顾客页 + focus 搜索</td></tr>
-              <tr><td class="text-mono"><kbd>A</kbd></td><td>跳到预约管理</td></tr>
-              <tr><td class="text-mono"><kbd>D</kbd></td><td>跳到实时看板</td></tr>
-              <tr><td class="text-mono"><kbd>R</kbd></td><td>刷新当前页数据</td></tr>
-              <tr><td class="text-mono"><kbd>Enter</kbd></td><td>顾客搜索输入框里回车立即查</td></tr>
+              <tr><td class="text-mono"><kbd>/</kbd></td><td>聚焦当前页面搜索框（顾客页/预约页）</td></tr>
+              <tr><td class="text-mono"><kbd>Enter</kbd></td><td>顾客搜索框回车立即查</td></tr>
             </tbody>
           </table>
-          <div class="text-muted" style="font-size:11px; margin-top: 12px;">
-            💡 在输入框 / 下拉框里大部分快捷键不生效，避免输文字时误触
+          <div class="text-muted" style="font-size:11px; margin-top: 12px; line-height: 1.6;">
+            💡 设计原则：快捷键只在「不会跟浏览器/输入冲突」的范围内启用<br>
+            • <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>/<kbd>Alt</kbd> + 任何键 → 完全不接管（保留 Ctrl+C 复制等）<br>
+            • 在输入框 / 下拉框里只让 <kbd>Enter</kbd> 和 <kbd>Esc</kbd> 生效<br>
+            • 单字母跳转（C/A/D/R）容易误触，已砍掉
           </div>
         </div>
         <div class="modal-foot">
@@ -7017,61 +7016,53 @@ return `<table class="table">
     }));
     // v4.12: nav click 也刷一下 plan（拿最新 grace_days）— loadPlans 内有 cache 兜底
     // 顾客搜索回车支持（v4.4 轻打磨）
+    // v4.16 P1.3: 快捷键 —— **只保留不会跟浏览器/输入冲突的**
+    //   - 砍掉了单字母 C/A/D/R（容易跟普通打字冲突，且 Ctrl+C 会被 preventDefault 拦掉）
+    //   - 任何 Ctrl/Meta/Alt/Shift(非?) 修饰键按下时一律跳过
+    //   - input/textarea/select/contenteditable 里只让 Enter / Esc 生效
     document.addEventListener('keydown', e => {
-      // v4.16 P1.2: 全局快捷键 —— 在 input/textarea/contenteditable 里不触发（避免误触）
       const tag = (document.activeElement?.tagName || '').toLowerCase();
       const isEditable = tag === 'input' || tag === 'textarea' || tag === 'select' ||
         (document.activeElement?.isContentEditable);
-      // ESC 关闭 modal（不依赖焦点，任何时候都能按）
+
+      // ESC 关 modal（任何时候都能按，不依赖焦点也不依赖修饰键）
       if (e.key === 'Escape') {
         if (state.modal && state.modal.kind !== 'confirm') { closeModal(); e.preventDefault(); return; }
         if (state._apptMenuOpen) { closeApptMenu(); e.preventDefault(); return; }
       }
-      // ? 显示快捷键帮助
-      if (e.key === '?' && !isEditable) {
-        openModal('shortcutHelp');
-        e.preventDefault();
-        return;
-      }
-      // 在输入框里只让 Enter / Esc 生效，其他快捷键不抢
+
+      // 任何带 Ctrl/Meta/Alt 的组合：完全不动（让浏览器处理，包括 Ctrl+C 复制）
+      // Shift 单按只有 `?`（即 shift+/）有意义，其他 shift+ 字母不动
+      const hasMod = e.ctrlKey || e.metaKey || e.altKey;
+      const isShift = e.shiftKey;
+
+      // 在输入框里：只让 Enter / Esc 生效，其他键全交给浏览器
       if (isEditable) {
         if (e.key === 'Enter' && state.view === 'customers' && document.activeElement === $('#custQuery')) {
           loadCustomers();
         }
         return;
       }
-      // / 聚焦当前页面的搜索框
+
+      // 在输入框外：任何修饰键组合都不接管（保护 Ctrl+C / Cmd+R 等）
+      if (hasMod) return;
+
+      // ?（即 shift+/）：显示快捷键帮助
+      if (e.key === '?') {
+        openModal('shortcutHelp');
+        e.preventDefault();
+        return;
+      }
+      // 单独的 shift 也不接管
+      if (isShift) return;
+
+      // / 聚焦当前页面的搜索框（GitHub/Gmail 通用约定）
       if (e.key === '/') {
         const sel = state.view === 'customers' ? '#custQuery'
           : state.view === 'appointments' ? '#apptDate'
           : null;
         if (sel) { $(sel)?.focus(); $(sel)?.select?.(); e.preventDefault(); }
         return;
-      }
-      // C → 跳到顾客页 + focus 搜索
-      if (e.key === 'c' || e.key === 'C') {
-        if (state.view !== 'customers') setView('customers');
-        setTimeout(() => $('#custQuery')?.focus(), 50);
-        e.preventDefault();
-        return;
-      }
-      // A → 跳到预约页
-      if (e.key === 'a' || e.key === 'A') {
-        setView('appointments');
-        e.preventDefault();
-        return;
-      }
-      // D → 跳到 dashboard
-      if (e.key === 'd' || e.key === 'D') {
-        setView('dashboard');
-        e.preventDefault();
-        return;
-      }
-      // R → 刷新当前页
-      if (e.key === 'r' || e.key === 'R') {
-        refreshCurrent();
-        showToast('已刷新', 'info');
-        e.preventDefault();
       }
     });
 
