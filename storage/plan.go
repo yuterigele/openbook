@@ -35,6 +35,10 @@ const (
 	FeaturePrioritySupport = "priority_support"
 	FeatureCustomReport   = "custom_report"
 	FeatureSLAGuarantee   = "sla_guarantee"
+	// FeatureCardManagement 储值 / 次卡管理（v4.15 储值卡模块）
+	//   - pro 及以上 plan 才开放；basic 不开
+	//   - 包括：卡产品 CRUD、给顾客售卡、扣次扣额、手动调账、流水查询
+	FeatureCardManagement = "card_management"
 )
 
 // PlanMeta 单档 plan 的元数据
@@ -70,8 +74,8 @@ var PlanRegistry = map[string]PlanMeta{
 		Currency:   "CNY",
 		MaxShops:   1,
 		MaxBarbers: 10,
-		Features:   []string{FeatureDataExport},
-		Note:       "适合成长中的店。1 店 10 个理发师，CSV 数据导出",
+		Features:   []string{FeatureDataExport, FeatureCardManagement},
+		Note:       "适合成长中的店。1 店 10 个理发师，CSV 数据导出 + 储值/次卡",
 	},
 	PlanFlagship: {
 		ID:         PlanFlagship,
@@ -80,8 +84,8 @@ var PlanRegistry = map[string]PlanMeta{
 		Currency:   "CNY",
 		MaxShops:   5,
 		MaxBarbers: -1, // 不限
-		Features:   []string{FeatureDataExport, FeatureAPIAccess, FeatureMultiStore, FeatureCustomReport},
-		Note:       "适合连锁店。最多 5 店，不限理发师数，API access + 定制报表",
+		Features:   []string{FeatureDataExport, FeatureAPIAccess, FeatureMultiStore, FeatureCustomReport, FeatureCardManagement},
+		Note:       "适合连锁店。最多 5 店，不限理发师数，API access + 定制报表 + 储值/次卡",
 	},
 	PlanEnterprise: {
 		ID:         PlanEnterprise,
@@ -93,8 +97,9 @@ var PlanRegistry = map[string]PlanMeta{
 		Features: []string{
 			FeatureDataExport, FeatureAPIAccess, FeatureMultiStore,
 			FeatureCustomReport, FeaturePrioritySupport, FeatureSLAGuarantee,
+			FeatureCardManagement,
 		},
-		Note:       "适合大型连锁。联系商务谈价，含 SLA + 专属客服",
+		Note:       "适合大型连锁。联系商务谈价，含 SLA + 专属客服 + 储值/次卡",
 	},
 }
 

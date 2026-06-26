@@ -66,6 +66,9 @@ func SetupTestDB(t *testing.T) {
 		&APIKey{},               // v4.12.1 api_access feature
 		&KfSyncState{},          // v4.13.1 微信客服 sync cursor
 		&KfSeenMsg{},            // v4.13.1 微信客服 msgid 去重
+		&Card{},                 // v4.15 储值 / 次卡产品
+		&CustomerCard{},         // v4.15 顾客卡实例
+		&CardTransaction{},      // v4.15 卡流水
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

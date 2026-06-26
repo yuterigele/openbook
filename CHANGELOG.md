@@ -2,8 +2,81 @@
 
 本项目所有值得注意的改动都会记录在此文件。
 
-格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1/),
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)（实际项目用 `vX.Y.Z` 业务版本号）。
+
+---
+
+## [v4.15] - 2026-06-26
+
+储值 / 次卡模块（v4.15）。PRD §11.9 之前把"礼品卡 / 退款 / 改价"标在 Agent 能力之外（h264），这次先把后台记账 + 调账追溯的骨架搭起来，**不走支付通道**（现金/微信收款商户线下处理）。
+
+### Added
+
+- **3 张新表**（`storage/models.go` + AutoMigrate）
+  - `cards`                卡产品（储值卡 / 次卡模板）
+  - `customer_cards`       顾客持有的卡实例（带余额/剩余次数）
+  - `card_transactions`    卡流水（每条余额变动一条记录）
+- **feature** `card_management` —— 给 pro / flagship / enterprise plan 开放；basic 403
+- **权限** `view:cards` + `manage:cards` —— owner / staff 都有（业务需要日常扣减）
+- **后端 storage**（`storage/card_crud.go` + `storage/customer_card.go`）
+  - 卡产品 CRUD：建 / 改 / 下架（兜底 active 卡拦截）/ 上架
+  - 售卡 / 扣减 / 手动调账 / 流水查询
+  - 储值卡：pay PriceCents 拿到 FaceValue + BonusCents 余额（支持"2000 送 200"）
+  - 次卡：关联 Service，pay PriceCents 拿到 TotalCount 次
+  - 跨店不共用（v4.15 设计，schema 留口：未来加 chain_pool_id 字段即可支持连锁共用）
+- **后端 API**（`api/admin_cards.go` + 11 个 endpoint）
+  - `GET/POST /api/admin/cards`                          列 / 建卡
+  - `PUT  /api/admin/cards/:id`                           改卡
+  - `POST /api/admin/cards/:id/archive`                   下架
+  - `POST /api/admin/cards/:id/activate`                  上架
+  - `GET  /api/admin/cards/sold`                          全店顾客卡列表（管理视图）
+  - `GET  /api/admin/customers/:id/cards`                 某顾客的卡
+  - `POST /api/admin/customers/:id/cards/sell`            售卡
+  - `POST /api/admin/customer-cards/:id/consume`          扣减
+  - `POST /api/admin/customer-cards/:id/adjust`           **手动调账（reason 必填）**
+  - `GET  /api/admin/customer-cards/:id/transactions`     流水
+- **feature gate** handler 内部 `requireCardFeature` —— basic plan 直接 403 + `feature_required`
+- **顾客详情加「我的卡」**（`api/admin_features_v46.go`）
+  - `CustomerDetailResponse.Cards` 字段：list 该顾客在本店持有的所有卡（active 优先）
+  - 前端「我的卡」section：每张卡显示余额 / 剩余 + 状态；点击进卡片详情（流水 + 扣减 / 调账）
+- **前端 `static/admin.html`** v4.15
+  - nav 新增「卡管理」（日常运营分组）
+  - 两个 tab：卡产品 / 顾客卡
+  - 5 个 modal：新建卡产品 / 扣减 / **手动调账（强调 reason 必填）** / 售卡 / 顾客卡详情（带流水）
+  - 顾客详情 modal 加「我的卡」section
+- **测试**
+  - `storage/card_test.go` —— 27 个 case：售卡、扣减、2000送200计算、防负数、防跨店、active 卡才可扣、调账 reason 必填、归档 active 卡拦截、自动 depleted、过期 lazy check
+  - `api/admin_cards_test.go` —— 5 个 case：basic 403 / pro 200 / 售-扣-调全链路 / 调账 reason 必填 / 跨店隔离 / 顾客详情含 cards
+  - `storage/plan_test.go` —— 加 FeatureCardManagement 到 knownFeatures 列表
+
+### 设计要点
+
+- **所有余额变动都写流水**：recharge（售卡）/ consume（扣减）/ adjust_up / adjust_down。`balance_after` 是变化后的最新值，便于审计。
+- **手动调账 reason 必填**（v4.15 追溯硬要求）：存储层 `ErrReasonRequired` + handler 400 提示；空字符串 / 全空白都拒。
+- **防负数**：扣减 / 调减时断言当前余额 ≥ 变更量，否则 `ErrInsufficientBalance` → handler 409。
+- **自动 depleted**：余额 / 次数扣到 0 时 `CustomerCard.Status = "depleted"`，不再可扣。
+- **Lazy expired check**：每次操作前断言 `expires_at > now`，过期卡 → `ErrCustomerCardExpired` → handler 409。
+- **跨店不共用**（v4.15 设计）：所有方法强制 `shop_id` 隔离；schema 已经用 `shop_id` 卡死，将来要做连锁共用只需新增 `chain_pool_id` 字段，无需改 customer_id 索引。
+- **退款不在平台**：调账只动余额/次数，**实际退款商户线下处理**（v4.15 设计：商户点"调减"，同时线下微信/现金退顾客）。
+
+### 测试
+
+```
+ok  api       6.5s   (含 admin_cards_test 5 case)
+ok  storage   1.2s   (含 card_test 27 case)
+ok  auth      cached
+ok  server    cached
+0 failure（2 个 tools/ 预存 flaky 时区测试不属于本次回归）
+```
+
+### 后续可能
+
+- [ ] 调账二次确认弹窗（防误操作）
+- [ ] 顾客卡片导入 / 导出 CSV
+- [ ] Agent 工具：`list_my_cards` 让顾客主动查余额（要先打通 Agent → 顾客身份映射）
+- [ ] 连锁共用余额（`chain_pool_id` + 跨店扣减接口）
+- [ ] 储值卡过期前 N 天通知顾客（提醒续卡）
 
 ---
 

@@ -133,6 +133,21 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.POST("/api-keys/:id/revoke", auth.RequirePerm(storage.PermViewPlan), revokeAPIKeyHandler) // v4.12.1: 吊销
 	protected.PUT("/shop", auth.RequirePerm(storage.PermEditShop), updateShopHandler)
 
+	// 储值 / 次卡（v4.15）：卡产品 + 顾客卡 + 流水
+	//   - perm：view:cards / manage:cards（owner + staff 都有）
+	//   - feature gate：card_management（basic 403）—— handler 内部再验
+	protected.GET("/cards", auth.RequirePerm(storage.PermViewCards), listCardsHandler)
+	protected.POST("/cards", auth.RequirePerm(storage.PermManageCards), createCardHandler)
+	protected.PUT("/cards/:id", auth.RequirePerm(storage.PermManageCards), updateCardHandler)
+	protected.POST("/cards/:id/archive", auth.RequirePerm(storage.PermManageCards), archiveCardHandler)
+	protected.POST("/cards/:id/activate", auth.RequirePerm(storage.PermManageCards), activateCardHandler)
+	protected.GET("/cards/sold", auth.RequirePerm(storage.PermViewCards), listSoldCardsHandler)
+	protected.GET("/customers/:id/cards", auth.RequirePerm(storage.PermViewCards), listCustomerCardsHandler)
+	protected.POST("/customers/:id/cards/sell", auth.RequirePerm(storage.PermManageCards), sellCardHandler)
+	protected.POST("/customer-cards/:id/consume", auth.RequirePerm(storage.PermManageCards), consumeCardHandler)
+	protected.POST("/customer-cards/:id/adjust", auth.RequirePerm(storage.PermManageCards), adjustCardHandler)
+	protected.GET("/customer-cards/:id/transactions", auth.RequirePerm(storage.PermViewCards), listCardTransactionsHandler)
+
 	// 跨店看板（连锁）—— v4.10.1：只给 platform_admin 看
 	// 之前用 RequirePerm + owner 默认有 AllPermissions → 单店 owner 也能看全平台所有店（权限泄漏）
 	// 现在改 RequireRole 强约束：只有 platform_admin 角色才能进

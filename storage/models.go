@@ -18,6 +18,9 @@ func (BarberLeave) TableName() string  { return "barber_leaves" }
 func (Service) TableName() string      { return "services" }
 func (CustomerNotification) TableName() string { return "customer_notifications" }
 func (APIKey) TableName() string              { return "api_keys" } // v4.12.1 api_access
+func (Card) TableName() string               { return "cards" }              // v4.15 储值/次卡产品
+func (CustomerCard) TableName() string       { return "customer_cards" }     // v4.15 顾客持有的卡实例
+func (CardTransaction) TableName() string    { return "card_transactions" }  // v4.15 卡流水
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
@@ -356,4 +359,132 @@ type CustomerNotification struct {
 	SentAt        *time.Time `json:"sent_at,omitempty"`
 	CreatedAt     time.Time `gorm:"index:idx_notif_shop_status_time,priority:3" json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// CardType 卡类型（v4.15 储值 / 次卡模块）
+const (
+	CardTypeStoredValue = "stored_value" // 储值卡（金额扣减）
+	CardTypeCount       = "count"        // 次卡（次数扣减）
+)
+
+// CardStatus 卡产品状态
+const (
+	CardStatusActive   = "active"   // 在售
+	CardStatusArchived = "archived" // 下架（历史订单仍可查，但不能再售）
+)
+
+// CustomerCardStatus 顾客卡实例状态
+//
+//   - active    : 正常可用
+//   - depleted  : 余额 / 次数扣光（自动判定，SV 余额=0 或 count 剩余=0）
+//   - archived  : 商户主动归档（异常情况兜底，正常流程是自然耗尽成 depleted）
+//   - expired   : 已过 expires_at（自动判定）
+const (
+	CustomerCardStatusActive   = "active"
+	CustomerCardStatusDepleted = "depleted"
+	CustomerCardStatusArchived = "archived"
+	CustomerCardStatusExpired  = "expired"
+)
+
+// CardTransactionType 流水类型
+const (
+	CardTxRecharge   = "recharge"   // 售卡（首次充值 / 购入次卡）—— 余额正向增加
+	CardTxConsume    = "consume"    // 消费扣减 —— 余额负向减少
+	CardTxAdjustUp   = "adjust_up"  // 手动调增（退款场景的逆向补偿 / 赠送给顾客）
+	CardTxAdjustDown = "adjust_down"// 手动调减（数据修正 / 退卡冲账）
+)
+
+// Card 卡产品（v4.15 储值 / 次卡模块）
+//
+//   - 商户在后台定义"卖什么卡"，模板/产品级别
+//   - 储值卡：pay PriceCents 拿到 FaceValueCents + BonusCents 的余额
+//     例：2000 储值送 200 → PriceCents=200000, FaceValueCents=200000, BonusCents=20000
+//   - 次卡：pay PriceCents 拿到 ServiceID × TotalCount 的次数
+//     例：10 次剪发卡 → PriceCents=80000, ServiceID=xxx, TotalCount=10
+//   - ValidDays=0 表示永久有效；>0 表示购入后 N 天到期
+//
+// 多店隔离：每张卡绑定一个 ShopID（v4.15 跨店先不共用，但 ShopID 已经是天然隔离单位）
+type Card struct {
+	ID          string    `gorm:"primaryKey;size:64" json:"id"`
+	ShopID      string    `gorm:"size:64;index;not null" json:"shop_id"`
+	Name        string    `gorm:"size:64;not null" json:"name"`            // "2000送200 储值卡" / "10次剪发卡"
+	Type        string    `gorm:"size:16;index;not null" json:"type"`      // stored_value / count
+	Status      string    `gorm:"size:16;default:active;index" json:"status"`
+	Note        string    `gorm:"size:256" json:"note,omitempty"`           // 描述（"充值 2000 送 200"）
+
+	// 储值卡专用（type=stored_value）
+	PriceCents     int `gorm:"default:0" json:"price_cents"`     // 顾客实付（分）
+	FaceValueCents int `gorm:"default:0" json:"face_value_cents"`// 本金（分）
+	BonusCents     int `gorm:"default:0" json:"bonus_cents"`     // 赠送（分）
+
+	// 次卡专用（type=count）
+	ServiceID    string `gorm:"size:64;index" json:"service_id,omitempty"`     // 关联服务 ID
+	ServiceName  string `gorm:"size:64" json:"service_name,omitempty"`         // 冗余（service 下架时仍可见）
+	TotalCount   int    `gorm:"default:0" json:"total_count"`                  // 总次数
+
+	// 通用
+	ValidDays int `gorm:"default:0" json:"valid_days"` // 0 = 永久；>0 = 购入后 N 天到期
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CustomerCard 顾客持有的卡实例（v4.15）
+//
+//   - 每次"售卡"产生一条记录，跟 CustomerID 绑定
+//   - 储值卡：balance_cents 实时扣减（balance=0 自动 depleted）
+//   - 次卡：remaining_count 实时扣减（remaining=0 自动 depleted）
+//   - 过期判定：expires_at 非空 且 now > expires_at → expired（不真删，状态标记）
+//   - 多店隔离：shop_id 卡死，跨店不共用（v4.15 设计；将来要做连锁共用需新增 chain_pool_id）
+type CustomerCard struct {
+	ID         string  `gorm:"primaryKey;size:64" json:"id"`
+	ShopID     string  `gorm:"size:64;index;not null" json:"shop_id"`
+	CustomerID string  `gorm:"size:64;index:idx_cc_shop_cust,priority:2;not null" json:"customer_id"`
+	CardID     string  `gorm:"size:64;index;not null" json:"card_id"`     // 关联 Card.ID
+	CardName   string  `gorm:"size:64" json:"card_name"`                  // 冗余，Card 归档后仍可见
+	Type       string  `gorm:"size:16;index" json:"type"`                // 冗余 Card.Type
+	PriceCents int     `gorm:"default:0" json:"price_cents"`              // 顾客实付（冗余）
+
+	// 储值卡专用
+	BalanceCents       int `gorm:"default:0" json:"balance_cents"`        // 当前余额
+	InitialBalanceCents int `gorm:"default:0" json:"initial_balance_cents"` // 初始余额（face + bonus）
+
+	// 次卡专用
+	ServiceID        string `gorm:"size:64" json:"service_id,omitempty"`
+	ServiceName      string `gorm:"size:64" json:"service_name,omitempty"`
+	RemainingCount   int    `gorm:"default:0" json:"remaining_count"`
+	InitialCount     int    `gorm:"default:0" json:"initial_count"`
+
+	// 通用
+	Status     string     `gorm:"size:16;default:active;index:idx_cc_shop_cust,priority:1" json:"status"`
+	Note       string     `gorm:"size:256" json:"note,omitempty"` // 备注（"生日礼物" / "VIP 赠卡"）
+	PurchasedAt time.Time `gorm:"index" json:"purchased_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"` // nil = 永久
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CardTransaction 卡流水（v4.15）
+//
+//   - 每次余额变化（售卡、扣减、调增、调减）写一条
+//   - balance_after 是变化后的最终状态（便于复核历史）
+//   - delta 单位：储值卡=分（有正负），次卡=次数（有正负，整数）
+//   - 索引：(shop_id, customer_id, created_at) 商户查某顾客历史；(customer_card_id, created_at) 查某张卡的流水
+type CardTransaction struct {
+	ID             string `gorm:"primaryKey;size:64" json:"id"`
+	ShopID         string `gorm:"size:64;index:idx_ct_shop_cust_time,priority:1;not null" json:"shop_id"`
+	CustomerID     string `gorm:"size:64;index:idx_ct_shop_cust_time,priority:2" json:"customer_id"`
+	CustomerCardID string `gorm:"size:64;index:idx_ct_card_time,priority:1" json:"customer_card_id"`
+
+	Type         string `gorm:"size:16;index" json:"type"`         // recharge / consume / adjust_up / adjust_down
+	Delta        int    `gorm:"default:0" json:"delta"`           // 正负（SV=分，count=次）
+	BalanceAfter int    `gorm:"default:0" json:"balance_after"`   // 当前卡余额 / 剩余次数（与 Type 含义一致）
+
+	Reason         string `gorm:"size:256" json:"reason,omitempty"`     // 商户填写："剪发 by 张师傅" / "顾客要求调账"
+	AppointmentID  string `gorm:"size:64;index" json:"appointment_id,omitempty"` // 关联预约（如有）
+	OperatorID     uint64 `gorm:"index" json:"operator_id"`
+	OperatorName   string `gorm:"size:64" json:"operator_name"`           // 商户后台用户名（冗余，删 admin 不影响流水）
+
+	CreatedAt time.Time `gorm:"index:idx_ct_shop_cust_time,priority:3;index:idx_ct_card_time,priority:2" json:"created_at"`
 }

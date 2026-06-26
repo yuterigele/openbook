@@ -167,6 +167,7 @@ func TestFeatureConstantsKnown(t *testing.T) {
 		FeaturePrioritySupport: false,
 		FeatureCustomReport:    false,
 		FeatureSLAGuarantee:    false,
+		FeatureCardManagement:  false, // v4.15 储值 / 次卡
 	}
 	for _, p := range PlanRegistry {
 		for _, f := range p.Features {

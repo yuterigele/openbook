@@ -92,6 +92,13 @@ const (
 	//   - 通过 AllPermissions 默认给 platform_admin
 	//   - owner 矩阵显式不列 → nav-item 自动隐藏 + middleware 直接 403
 	PermManagePlatform = "manage:platform"
+
+	// 储值 / 次卡（v4.15 卡管理模块）
+	//   - view:cards       看卡产品 / 顾客卡 / 流水
+	//   - manage:cards     建卡 / 售卡 / 扣减 / 调账 / 归档（owner / staff 都给，业务需要）
+	//   - feature gate 另由 FeatureCardManagement 控 plan 层级（basic 整体不可用）
+	PermViewCards   = "view:cards"
+	PermManageCards = "manage:cards"
 )
 
 // AllPermissions 列出所有已知权限（init seed / API 校验用）
@@ -113,6 +120,7 @@ var AllPermissions = []string{
 	PermViewNotifications, PermRetryNotifications,
 	PermViewPlan,
 	PermManagePlatform, // v4.13.0: 平台超管跨店管理（仅 platform_admin）
+	PermViewCards, PermManageCards, // v4.15 储值 / 次卡
 }
 
 // Role 角色枚举
@@ -189,6 +197,7 @@ var DefaultRolePermissions = map[string][]string{
 		PermChangeOwnPassword,
 		PermViewNotifications, PermRetryNotifications,
 		PermViewPlan, // v4.12: 升级决策需要看自己 plan 元数据
+		PermViewCards, PermManageCards, // v4.15 储值 / 次卡
 	},
 	RoleStaff: {
 		// 看 + 业务操作（不允许 manage:* / edit:shop / edit:services）
@@ -201,6 +210,7 @@ var DefaultRolePermissions = map[string][]string{
 		PermViewServices,
 		PermViewNotifications, PermRetryNotifications, // 店员也能补发通知（避免漏通知）
 		PermChangeOwnPassword,
+		PermViewCards, PermManageCards, // v4.15: 店员日常扣次扣额、售卡都需要
 	},
 	RolePlatformAdmin: AllPermissions, // 超管全权限（v4.9 新增）
 }

@@ -54,6 +54,8 @@ type CustomerDetailResponse struct {
 	StatusCounts   CustomerStatusCounts   `json:"status_counts"`
 	UpcomingCount  int                    `json:"upcoming_count"`
 	ResolvedCount  int                    `json:"resolved_handoff_count"` // 该顾客转人工被商户处理过的次数
+	// v4.15: 该顾客在本店持有的卡（储值 + 次卡）
+	Cards          []storage.CustomerCard `json:"cards"`
 	GeneratedAt    time.Time              `json:"generated_at"`
 }
 
@@ -223,9 +225,23 @@ func getCustomerDetailHandler(ctx context.Context, c *app.RequestContext) {
 		StatusCounts:   counts,
 		UpcomingCount:  int(upcomingCount),
 		ResolvedCount:  int(resolvedCount),
+		// v4.15: 该顾客的卡列表（active 优先，按 purchased_at DESC）
+		Cards:          loadCustomerCardsForDetail(ctx, shopID, customerID),
 		GeneratedAt:    time.Now(),
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// loadCustomerCardsForDetail 顾客详情里要展示的卡列表（v4.15）
+//
+// 失败不阻塞详情（卡管理是 pro+ 功能，basic plan 用户也会看到空 list）
+func loadCustomerCardsForDetail(ctx context.Context, shopID, customerID string) []storage.CustomerCard {
+	cards, err := storage.ListCustomerCards(ctx, shopID, customerID, "")
+	if err != nil {
+		// 静默失败：详情主流程优先
+		return []storage.CustomerCard{}
+	}
+	return cards
 }
 
 // splitTags 把 "VIP,FREQUENT" → ["VIP", "FREQUENT"]（trim + 去空 + 去重保序）

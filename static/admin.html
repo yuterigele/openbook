@@ -1301,6 +1301,13 @@
         </svg>
         <span>服务目录</span>
       </a>
+      <a class="nav-item" data-view="cards" data-perm="view:cards" href="#cards">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="5" width="20" height="14" rx="2"/>
+          <line x1="2" y1="10" x2="22" y2="10"/>
+        </svg>
+        <span>卡管理</span>
+      </a>
       <div class="nav-section-divider">经营分析</div>
       <a class="nav-item" data-view="weekly" data-perm="view:weekly_report" href="#weekly">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -1495,6 +1502,12 @@ const App = (() => {
     customerDetail: null, // v4.6 当前查看的顾客详情
     customerDetailLoading: false, // v4.6
     services: [],         // v4.4 服务目录
+    cards: [],            // v4.15 卡产品列表
+    soldCards: [],        // v4.15 顾客持有的卡（管理视图）
+    cardsTab: 'products', // v4.15 当前 tab: products / sold
+    ccDetail: null,       // v4.15 当前查看的顾客卡详情
+    ccDetailLoading: false,
+    ccTransactions: [],   // v4.15 当前卡的流水
     subscription: [],     // v4.4 订阅历史
     weekly: null,         // v4.4 周报（单店）
     chainWeekly: null,    // v4.4 周报（跨店）
@@ -1589,7 +1602,7 @@ const App = (() => {
     const labels = {
       dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
       leaves: '请假记录', events: '事件日志', chain: '多店看板',
-      handoffs: '转人工', customers: '顾客', services: '服务目录',
+      handoffs: '转人工', customers: '顾客', services: '服务目录', cards: '卡管理',
       subscription: '订阅', shop: '店铺设置', weekly: '单店周报',
       'chain-weekly': '跨店周报',
       members: '成员管理',
@@ -1614,6 +1627,7 @@ const App = (() => {
     else if (state.view === 'handoffs') c.innerHTML = renderHandoffs();
     else if (state.view === 'customers') c.innerHTML = renderCustomers();
     else if (state.view === 'services') c.innerHTML = renderServices();
+    else if (state.view === 'cards') c.innerHTML = renderCards();
     else if (state.view === 'subscription') c.innerHTML = renderSubscription();
     else if (state.view === 'shop') c.innerHTML = renderShop();
     else if (state.view === 'shops') c.innerHTML = renderShops();
@@ -2302,6 +2316,387 @@ const App = (() => {
         <button class="btn btn-sm" onclick="event.stopPropagation();App.openCustTagModal('${esc(c.id)}','${esc(c.name || '').replace(/'/g, "\\'")}')">+ 标签</button>
       </td>
     </tr>`;
+  }
+
+  // ---------- Cards view (v4.15 储值/次卡) ----------
+  function renderCards() {
+    return `<div class="view-head">
+      <h1>卡管理</h1>
+      <p>储值卡（金额扣减）和次卡（次数扣减）的产品定义 + 顾客持有记录。手动调账必填理由，所有变动留痕</p>
+    </div>
+    <div class="row" style="margin-bottom:14px; gap: 8px; flex-wrap: wrap;">
+      <button class="btn btn-primary" data-perm="manage:cards" onclick="App.openCardModal()">
+        ${icon('plus', 14)} 新建卡产品
+      </button>
+      <span class="spacer"></span>
+      <div class="tabs">
+        <button class="tab ${state.cardsTab === 'products' ? 'active' : ''}" onclick="App.switchCardsTab('products')">卡产品</button>
+        <button class="tab ${state.cardsTab === 'sold' ? 'active' : ''}" onclick="App.switchCardsTab('sold')">顾客卡</button>
+      </div>
+    </div>
+    <div class="card" id="cardsCard">
+      <div style="padding:20px;">${renderSkeleton(4)}</div>
+    </div>`;
+  }
+
+  function renderCardProductRows() {
+    const rows = state.cards || [];
+    if (!rows.length) {
+      return '<div style="padding:20px;">' + renderEmpty('还没有卡产品', '点击右上角"新建卡产品"开始', 'plus') + '</div>';
+    }
+    return `<table class="table">
+      <thead><tr>
+        <th>名称</th><th>类型</th>
+        <th class="num">实付</th><th class="num">面值/次数</th><th class="num">赠送</th>
+        <th>有效期</th><th>状态</th><th class="num">操作</th>
+      </tr></thead>
+      <tbody>${rows.map(renderCardRow).join('')}</tbody>
+    </table>`;
+  }
+
+  function renderCardRow(c) {
+    const typeLabel = c.type === 'stored_value'
+      ? '<span class="tag-chip tag-vip">储值</span>'
+      : '<span class="tag-chip tag-new">次卡</span>';
+    const faceOrCount = c.type === 'stored_value'
+      ? (c.face_value_cents + c.bonus_cents) / 100 + ' 元'
+      : c.total_count + ' 次 · ' + esc(c.service_name || '');
+    const price = (c.price_cents / 100).toFixed(2) + ' 元';
+    const bonus = c.type === 'stored_value'
+      ? (c.bonus_cents > 0 ? (c.bonus_cents / 100).toFixed(2) + ' 元' : '—')
+      : '—';
+    const valid = c.valid_days > 0 ? c.valid_days + ' 天' : '永久';
+    const statusLabel = c.status === 'active'
+      ? '<span class="badge badge-good">在售</span>'
+      : '<span class="badge badge-muted">已下架</span>';
+    const archiveBtn = c.status === 'active'
+      ? `<button class="btn btn-sm" data-perm="manage:cards" onclick="App.archiveCard('${esc(c.id)}', '${esc(c.name).replace(/'/g, "\\'")}')">下架</button>`
+      : `<button class="btn btn-sm" data-perm="manage:cards" onclick="App.activateCard('${esc(c.id)}')">上架</button>`;
+    return `<tr>
+      <td><strong>${esc(c.name)}</strong>${c.note ? `<div class="text-muted" style="font-size:11px;">${esc(c.note)}</div>` : ''}</td>
+      <td>${typeLabel}</td>
+      <td class="num">${price}</td>
+      <td class="num">${faceOrCount}</td>
+      <td class="num">${bonus}</td>
+      <td>${valid}</td>
+      <td>${statusLabel}</td>
+      <td class="num">${archiveBtn}</td>
+    </tr>`;
+  }
+
+  function renderSoldCardRows() {
+    const rows = state.soldCards || [];
+    if (!rows.length) {
+      return '<div style="padding:20px;">' + renderEmpty('还没有售卡记录', '先在"卡产品"页建卡，再在顾客详情页售卡', 'credit-card') + '</div>';
+    }
+    return `<table class="table">
+      <thead><tr>
+        <th>卡名</th><th>类型</th>
+        <th class="num">余额/剩余</th><th class="num">已付</th>
+        <th>状态</th><th>到期</th><th>购入时间</th><th class="num">操作</th>
+      </tr></thead>
+      <tbody>${rows.map(renderSoldCardRow).join('')}</tbody>
+    </table>`;
+  }
+
+  function renderSoldCardRow(cc) {
+    const bal = cc.type === 'stored_value'
+      ? (cc.balance_cents / 100).toFixed(2) + ' 元'
+      : cc.remaining_count + ' / ' + cc.initial_count + ' 次';
+    const price = (cc.price_cents / 100).toFixed(2) + ' 元';
+    const statusLabel = {
+      active: '<span class="badge badge-good">使用中</span>',
+      depleted: '<span class="badge badge-muted">已耗尽</span>',
+      archived: '<span class="badge badge-muted">已归档</span>',
+      expired: '<span class="badge badge-warn">已过期</span>'
+    }[cc.status] || cc.status;
+    const expires = cc.expires_at ? (cc.expires_at || '').slice(0, 10) : '永久';
+    const purchased = (cc.purchased_at || '').slice(0, 16).replace('T', ' ');
+    return `<tr>
+      <td><strong>${esc(cc.card_name)}</strong></td>
+      <td>${cc.type === 'stored_value' ? '<span class="tag-chip tag-vip">储值</span>' : '<span class="tag-chip tag-new">次卡</span>'}</td>
+      <td class="num"><strong>${bal}</strong></td>
+      <td class="num">${price}</td>
+      <td>${statusLabel}</td>
+      <td class="text-muted text-mono">${expires}</td>
+      <td class="text-muted text-mono" style="font-size:11px;">${purchased}</td>
+      <td class="num">
+        <button class="btn btn-sm" onclick="App.openCustomerCardDetail('${esc(cc.id)}')">明细 / 扣减</button>
+      </td>
+    </tr>`;
+  }
+
+  // 新建 / 编辑卡产品 modal
+  function cardProductModal(existing) {
+    const c = existing || { type: 'stored_value' };
+    const isEdit = !!existing;
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <h2>${isEdit ? '编辑卡产品' : '新建卡产品'}</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>卡名称 <span class="text-muted" style="font-weight:400;">(* 必填，≤ 32 字)</span></label>
+            <input class="input" id="cardName" maxlength="32" placeholder="2000送200 储值卡 / 10次剪发卡" value="${esc(c.name || '')}" />
+          </div>
+          <div class="field">
+            <label>类型</label>
+            <select class="select" id="cardType" onchange="App.toggleCardTypeFields()" ${isEdit ? 'disabled' : ''}>
+              <option value="stored_value" ${c.type === 'stored_value' ? 'selected' : ''}>储值卡（金额扣减）</option>
+              <option value="count" ${c.type === 'count' ? 'selected' : ''}>次卡（次数扣减）</option>
+            </select>
+          </div>
+          <div id="cardTypeFieldsStored" style="display:${c.type === 'stored_value' ? 'block' : 'none'};">
+            <div class="field">
+              <label>实付金额（元）<span class="text-muted" style="font-weight:400;">(* 顾客付多少)</span></label>
+              <input class="input" id="cardPriceYuan" type="number" step="0.01" min="0" value="${c.price_cents ? (c.price_cents/100).toFixed(2) : ''}" placeholder="2000.00" />
+            </div>
+            <div class="field">
+              <label>面值（元）<span class="text-muted" style="font-weight:400;">(* 本金，≥ 实付)</span></label>
+              <input class="input" id="cardFaceYuan" type="number" step="0.01" min="0" value="${c.face_value_cents ? (c.face_value_cents/100).toFixed(2) : ''}" placeholder="2000.00" />
+            </div>
+            <div class="field">
+              <label>赠送金额（元）<span class="text-muted" style="font-weight:400;">（可选，例：2000 送 200 填 200）</span></label>
+              <input class="input" id="cardBonusYuan" type="number" step="0.01" min="0" value="${c.bonus_cents ? (c.bonus_cents/100).toFixed(2) : ''}" placeholder="0 或 200.00" />
+            </div>
+            <div class="text-muted" style="font-size:11px;">⚠ 到账总额 = 面值 + 赠送，必须 ≥ 实付金额</div>
+          </div>
+          <div id="cardTypeFieldsCount" style="display:${c.type === 'count' ? 'block' : 'none'};">
+            <div class="field">
+              <label>关联服务 <span class="text-muted" style="font-weight:400;">(* 必填)</span></label>
+              <select class="select" id="cardServiceId">
+                <option value="">-- 选择服务 --</option>
+                ${(state.services || []).filter(s => s.is_active).map(s => `<option value="${esc(s.id)}" ${c.service_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label>次数 <span class="text-muted" style="font-weight:400;">(* 顾客拿到几次)</span></label>
+              <input class="input" id="cardTotalCount" type="number" min="1" value="${c.total_count || ''}" placeholder="10" />
+            </div>
+            <div class="field">
+              <label>实付金额（元）<span class="text-muted" style="font-weight:400;">(* 顾客付多少)</span></label>
+              <input class="input" id="cardPriceYuanCount" type="number" step="0.01" min="0" value="${c.price_cents ? (c.price_cents/100).toFixed(2) : ''}" placeholder="800.00" />
+            </div>
+          </div>
+          <div class="field">
+            <label>有效期（天）<span class="text-muted" style="font-weight:400;">（0 = 永久）</span></label>
+            <input class="input" id="cardValidDays" type="number" min="0" value="${c.valid_days || 365}" />
+          </div>
+          <div class="field">
+            <label>描述（可选，≤ 256 字）</label>
+            <textarea class="textarea" id="cardNote" maxlength="256" rows="2" placeholder="充值 2000 送 200，活动期间">${esc(c.note || '')}</textarea>
+          </div>
+          <div id="cardFormErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitCardForm(${isEdit ? `'${esc(c.id)}'` : 'null'})">${icon('check', 14)} 保存</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // 顾客卡详情 / 扣减 / 调账 modal
+  function customerCardModal() {
+    if (state.ccDetailLoading || !state.ccDetail) {
+      return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+        <div class="modal lg"><div class="modal-head"><h2>顾客卡详情</h2>
+        <div class="spacer"></div><button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button></div>
+        <div class="modal-body">${renderSkeleton(6)}</div></div></div>`;
+    }
+    const cc = state.ccDetail;
+    const isSV = cc.type === 'stored_value';
+    const bal = isSV
+      ? (cc.balance_cents / 100).toFixed(2) + ' 元'
+      : cc.remaining_count + ' / ' + cc.initial_count + ' 次';
+    const statusLabel = {
+      active: '<span class="badge badge-good">使用中</span>',
+      depleted: '<span class="badge badge-muted">已耗尽</span>',
+      archived: '<span class="badge badge-muted">已归档</span>',
+      expired: '<span class="badge badge-warn">已过期</span>'
+    }[cc.status] || cc.status;
+    const txs = state.ccTransactions || [];
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal lg">
+        <div class="modal-head">
+          <h2>${esc(cc.card_name)}</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="cust-detail-grid">
+            <div class="k">类型</div><div class="v">${isSV ? '储值卡' : '次卡'} ${cc.service_name ? '· ' + esc(cc.service_name) : ''}</div>
+            <div class="k">余额/剩余</div><div class="v"><strong style="font-size:18px;">${bal}</strong></div>
+            <div class="k">状态</div><div class="v">${statusLabel}</div>
+            <div class="k">实付</div><div class="v">${(cc.price_cents/100).toFixed(2)} 元</div>
+            <div class="k">到期</div><div class="v text-mono">${cc.expires_at ? (cc.expires_at || '').slice(0,10) : '永久'}</div>
+            <div class="k">购入时间</div><div class="v text-mono">${(cc.purchased_at || '').slice(0, 19).replace('T', ' ')}</div>
+            ${cc.note ? `<div class="k">备注</div><div class="v">${esc(cc.note)}</div>` : ''}
+          </div>
+
+          ${cc.status === 'active' ? `
+          <div class="row" style="gap:8px; margin: 16px 0;">
+            <button class="btn btn-primary" onclick="App.openConsumeModal('${esc(cc.id)}', ${isSV})">
+              ${icon('minus', 14)} ${isSV ? '扣减金额' : '扣 1 次'}
+            </button>
+            <button class="btn" data-perm="manage:cards" onclick="App.openAdjustModal('${esc(cc.id)}', '${isSV ? 'stored_value' : 'count'}')">
+              ${icon('edit', 14)} 手动调账
+            </button>
+          </div>` : `
+          <div class="card-pad-sm" style="background: var(--surface-2); border-radius: var(--radius); font-size: 12px; color: var(--ink-muted); margin: 12px 0;">
+            当前状态 <strong>${cc.status}</strong>，不能扣减。手动调增仍可（数据修正场景）。
+          </div>`}
+
+          <div class="section">
+            <div class="section-head">
+              <h2 style="font-size: 13px;">流水 (${txs.length})</h2>
+              <span class="text-muted" style="font-size: 11px;">所有变动留痕，便于审计</span>
+            </div>
+            <div class="card" style="max-height: 320px; overflow-y: auto;">
+              ${txs.length === 0
+                ? '<div style="padding: 20px;">' + renderEmpty('暂无流水', null, 'history') + '</div>'
+                : txs.map(t => renderCardTxRow(t, isSV)).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">关闭</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderCardTxRow(t, isSV) {
+    const typeLabel = {
+      recharge: '<span class="tag-chip tag-new">充值</span>',
+      consume: '<span class="tag-chip" style="background:var(--olive-soft);color:var(--olive);">扣减</span>',
+      adjust_up: '<span class="tag-chip tag-vip">调增</span>',
+      adjust_down: '<span class="tag-chip tag-warn">调减</span>'
+    }[t.type] || t.type;
+    const deltaStr = t.delta > 0 ? '+' + t.delta : '' + t.delta;
+    const unit = isSV ? ' 分' : ' 次';
+    const balStr = isSV ? (t.balance_after/100).toFixed(2) + ' 元' : t.balance_after + ' 次';
+    return `<div class="appt-mini">
+      <div style="text-align:center;width:60px;">
+        ${typeLabel}
+      </div>
+      <div style="flex:1;">
+        <div><strong>${deltaStr}${unit}</strong> → 余额 ${balStr}</div>
+        ${t.reason ? `<div class="text-muted" style="font-size:11px;">${esc(t.reason)}</div>` : ''}
+      </div>
+      <div style="text-align:right;font-size:11px;color:var(--ink-muted);">
+        <div>${esc(t.operator_name || 'system')}</div>
+        <div class="text-mono">${(t.created_at || '').slice(0, 16).replace('T', ' ')}</div>
+      </div>
+    </div>`;
+  }
+
+  // 扣减 modal
+  function consumeModal(ccID, isSV) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 460px;">
+        <div class="modal-head"><h2>${isSV ? '扣减金额' : '扣 1 次'}</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          ${isSV ? `
+          <div class="field">
+            <label>扣减金额（元）<span class="text-muted" style="font-weight:400;">(* 必填，≤ 当前余额)</span></label>
+            <input class="input" id="consumeAmountYuan" type="number" step="0.01" min="0.01" placeholder="100.00" />
+          </div>` : `
+          <div class="card-pad-sm" style="background:var(--surface-2); border-radius:var(--radius); font-size:12px;">
+            次卡每次扣减 <strong>1 次</strong>
+          </div>`}
+          <div class="field" style="margin-top:12px;">
+            <label>说明（可选，≤ 256 字）<span class="text-muted" style="font-weight:400;">例：剪发 by 张师傅</span></label>
+            <input class="input" id="consumeReason" maxlength="256" placeholder="剪发 / 染发 / 烫发" />
+          </div>
+          <div id="consumeErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitConsume('${esc(ccID)}', ${isSV})">${icon('check', 14)} 确认扣减</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // 调账 modal — Reason 必填
+  function adjustModal(ccID, type) {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 460px;">
+        <div class="modal-head"><h2>手动调账</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="card-pad-sm" style="background:var(--warn-soft); border-radius:var(--radius); font-size:12px; color:var(--warn); margin-bottom:12px;">
+            ⚠ <strong>调账会写流水留痕</strong>，请准确填写理由。所有调账操作可在「流水」中追溯。
+          </div>
+          <div class="field">
+            <label>方向</label>
+            <select class="select" id="adjustDirection">
+              <option value="up">调增（退款补偿 / 赠送）</option>
+              <option value="down">调减（数据修正 / 退卡冲账）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>金额${type === 'stored_value' ? '（元）' : '（次数）'} <span class="text-muted" style="font-weight:400;">(* 必填，> 0)</span></label>
+            <input class="input" id="adjustAmount" type="number" step="${type === 'stored_value' ? '0.01' : '1'}" min="0.01" placeholder="${type === 'stored_value' ? '100.00' : '1'}" />
+          </div>
+          <div class="field">
+            <label>理由 <span style="color:var(--warn);">* 必填</span> <span class="text-muted" style="font-weight:400;">(≤ 256 字，便于追溯)</span></label>
+            <textarea class="textarea" id="adjustReason" maxlength="256" rows="3" required placeholder="例：顾客反映上次消费多扣 100 元，本次补偿调增"></textarea>
+          </div>
+          <div id="adjustErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitAdjust('${esc(ccID)}')">${icon('check', 14)} 确认调账</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // 售卡 modal（在顾客详情用）
+  function sellCardToCustomerModal(customerId) {
+    const cards = (state.cards || []).filter(c => c.status === 'active');
+    if (!cards.length) {
+      return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+        <div class="modal"><div class="modal-head"><h2>售卡</h2>
+          <div class="spacer"></div><button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button></div>
+        <div class="modal-body"><div class="text-muted">还没有在售的卡产品，请先到「卡管理」建卡</div></div>
+        <div class="modal-foot"><button class="btn" onclick="App.closeModal()">关闭</button></div></div></div>`;
+    }
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 500px;">
+        <div class="modal-head"><h2>售卡给顾客</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>选择卡产品</label>
+            <select class="select" id="sellCardId">
+              ${cards.map(c => `<option value="${esc(c.id)}">${esc(c.name)} — ${(c.price_cents/100).toFixed(2)} 元（${c.type === 'stored_value' ? '储值' : c.total_count + '次'}${c.type === 'stored_value' && c.bonus_cents > 0 ? ' · 送 ' + (c.bonus_cents/100).toFixed(2) : ''}）</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>备注（可选）</label>
+            <input class="input" id="sellNote" maxlength="256" placeholder="生日礼物 / 充值活动" />
+          </div>
+          <div id="sellErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">取消</button>
+          <button class="btn btn-primary" onclick="App.submitSellCard('${esc(customerId)}')">${icon('check', 14)} 确认售出</button>
+        </div>
+      </div>
+    </div>`;
   }
 
   // ---------- Services view (v4.4) ----------
@@ -4074,6 +4469,43 @@ const App = (() => {
             ✓ 该顾客有 <strong>${d.resolved_handoff_count}</strong> 条转人工已被商户处理
           </div>` : ''}
 
+          <!-- 我的卡（v4.15） -->
+          <div class="section">
+            <div class="section-head">
+              <h2 style="font-size: 13px;">我的卡 (${(d.cards || []).length})</h2>
+              <button class="btn btn-sm" data-perm="manage:cards" onclick="App.closeModal();App.openSellCardToCustomerModal('${esc(p.id)}')">${icon('plus', 12)} 售卡</button>
+            </div>
+            <div class="card" style="max-height: 240px; overflow-y: auto;">
+              ${(d.cards || []).length === 0
+                ? '<div style="padding: 16px;" class="text-muted text-center">' + (window.hasOwnProperty('card_management') ? '该顾客还没有卡，点右上「售卡」给TA开一张' : '该顾客还没有卡') + '</div>'
+                : d.cards.map(cc => {
+                    const isSV = cc.type === 'stored_value';
+                    const bal = isSV
+                      ? '<strong style="font-size:16px;">' + (cc.balance_cents/100).toFixed(2) + ' 元</strong>'
+                      : '<strong style="font-size:16px;">' + cc.remaining_count + ' / ' + cc.initial_count + ' 次</strong>';
+                    const statusLabel = {
+                      active: '<span class="badge badge-good">使用中</span>',
+                      depleted: '<span class="badge badge-muted">已耗尽</span>',
+                      archived: '<span class="badge badge-muted">已归档</span>',
+                      expired: '<span class="badge badge-warn">已过期</span>'
+                    }[cc.status] || cc.status;
+                    return `<div class="appt-mini" style="cursor:pointer;" onclick="App.closeModal();App.openCustomerCardDetail('${esc(cc.id)}')" title="点击查看流水 / 扣减">
+                      <div style="width:36px;display:flex;align-items:center;justify-content:center;color:${isSV ? 'var(--brand)' : 'var(--olive)'};">
+                        ${icon('credit-card', 18)}
+                      </div>
+                      <div style="flex:1;">
+                        <div><strong>${esc(cc.card_name)}</strong></div>
+                        <div class="text-muted" style="font-size:11px;">${isSV ? '储值卡' : '次卡 · ' + esc(cc.service_name || '')} · 购于 ${(cc.purchased_at || '').slice(0,10)}</div>
+                      </div>
+                      <div style="text-align:right;">
+                        ${bal}
+                        <div style="margin-top:2px;">${statusLabel}</div>
+                      </div>
+                    </div>`;
+                  }).join('')}
+            </div>
+          </div>
+
           <!-- 最近 20 条预约 -->
           <div class="section">
             <div class="section-head">
@@ -4991,6 +5423,247 @@ const App = (() => {
     }
   }
 
+  // ---------- v4.15 卡管理 ----------
+  function switchCardsTab(tab) {
+    state.cardsTab = tab;
+    const root = $('#view');
+    if (root && state.view === 'cards') root.innerHTML = renderCards();
+    if (tab === 'sold') loadSoldCards();
+    else loadCards();
+  }
+
+  async function loadCards() {
+    const card = $('#cardsCard');
+    try {
+      const data = await api('/api/admin/cards');
+      state.cards = Array.isArray(data) ? data : [];
+      if (state.view === 'cards' && card && state.cardsTab === 'products') {
+        card.innerHTML = renderCardProductRows();
+      }
+    } catch (e) {
+      if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  async function loadSoldCards() {
+    const card = $('#cardsCard');
+    try {
+      const data = await api('/api/admin/cards/sold');
+      state.soldCards = Array.isArray(data) ? data : [];
+      if (state.view === 'cards' && card && state.cardsTab === 'sold') {
+        card.innerHTML = renderSoldCardRows();
+      }
+    } catch (e) {
+      if (card) card.innerHTML = '<div style="padding:20px;">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function openCardModal() {
+    // 需要先确保 services 已加载（次卡要选服务）
+    if (!state.services || !state.services.length) {
+      loadServices().then(() => openModal(cardProductModal(null)));
+    } else {
+      openModal(cardProductModal(null));
+    }
+  }
+
+  function toggleCardTypeFields() {
+    const t = $('#cardType').value;
+    $('#cardTypeFieldsStored').style.display = t === 'stored_value' ? 'block' : 'none';
+    $('#cardTypeFieldsCount').style.display = t === 'count' ? 'block' : 'none';
+  }
+
+  function yuanToCents(s) {
+    const n = parseFloat(s);
+    if (isNaN(n) || n < 0) return -1;
+    return Math.round(n * 100);
+  }
+
+  async function submitCardForm(cardId) {
+    const err = $('#cardFormErr');
+    err.classList.add('hidden');
+    const type = $('#cardType').value;
+    const name = $('#cardName').value.trim();
+    const note = $('#cardNote').value.trim();
+    const validDays = parseInt($('#cardValidDays').value, 10) || 0;
+    if (!name) { err.textContent = '卡名称必填'; err.classList.remove('hidden'); return; }
+    const body = { type, name, note, valid_days: validDays };
+    if (type === 'stored_value') {
+      const price = yuanToCents($('#cardPriceYuan').value);
+      const face = yuanToCents($('#cardFaceYuan').value);
+      const bonus = yuanToCents($('#cardBonusYuan').value);
+      if (price <= 0 || face <= 0 || bonus < 0) {
+        err.textContent = '储值卡：实付 / 面值 必须 > 0，赠送 ≥ 0'; err.classList.remove('hidden'); return;
+      }
+      if (face + bonus < price) {
+        err.textContent = '到账总额（面值+赠送）必须 ≥ 实付金额'; err.classList.remove('hidden'); return;
+      }
+      body.price_cents = price;
+      body.face_value_cents = face;
+      body.bonus_cents = bonus;
+    } else {
+      const serviceId = $('#cardServiceId').value;
+      const totalCount = parseInt($('#cardTotalCount').value, 10);
+      const price = yuanToCents($('#cardPriceYuanCount').value);
+      if (!serviceId) { err.textContent = '次卡必须选择关联服务'; err.classList.remove('hidden'); return; }
+      if (!totalCount || totalCount <= 0) { err.textContent = '次卡次数必须 > 0'; err.classList.remove('hidden'); return; }
+      if (price <= 0) { err.textContent = '次卡实付金额必须 > 0'; err.classList.remove('hidden'); return; }
+      body.service_id = serviceId;
+      body.total_count = totalCount;
+      body.price_cents = price;
+    }
+    try {
+      if (cardId) {
+        await api(`/api/admin/cards/${encodeURIComponent(cardId)}`, { method: 'PUT', body });
+      } else {
+        await api('/api/admin/cards', { method: 'POST', body });
+      }
+      closeModal();
+      loadCards();
+    } catch (e) {
+      err.textContent = e.message;
+      err.classList.remove('hidden');
+    }
+  }
+
+  async function archiveCard(cardId, name) {
+    if (!confirm(`下架卡产品「${name}」？如仍有未耗尽的顾客卡，下架会被拒`)) return;
+    try {
+      await api(`/api/admin/cards/${encodeURIComponent(cardId)}/archive`, { method: 'POST' });
+      loadCards();
+    } catch (e) {
+      alert('下架失败：' + e.message);
+    }
+  }
+
+  async function activateCard(cardId) {
+    try {
+      await api(`/api/admin/cards/${encodeURIComponent(cardId)}/activate`, { method: 'POST' });
+      loadCards();
+    } catch (e) {
+      alert('上架失败：' + e.message);
+    }
+  }
+
+  async function openCustomerCardDetail(ccId) {
+    state.ccDetail = null;
+    state.ccTransactions = [];
+    state.ccDetailLoading = true;
+    openModal(customerCardModal());
+    try {
+      // 通过 soldCards 列表里的快照找 cc
+      const all = state.soldCards || [];
+      const cc = all.find(c => c.id === ccId);
+      state.ccDetail = cc || null;
+      state.ccDetailLoading = false;
+      openModal(customerCardModal());
+      // 拉流水
+      const txs = await api(`/api/admin/customer-cards/${encodeURIComponent(ccId)}/transactions`);
+      state.ccTransactions = Array.isArray(txs) ? txs : [];
+      openModal(customerCardModal());
+    } catch (e) {
+      state.ccDetailLoading = false;
+      alert('加载失败：' + e.message);
+    }
+  }
+
+  function openConsumeModal(ccId, isSV) {
+    openModal(consumeModal(ccId, isSV));
+  }
+
+  async function submitConsume(ccId, isSV) {
+    const err = $('#consumeErr');
+    err.classList.add('hidden');
+    const reason = $('#consumeReason').value.trim();
+    const body = { reason };
+    if (isSV) {
+      const cents = yuanToCents($('#consumeAmountYuan').value);
+      if (cents <= 0) {
+        err.textContent = '扣减金额必须 > 0'; err.classList.remove('hidden'); return;
+      }
+      body.amount_cents = cents;
+    }
+    try {
+      await api(`/api/admin/customer-cards/${encodeURIComponent(ccId)}/consume`, { method: 'POST', body });
+      closeModal();
+      // 重新拉数据
+      state.ccDetail = null;
+      await openCustomerCardDetail(ccId);
+      // 同步刷新 sold 列表
+      loadSoldCards();
+      loadCards();
+    } catch (e) {
+      err.textContent = e.message;
+      err.classList.remove('hidden');
+    }
+  }
+
+  function openAdjustModal(ccId, type) {
+    openModal(adjustModal(ccId, type));
+  }
+
+  async function submitAdjust(ccId) {
+    const err = $('#adjustErr');
+    err.classList.add('hidden');
+    const direction = $('#adjustDirection').value;
+    const reason = $('#adjustReason').value.trim();
+    const amountEl = $('#adjustAmount');
+    const amount = parseFloat(amountEl.value);
+    if (!reason) {
+      err.textContent = '调账理由必填（追溯要求）'; err.classList.remove('hidden'); return;
+    }
+    if (!amount || amount <= 0) {
+      err.textContent = '调账金额必须 > 0'; err.classList.remove('hidden'); return;
+    }
+    const body = { direction, reason };
+    // 储值传分，次卡传次数
+    if (state.ccDetail && state.ccDetail.type === 'stored_value') {
+      body.amount_cents = Math.round(amount * 100);
+    } else {
+      body.amount_cents = Math.round(amount);
+    }
+    try {
+      await api(`/api/admin/customer-cards/${encodeURIComponent(ccId)}/adjust`, { method: 'POST', body });
+      closeModal();
+      state.ccDetail = null;
+      await openCustomerCardDetail(ccId);
+      loadSoldCards();
+      loadCards();
+    } catch (e) {
+      err.textContent = e.message;
+      err.classList.remove('hidden');
+    }
+  }
+
+  function openSellCardToCustomerModal(customerId) {
+    if (!state.cards || !state.cards.length) {
+      loadCards().then(() => openModal(sellCardToCustomerModal(customerId)));
+    } else {
+      openModal(sellCardToCustomerModal(customerId));
+    }
+  }
+
+  async function submitSellCard(customerId) {
+    const err = $('#sellErr');
+    err.classList.add('hidden');
+    const cardId = $('#sellCardId').value;
+    const note = $('#sellNote').value.trim();
+    if (!cardId) { err.textContent = '请选择卡产品'; err.classList.remove('hidden'); return; }
+    try {
+      await api(`/api/admin/customers/${encodeURIComponent(customerId)}/cards/sell`, {
+        method: 'POST', body: { card_id: cardId, note }
+      });
+      closeModal();
+      // 重新打开顾客详情以刷新「我的卡」tab
+      if (state.customerDetail && state.customerDetail.profile && state.customerDetail.profile.id === customerId) {
+        openCustomerDetail(customerId);
+      }
+    } catch (e) {
+      err.textContent = e.message;
+      err.classList.remove('hidden');
+    }
+  }
+
   async function loadMembers() {
     const card = $('#membersCard');
     try {
@@ -5683,6 +6356,7 @@ const App = (() => {
     else if (state.view === 'shops') loadShops();
     else if (state.view === 'customers') loadCustomers();
     else if (state.view === 'services') loadServices();
+    else if (state.view === 'cards') loadCards();
     else if (state.view === 'subscription') loadSubscription();
     else if (state.view === 'shop') loadShop();
     else if (state.view === 'weekly') loadWeekly();
@@ -5771,6 +6445,14 @@ const App = (() => {
     openPlatformSetPlanModal, submitPlatformSetPlan, openPlatformShopDetail,
     // v4.13.0 audit 抓到的：onclick 调了但没暴露
     setView, exportAppointmentsCSV,
+    // v4.15 卡管理
+    loadCards, loadSoldCards, switchCardsTab,
+    openCardModal, toggleCardTypeFields, submitCardForm,
+    archiveCard, activateCard,
+    openCustomerCardDetail,
+    openConsumeModal, submitConsume,
+    openAdjustModal, submitAdjust,
+    openSellCardToCustomerModal, submitSellCard,
   };
 })();
 
