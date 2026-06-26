@@ -1203,7 +1203,7 @@ func cancelLeaveHandler(ctx context.Context, c *app.RequestContext) {
 	if err != nil {
 		// 已开始 → 409 Conflict；其他 → 500
 		if errors.Is(err, storage.ErrLeaveNotCancellable) {
-			c.JSON(http.StatusConflict, map[string]string{"error": err.Error() + "（leave has already started, cannot cancel）"})
+			c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		if strings.Contains(err.Error(), "已是 cancelled") {

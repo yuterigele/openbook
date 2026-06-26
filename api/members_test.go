@@ -120,6 +120,54 @@ func TestListMembers_OwnerOK(t *testing.T) {
 	}
 }
 
+// v4.14：owner 查成员列表，看不到 platform_admin 行（隐私 + 信息隔离）
+func TestListMembers_OwnerHidesPlatformAdmin(t *testing.T) {
+	setupAPITestDB(t)
+	owner, staff := setupShopWithOwnerAndStaff(t)
+
+	// 强行塞一个 platform_admin 进同店（虽然是 platform_admin，但 shop_id 跟普通成员一样）
+	platformRec := storage.MakeAdminWithRole(t, owner.ShopID,
+		storage.ShortTestUsername(t, "plat"), storage.RolePlatformAdmin)
+
+	ctx := newAPIContext(t, "GET", "/api/admin/members", nil)
+	setClaimsForAdmin(ctx, owner.ID, owner.ShopID, owner.Role)
+	status, body := runWithPerm(t, storage.PermManageMembers, listMembersHandler, ctx)
+	if status != 200 {
+		t.Fatalf("owner 应能列成员, status=%d body=%s", status, body)
+	}
+	if !strings.Contains(body, owner.Username) {
+		t.Errorf("响应缺 owner: %s", body)
+	}
+	if !strings.Contains(body, staff.Username) {
+		t.Errorf("响应缺 staff: %s", body)
+	}
+	if strings.Contains(body, platformRec.Username) {
+		t.Errorf("v4.14 隐私：owner 查成员列表不应看到 platform_admin 行（username=%s）", platformRec.Username)
+	}
+}
+
+// v4.14：platform_admin 自己查成员列表，能看到所有 platform_admin 行
+func TestListMembers_PlatformAdminSeesPlatformAdmins(t *testing.T) {
+	setupAPITestDB(t)
+	owner, _ := setupShopWithOwnerAndStaff(t)
+
+	platformRec := storage.MakeAdminWithRole(t, owner.ShopID,
+		storage.ShortTestUsername(t, "plat"), storage.RolePlatformAdmin)
+
+	ctx := newAPIContext(t, "GET", "/api/admin/members", nil)
+	setClaimsForAdmin(ctx, platformRec.ID, owner.ShopID, storage.RolePlatformAdmin)
+	status, body := runWithPerm(t, storage.PermManageMembers, listMembersHandler, ctx)
+	if status != 200 {
+		t.Fatalf("platform_admin 应能列成员, status=%d body=%s", status, body)
+	}
+	if !strings.Contains(body, platformRec.Username) {
+		t.Errorf("platform_admin viewer 应能看到 platform_admin 行: %s", body)
+	}
+	if !strings.Contains(body, owner.Username) {
+		t.Errorf("platform_admin viewer 应能看到 owner 行: %s", body)
+	}
+}
+
 // ============================================================
 // createMemberHandler
 // ============================================================

@@ -59,7 +59,8 @@ const (
 // ErrLeaveNotCancellable 当前请假已开始，不能撤销
 //
 // 商户想撤销一个 active 但已开始的请假会被这个错挡掉。
-var ErrLeaveNotCancellable = errors.New("leave has already started, cannot cancel; please wait for natural expiry")
+// v4.14 改中文：API 层不再追加英文 error，避免 UI 出现「...cannot cancel（...cannot cancel）」重复。
+var ErrLeaveNotCancellable = errors.New("请假已开始，不能撤销；请等自然结束")
 
 // NotificationSender 旧版顾客通知发送器（仅保留兼容测试）
 //

@@ -404,6 +404,13 @@ func TestCancelLeave_AfterStart_Fails(t *testing.T) {
 	if !errors.Is(err, ErrLeaveNotCancellable) {
 		t.Fatalf("expected ErrLeaveNotCancellable, got %v", err)
 	}
+	// v4.14 修：错误文案中文且不再重复 'cannot cancel'
+	if strings.Contains(err.Error(), "cannot cancel") {
+		t.Errorf("error 应该是中文文案，不该再含 'cannot cancel' 英文重复: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "请等自然结束") {
+		t.Errorf("error 应明确告诉用户'请等自然结束': %q", err.Error())
+	}
 }
 
 func TestCancelLeave_AlreadyCancelled_Fails(t *testing.T) {

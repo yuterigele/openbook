@@ -1231,7 +1231,7 @@
         </svg>
       </div>
       <div class="brand-text">
-        <span class="t1">美发预约助手</span>
+        <span class="t1">简法预约助手</span>
         <span class="t2">商户工作台</span>
       </div>
     </div>
@@ -1959,6 +1959,7 @@ const App = (() => {
     if (!rows.length) {
       return '<div style="padding:20px;">' + renderEmpty('没有请假记录', '到「理发师」页给某位师傅请假，会出现在这里', 'calendar') + '</div>';
     }
+    const now = Date.now();
     return `<table class="table">
       <thead><tr>
         <th>理发师</th>
@@ -1988,8 +1989,15 @@ const App = (() => {
           : endStr;
         const createdStr = (l.created_at || '').slice(0, 16).replace('T', ' ');
         const ops = [];
+        // v4.14：只有 active + 还没开始的 leave 才能撤销
+        //   已开始的（start_at <= now）只能等自然过期，撤销按钮置灰
         if (l.status === 'active') {
-          ops.push(`<button class="btn btn-sm btn-danger" onclick="App.cancelLeave('${l.id}')">撤销</button>`);
+          const startAt = l.start_at ? new Date(l.start_at).getTime() : 0;
+          if (startAt > now) {
+            ops.push(`<button class="btn btn-sm btn-danger" onclick="App.cancelLeave('${l.id}')">撤销</button>`);
+          } else {
+            ops.push(`<button class="btn btn-sm" disabled title="请假已开始，不能撤销；请等自然到期">已开始</button>`);
+          }
         }
         return `<tr>
           <td><strong>${esc(l.barber_name || '—')}</strong></td>

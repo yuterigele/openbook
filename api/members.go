@@ -70,6 +70,10 @@ type ResetPasswordRequest struct {
 //
 // 注：staff 不应看到此入口，但前端已经在 staff 视图下隐藏 nav
 // 后端再加一道防线
+//
+// v4.14 隐私修复：低权限（owner / staff）viewer 看不到 platform_admin 行。
+//   平台超管是跨店全局账号，跟 owner 没有业务关联，没必要显示在店主成员列表里。
+//   只 platform_admin 自己查看时才返 platform_admin 行。
 func listMembersHandler(ctx context.Context, c *app.RequestContext) {
 	shopID := shopFromClaims(c)
 	if shopID == "" {
@@ -79,6 +83,11 @@ func listMembersHandler(ctx context.Context, c *app.RequestContext) {
 	if storage.DB == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})
 		return
+	}
+	// v4.14：拿当前 viewer 的 role，决定要不要过滤掉 platform_admin
+	viewerIsPlatform := false
+	if cl := auth.GetClaims(c); cl != nil {
+		viewerIsPlatform = cl.Role == storage.RolePlatformAdmin
 	}
 	var rows []storage.ShopAdmin
 	if err := storage.DB.WithContext(ctx).
@@ -90,6 +99,10 @@ func listMembersHandler(ctx context.Context, c *app.RequestContext) {
 	}
 	out := make([]MemberItem, 0, len(rows))
 	for _, r := range rows {
+		// v4.14 隐私：低权限 viewer 看不到 platform_admin 行
+		if !viewerIsPlatform && r.Role == storage.RolePlatformAdmin {
+			continue
+		}
 		out = append(out, MemberItem{
 			ID:          r.ID,
 			ShopID:      r.ShopID,
