@@ -59,10 +59,17 @@ func buildAgentInstruction() string {
 		"    2) history 找不到（顾客是历史会话/新会话）才问：'请把您的预约号告诉我，或者留个手机号我帮您查最近一笔'。\n" +
 		"    3) **绝对不要**无脑问'请提供预约号'——这是死循环，顾客根本不知道。\n" +
 		"  - 改时间：先取消旧预约（用上面的 ID），再创建新预约。\n\n" +
+		"【师傅名必须用工具返回值（v4.13.6 必读）】\n" +
+		"  - **绝对不要**凭上下文印象 / 顾客原话里的师傅名说'已帮您约好 XXX'。\n" +
+		"  - create_appointment / cancel_appointment / list_barbers 工具返回里写的是哪个师傅，最终回复就报哪个师傅。\n" +
+		"  - 反例：顾客说'老王不在吗' → 工具返回 barber_name='Tony' → 不能回'已帮您约好老王'，必须回'Tony'。\n" +
+		"  - 反例：leave 改派后 barber_name 从'老王'变成'Tony'，最终回复必须用新名字。\n\n" +
 		"你的能力（按使用频率排序）：\n" +
 		"  - query_schedule：查某师傅某天的可约时段（**创建预约前必调**）\n" +
 		"  - create_appointment：创建预约（**先 query_schedule 再调**）\n" +
 		"  - cancel_appointment：取消预约（已过时间的改用 mark_no_show）\n" +
+		"  - **get_appointment（v4.13.6 新增）**：查预约当前真实状态（理发师/时间/状态）。**改时间 / 取消前必调**——\n" +
+		"    history 里的 barber_name 可能是旧的（leave 改派后已变），必须用本工具拿真实 barber_name 再调后续工具。\n" +
 		"  - list_barbers：列本店师傅（含今日请假标注）\n" +
 		"  - list_services：列本店服务项目（顾客问价格/项目时调）\n" +
 		"  - barber_leave：查某师傅某天的请假详情（顾客问「为什么没空」时调）\n" +
@@ -121,7 +128,9 @@ func buildAgentInstruction() string {
 		"你：**从本会话 history 找最近一次 create_appointment 的返回值**（上例的 'A1B2C3D'），直接调 cancel_appointment(appointment_id='A1B2C3D')。\n" +
 		"若工具返回晚退订警告，按【晚退订】话术温和提醒。\n\n" +
 		"用户：我想改到 4 点\n" +
-		"你：先从 history 取上次的预约号（A1B2C3D），调 cancel_appointment 取消；再 query_schedule 查 Tony 16:00 空闲；最后调 create_appointment 约 16:00。回复时**告诉新预约号**：「好的，已帮您改到 16:00，**新预约号 B9X8Y7Z，建议截图保存**~」\n\n" +
+		"你（v4.13.6 改）：**先调 get_appointment(appointment_id=A1B2C3D) 拿当前真实 barber_name**（leave 改派后可能是别人），\n" +
+		"再用真实 barber_name 调 cancel_appointment 取消；再 query_schedule 查那个师傅 16:00 空闲；最后调 create_appointment 约 16:00。\n" +
+		"回复时**告诉新预约号**：「好的，已帮您改到 16:00，**新预约号 B9X8Y7Z，建议截图保存**~」\n\n" +
 		"用户：我要投诉 / 退款\n" +
 		"你：调 handoff_to_human，回「好的，我帮您转给店员，请稍等」。"
 }
@@ -184,6 +193,7 @@ func buildAgentTyped[M adk.MessageType](ctx context.Context) (adk.TypedResumable
 				&tools.ListBarbersTool{},
 				&tools.ListServicesTool{},
 				&tools.BarberLeaveTool{},
+				&tools.GetAppointmentTool{}, // v4.13.6：改时间前必调，防 leave 改派后用旧 barber
 				&tools.HandoffToHumanTool{},
 			},
 			},

@@ -83,6 +83,23 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 				"方便留个手机号吗",      // 创建前要手机号
 			},
 		},
+		{
+			desc: "【v4.13.6】师傅名必须用工具返回值，不凭印象",
+			mustHave: []string{
+				"师傅名必须用工具返回值",
+				"凭上下文印象",              // 反例触发词
+				"create_appointment / cancel_appointment / list_barbers 工具返回里写的是哪个师傅", // 强约束
+				"leave 改派后",                // 反例
+			},
+		},
+		{
+			desc: "【v4.13.6】get_appointment 改时间前必调",
+			mustHave: []string{
+				"get_appointment",
+				"改时间 / 取消前必调",          // 关键约束
+				"history 里的 barber_name 可能是旧的", // 为什么必调
+			},
+		},
 	}
 
 	for _, check := range checks {

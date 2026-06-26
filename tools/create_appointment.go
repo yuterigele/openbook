@@ -220,11 +220,25 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		// v4.13.0 隐私保护：永远显示"临时有事"，不暴露 leave.Reason 内部原因
 		//   之前会把"痔疮手术""陪老婆产检"等敏感字眼直接拼到错误消息里
 		//   LLM 拿到后会复述给顾客 → 改 hardcode "临时有事"
+		//
+		// v4.13.6 区间裁剪：把 leave 区间裁到 params.Date 当天 [00:00, 23:59:59]，
+		//   避免跨日 leave 拼出"06-27 11:15"这种尾巴，LLM 拿到会口语化成"明天上午"
+		//   让只关心今天的顾客一脸懵。同日裁剪后只显示 HH:MM（不带日期）。
+		dispStart, dispEnd := clipLeaveToDate(leave.StartAt, leave.EndAt, params.Date, loc)
+		sameDay := isSameYMD(dispStart, dispEnd, loc)
+		var startStr, endStr string
+		if sameDay {
+			startStr = dispStart.In(loc).Format("15:04")
+			endStr = dispEnd.In(loc).Format("15:04")
+		} else {
+			startStr = dispStart.In(loc).Format("01-02 15:04")
+			endStr = dispEnd.In(loc).Format("01-02 15:04")
+		}
 		return "", fmt.Errorf(
 			"%s 师傅在 %s 至 %s 临时有事，要不要换 Kevin 师傅或换个时间？",
 			params.BarberName,
-			leave.StartAt.In(loc).Format("01-02 15:04"),
-			leave.EndAt.In(loc).Format("01-02 15:04"),
+			startStr,
+			endStr,
 		)
 	}
 
@@ -280,4 +294,42 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		appointment.Time,
 		appointment.Service,
 	), nil
+}
+
+// clipLeaveToDate 把 leave 区间裁到 date 当天 [00:00:00, 23:59:59.999999999]
+//
+//   - v4.13.6：顾客问"今天 14:00" → 错误消息只该显示今天的区间；
+//     否则 leave 跨日（如 10:15 今天 至 11:15 明天）会被 LLM 口语化成"明天上午"，
+//     顾客只关心今天，看到会一脸懵。
+//   - 调用方先用 isSameYMD 决定显示格式：同日显示 HH:MM，跨日才带 MM-DD。
+func clipLeaveToDate(startAt, endAt time.Time, date string, loc *time.Location) (time.Time, time.Time) {
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	dayStart, err := time.ParseInLocation("2006-01-02", date, loc)
+	if err != nil {
+		// date 解析失败兜底：原样返回，行为跟 v4.13.5 之前一致（不裁剪）
+		return startAt, endAt
+	}
+	dayEnd := dayStart.Add(24 * time.Hour).Add(-time.Nanosecond)
+	clippedStart := startAt
+	if clippedStart.Before(dayStart) {
+		clippedStart = dayStart
+	}
+	clippedEnd := endAt
+	if clippedEnd.After(dayEnd) {
+		clippedEnd = dayEnd
+	}
+	return clippedStart, clippedEnd
+}
+
+// isSameYMD 判断两个时间是否在 loc 时区的同一天
+//
+//   - 给 create_appointment 错误消息用：同日 → "10:15-18:00"，跨日 → "10:15 至次日 11:15"
+//   - 用 In(loc) 后取 Y-M-D 比较，避开 time.Truncate 跨夏令时的坑
+func isSameYMD(a, b time.Time, loc *time.Location) bool {
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	return a.In(loc).Format("2006-01-02") == b.In(loc).Format("2006-01-02")
 }

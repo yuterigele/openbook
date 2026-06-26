@@ -242,6 +242,73 @@ func TestCreateAppointment_OtherBarberOnLeave_Allowed(t *testing.T) {
 	}
 }
 
+// ===================== v4.13.6：跨日 leave → 错误消息裁到当天，不带"明天上午"尾巴 =====================
+//
+// 业务背景：prod 复现 — leave 跨日（如 10:15 今天 → 11:15 明天），
+//   v4.13.5 之前错误消息直接拼 "06-26 10:15 至 06-27 11:15"，LLM 口语化成"从今天上午一直
+//   到明天上午"。顾客只关心今天的 14:00，看到"明天上午"一脸懵。
+//   v4.13.6 裁到 params.Date 当天 [00:00, 23:59:59]；同日显示 HH:MM，跨日才带 MM-DD。
+func TestCreateAppointment_LeaveCrossDay_ErrorClipsToDate(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	_ = storage.MakeCustomer(t, "Alice", 0, 0)
+
+	// 顾客问今天 14:00
+	date, _, args := buildApptArgs("Alice", "Tony", 2)
+
+	// Tony 从今天 10:15 请假到明天 11:15（跨日，模拟 prod 那个 25h leave）
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, time.Local)
+	storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(10*time.Hour+15*time.Minute), dayStart.Add(33*time.Hour+15*time.Minute),
+		storage.LeaveActionCancel)
+
+	out, err := runCreate(t, shop.ID, args)
+	if err == nil {
+		t.Fatalf("expected error when barber on leave, got out=%q", out)
+	}
+	// 关键断言：错误消息里不能再出现明天的日期（"明天" / "06-27" 都不行）
+	if strings.Contains(err.Error(), "明天") {
+		t.Errorf("error should NOT mention '明天' (cross-day clipped), got %q", err.Error())
+	}
+	// 关键断言：必须出现今天 10:15 起头（说明裁到当天了）
+	if !strings.Contains(err.Error(), "10:15") {
+		t.Errorf("error should show today's clipped start HH:MM, got %q", err.Error())
+	}
+	// 同日裁剪后只显示 HH:MM（不带日期前缀），end 是 23:59
+	if !strings.Contains(err.Error(), "10:15 至 23:59") {
+		t.Errorf("error should show '10:15 至 23:59' (same-day HH:MM, no date prefix), got %q", err.Error())
+	}
+	_ = out
+}
+
+// 验证：leave 已经在今天范围内（10:15 → 18:00），错误消息直接显示 HH:MM 不变
+func TestCreateAppointment_LeaveSameDay_ErrorShowsHHMM(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+	_ = storage.MakeCustomer(t, "Alice", 0, 0)
+
+	date, _, args := buildApptArgs("Alice", "Tony", 2)
+
+	// 当天 10:00 → 18:00 请假，覆盖 14:00
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, time.Local)
+	storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(10*time.Hour), dayStart.Add(18*time.Hour), storage.LeaveActionCancel)
+
+	_, err := runCreate(t, shop.ID, args)
+	if err == nil {
+		t.Fatalf("expected error when barber on leave, got nil")
+	}
+	if !strings.Contains(err.Error(), "10:00 至 18:00") {
+		t.Errorf("error should show '10:00 至 18:00' (no date prefix for same-day), got %q", err.Error())
+	}
+	// 不该出现日期前缀
+	if strings.Contains(err.Error(), "06-") {
+		t.Errorf("error should NOT show date prefix for same-day, got %q", err.Error())
+	}
+}
+
 // ===================== v4.13.1：顾客纠正姓名必须同步到 customers.name =====================
 //
 // 业务背景：之前 upsertCustomerInTx 命中现有顾客时只回填 phone / openID / external_user_id，
