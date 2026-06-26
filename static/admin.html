@@ -3965,6 +3965,12 @@ const App = (() => {
     else if (kind === 'platformSetPlan') body = platformSetPlanModal(data);
     else if (kind === 'platformShopDetail') { body = platformShopDetailModal(); }
     else if (kind === 'apiKeyCreate') body = apiKeyCreateModal();
+    // v4.15 卡管理 modals
+    else if (kind === 'cardProduct') body = cardProductModal(data && data.existing);
+    else if (kind === 'cardConsume') body = consumeModal(data.ccId, data.isSV);
+    else if (kind === 'cardAdjust') body = adjustModal(data.ccId, data.type);
+    else if (kind === 'sellCard') body = sellCardToCustomerModal(data.customerId);
+    else if (kind === 'customerCard') body = customerCardModal();
     else return;
     root.innerHTML = body;
     // wire submit buttons by id
@@ -5426,7 +5432,7 @@ const App = (() => {
   // ---------- v4.15 卡管理 ----------
   function switchCardsTab(tab) {
     state.cardsTab = tab;
-    const root = $('#view');
+    const root = $('#content');
     if (root && state.view === 'cards') root.innerHTML = renderCards();
     if (tab === 'sold') loadSoldCards();
     else loadCards();
@@ -5461,9 +5467,9 @@ const App = (() => {
   function openCardModal() {
     // 需要先确保 services 已加载（次卡要选服务）
     if (!state.services || !state.services.length) {
-      loadServices().then(() => openModal(cardProductModal(null)));
+      loadServices().then(() => openModal('cardProduct', { existing: null }));
     } else {
-      openModal(cardProductModal(null));
+      openModal('cardProduct', { existing: null });
     }
   }
 
@@ -5549,18 +5555,18 @@ const App = (() => {
     state.ccDetail = null;
     state.ccTransactions = [];
     state.ccDetailLoading = true;
-    openModal(customerCardModal());
+    openModal('customerCard');
     try {
       // 通过 soldCards 列表里的快照找 cc
       const all = state.soldCards || [];
       const cc = all.find(c => c.id === ccId);
       state.ccDetail = cc || null;
       state.ccDetailLoading = false;
-      openModal(customerCardModal());
+      openModal('customerCard');
       // 拉流水
       const txs = await api(`/api/admin/customer-cards/${encodeURIComponent(ccId)}/transactions`);
       state.ccTransactions = Array.isArray(txs) ? txs : [];
-      openModal(customerCardModal());
+      openModal('customerCard');
     } catch (e) {
       state.ccDetailLoading = false;
       alert('加载失败：' + e.message);
@@ -5568,7 +5574,7 @@ const App = (() => {
   }
 
   function openConsumeModal(ccId, isSV) {
-    openModal(consumeModal(ccId, isSV));
+    openModal('cardConsume', { ccId, isSV });
   }
 
   async function submitConsume(ccId, isSV) {
@@ -5599,7 +5605,7 @@ const App = (() => {
   }
 
   function openAdjustModal(ccId, type) {
-    openModal(adjustModal(ccId, type));
+    openModal('cardAdjust', { ccId, type });
   }
 
   async function submitAdjust(ccId) {
@@ -5637,9 +5643,9 @@ const App = (() => {
 
   function openSellCardToCustomerModal(customerId) {
     if (!state.cards || !state.cards.length) {
-      loadCards().then(() => openModal(sellCardToCustomerModal(customerId)));
+      loadCards().then(() => openModal('sellCard', { customerId }));
     } else {
-      openModal(sellCardToCustomerModal(customerId));
+      openModal('sellCard', { customerId });
     }
   }
 
