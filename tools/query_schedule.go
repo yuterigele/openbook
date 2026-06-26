@@ -118,13 +118,16 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 	}
 
 	// 请假占用段（v3.6 新增，PRD §11.7.10）
-	// v4.13.0 隐私保护：移除 lb.Reason（内部原因可能含敏感字眼），只返"HH:MM-HH:MM" 区间
-	//   之前会把"痔疮手术"等敏感字眼拼到输出，LLM 拿到后会复述给顾客
+	// v4.13.0 隐私保护：移除 lb.Reason（内部原因可能含敏感字眼），只返区间
+	// v4.13.7 跨日带日期：跨日 leave 必须显示日期前缀，否则 LLM 看到 12:15 会误读为"今天 12:15 结束"
+	//   显示规则：
+	//     - 同日（同 StartDate == EndDate == params.Date）：只显示 HH:MM-HH:MM
+	//     - 跨日（EndDate > params.Date）：显示 "MM-DD HH:MM 至 次日 HH:MM"（明确告诉 LLM 是跨日）
 	if len(breakdown.LeaveBlocks) > 0 {
 		result += "\n师傅请假占用："
 		parts := make([]string, 0, len(breakdown.LeaveBlocks))
 		for _, lb := range breakdown.LeaveBlocks {
-			parts = append(parts, fmt.Sprintf("%s-%s", lb.StartHM, lb.EndHM))
+			parts = append(parts, formatLeaveRange(lb, params.Date, loc))
 		}
 		result += strings.Join(parts, "、")
 		result += "\n（这些时段是师傅临时有事，建议换时间或换其他理发师）"
@@ -149,4 +152,48 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 //   func toBarberLeaves(blocks []storage.LeaveBlock, dayStart time.Time) []storage.BarberLeave
 //   func isFullDayLeave(leaves []storage.BarberLeave, dayStart time.Time) bool
 // ）
+
+// formatLeaveRange 把 LeaveBlock 渲染成 query_schedule 文案里的一段
+//
+// v4.13.7 跨日 leave 必须显式带日期（"次日" 或 "MM-DD"），
+// 否则 LLM 拿到 "10:15-11:15、11:15-12:15" 会把 12:15 误读为"今天 12:15 结束"，
+// 但实际 leave 是跨日的，end_at 是明天 12:15，今天全天都在请假中。
+//
+// 显示规则（按 params.Date）：
+//   - 同日（StartDate == EndDate == params.Date）："10:15-12:00"（最干净）
+//   - 跨日，end 是 params.Date +1 天："MM-DD HH:MM 至 次日 HH:MM"（防 LLM 误读为"今天结束"）
+//   - 跨日，end 是 params.Date +N 天（N>=2）："MM-DD HH:MM 至 MM-DD HH:MM"（带起止日期）
+//   - 跨日但 start 早于 params.Date（leave 开始于前天/昨天）："至次日 HH:MM" 或 "至 MM-DD HH:MM"
+func formatLeaveRange(lb storage.LeaveBlock, paramsDate string, loc *time.Location) string {
+	sameDay := lb.StartDate == lb.EndDate
+	if sameDay {
+		return fmt.Sprintf("%s-%s", lb.StartHM, lb.EndHM)
+	}
+	// 跨日：按 paramsDate 算"次日"
+	paramD, _ := time.ParseInLocation("2006-01-02", paramsDate, loc)
+	endD, _ := time.ParseInLocation("2006-01-02", lb.EndDate, loc)
+	startD, _ := time.ParseInLocation("2006-01-02", lb.StartDate, loc)
+	daysFromParam := int(endD.Sub(paramD).Hours() / 24)
+	daysStartFromParam := int(startD.Sub(paramD).Hours() / 24)
+
+	// 起始 HH:MM — 如果 start 是 paramsDate 之前的（同日裁剪场景），日期补上
+	var startStr string
+	if daysStartFromParam == 0 {
+		startStr = lb.StartHM
+	} else {
+		startStr = fmt.Sprintf("%s %s", lb.StartDate[5:], lb.StartHM) // MM-DD HH:MM
+	}
+	// 结束 HH:MM — 次日 / 隔日 / 跨多日
+	var endStr string
+	switch daysFromParam {
+	case 1:
+		endStr = "次日 " + lb.EndHM
+	case 2:
+		endStr = "后天 " + lb.EndHM
+	default:
+		// 跨 ≥3 天：直接显示日期
+		endStr = fmt.Sprintf("%s %s", lb.EndDate[5:], lb.EndHM)
+	}
+	return fmt.Sprintf("%s 至 %s", startStr, endStr)
+}
 

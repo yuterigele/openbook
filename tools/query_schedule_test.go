@@ -201,6 +201,81 @@ func TestQuerySchedule_OtherBarberLeave_NotAffected(t *testing.T) {
 	}
 }
 
+// ===================== v4.13.7：跨日 leave 必须显式带日期防 LLM 误读 =====================
+//
+// prod 复现（2026-06-26）：老王 leave 10:15 今天 → 11:15 明天 / 11:15 今天 → 12:15 明天
+//   旧版 LeaveBlock 只显示 HH:MM："师傅请假占用：10:15-11:15、11:15-12:15"
+//   LLM 看到 12:15 误读成"老王请假到今天 12:15"，进而推断"下午 2 点老王回来了但没档期"
+//   实际 leave 跨日，end_at 是明天 12:15，老王今天全天都在请假
+//
+// v4.13.7 修复：跨日 leave 在 LeaveBlock 里显式带日期（"次日 HH:MM" 或 "MM-DD HH:MM"）
+func TestQuerySchedule_CrossDayLeave_ShowsDatePrefix(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	tomorrow := time.Now().In(loc).AddDate(0, 0, 1)
+	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, loc)
+	dateStr := tomorrow.Format("2006-01-02")
+
+	// 跨日 leave：明天 10:15 → 后天 11:15（覆盖 paramsDate 下午 + 次日）
+	dayStart, _ := time.ParseInLocation("2006-01-02", dateStr, loc)
+	storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(10*time.Hour+15*time.Minute),
+		dayStart.Add(35*time.Hour+15*time.Minute), // 10h15m + 24h + 1h = 35h15m
+		storage.LeaveActionCancel)
+
+	out, err := runQuerySchedule(t, shop.ID, "Tony", dateStr)
+	if err != nil {
+		t.Fatalf("unexpected err: %v, out=%q", err, out)
+	}
+
+	// 关键断言：跨日 leave 必须带"次日"前缀，否则 LLM 会误读 end time
+	if !strings.Contains(out, "次日") {
+		t.Errorf("cross-day leave must show '次日' prefix (v4.13.7), got %q", out)
+	}
+	if !strings.Contains(out, "10:15 至 次日 11:15") {
+		t.Errorf("cross-day leave format should be '10:15 至 次日 11:15', got %q", out)
+	}
+	// 反向断言：不能再只显示 "10:15-11:15" 这种纯 HH:MM（不带日期）
+	if strings.Contains(out, "10:15-11:15") {
+		t.Errorf("cross-day leave should NOT show pure HH:MM-HH:MM (causes LLM misread), got %q", out)
+	}
+}
+
+// 同日 leave 仍然显示 HH:MM-HH:MM（无日期前缀，最干净）
+func TestQuerySchedule_SameDayLeave_NoDatePrefix(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	tomorrow := time.Now().In(loc).AddDate(0, 0, 1)
+	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, loc)
+	dateStr := tomorrow.Format("2006-01-02")
+
+	// 同日 leave：明天 10:00 → 明天 18:00
+	dayStart, _ := time.ParseInLocation("2006-01-02", dateStr, loc)
+	storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
+		dayStart.Add(10*time.Hour), dayStart.Add(18*time.Hour),
+		storage.LeaveActionCancel)
+
+	out, err := runQuerySchedule(t, shop.ID, "Tony", dateStr)
+	if err != nil {
+		t.Fatalf("unexpected err: %v, out=%q", err, out)
+	}
+
+	// 同日应该显示 "10:00-18:00"（不带日期）
+	if !strings.Contains(out, "10:00-18:00") {
+		t.Errorf("same-day leave should show '10:00-18:00' (no date prefix), got %q", out)
+	}
+	// 不该出现"次日"（同日）
+	if strings.Contains(out, "次日") {
+		t.Errorf("same-day leave should NOT show '次日', got %q", out)
+	}
+}
+
 // ===================== 节假日优先于请假 =====================
 
 func TestQuerySchedule_HolidayOverridesLeave(t *testing.T) {

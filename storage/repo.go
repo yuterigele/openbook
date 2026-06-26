@@ -167,10 +167,27 @@ type ScheduleBreakdown struct {
 }
 
 // LeaveBlock 一段请假区间（用于文案）
+//
+// v4.13.7 加 StartDate / EndDate 字段：跨日 leave 必须显式带日期，
+// 否则 query_schedule 输出 "10:15-11:15、11:15-12:15" 时 LLM 看到 12:15
+// 会误以为"老王请假到今天 12:15"（实际是到明天 12:15）。
+//
+// 字段语义：
+//   - StartDate / EndDate：'YYYY-MM-DD'（按 Asia/Shanghai 时区算）
+//     同日 leave 时 StartDate == EndDate == params.Date
+//     跨日 leave 时 EndDate = params.Date + 1（或更多）
+//   - StartHM / EndHM：'HH:MM'（仍只是时分，调用方按需拼日期）
+//   - Reason：内部原因（v4.13.6 隐私修复后 query_schedule 工具不再拼这个，只给 agent 内部用）
+//
+// 调用方（query_schedule.go）按以下规则显示：
+//   - 同日：只显示 "HH:MM-HH:MM"
+//   - 跨日：显示 "MM-DD HH:MM 至 次日 HH:MM"（带日期前缀防 LLM 误读）
 type LeaveBlock struct {
-	StartHM string // "14:00"
-	EndHM   string // "16:00"
-	Reason  string
+	StartDate string // "2026-06-26"
+	StartHM   string // "10:15"
+	EndDate   string // "2026-06-27"
+	EndHM     string // "11:15"
+	Reason    string
 }
 
 // QueryScheduleBreakdown 返回单日排班的分组视图
@@ -227,12 +244,16 @@ func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown {
 	out.Available = filterPastSlotsToday(out.Available, date, time.Now(), loc)
 
 	// 构造 LeaveBlocks（按 start_at ASC，ListBarberLeavesInRange 已排序）
+	// v4.13.7 加 StartDate/EndDate 字段：跨日 leave 必须显式带日期，
+	//   否则 LLM 拿到 "10:15-11:15、11:15-12:15" 会把 12:15 当作今天 end_at 误读
 	out.LeaveBlocks = make([]LeaveBlock, 0, len(leaves))
 	for _, l := range leaves {
 		out.LeaveBlocks = append(out.LeaveBlocks, LeaveBlock{
-			StartHM: l.StartAt.In(loc).Format("15:04"),
-			EndHM:   l.EndAt.In(loc).Format("15:04"),
-			Reason:  strings.TrimSpace(l.Reason),
+			StartDate: l.StartAt.In(loc).Format("2006-01-02"),
+			StartHM:   l.StartAt.In(loc).Format("15:04"),
+			EndDate:   l.EndAt.In(loc).Format("2006-01-02"),
+			EndHM:     l.EndAt.In(loc).Format("15:04"),
+			Reason:    strings.TrimSpace(l.Reason),
 		})
 	}
 
