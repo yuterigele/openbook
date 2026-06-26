@@ -313,3 +313,96 @@ func TestMarkAppointmentCompleted_NotFound(t *testing.T) {
 		t.Error("expected error for non-existent appointment")
 	}
 }
+
+// ===================== UncompleteAppointment / UncancelAppointment (v4.16 P2.2) =====================
+
+func TestUncompleteAppointment_RestoresStatusAndDecrementsVisits(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-u", "")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	cust.TotalVisits = 3
+	DB.Save(cust)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2099-12-31", "14:00")
+	// 完成 → 撤销
+	if err := MarkAppointmentCompleted(WithCtx(), appt.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	var afterComplete Appointment
+	DB.Where("id = ?", appt.ID).First(&afterComplete)
+	if afterComplete.Status != "completed" {
+		t.Fatalf("status want completed, got %s", afterComplete.Status)
+	}
+	if err := UncompleteAppointment(WithCtx(), appt.ID); err != nil {
+		t.Fatalf("uncomplete: %v", err)
+	}
+	var afterUndo Appointment
+	DB.Where("id = ?", appt.ID).First(&afterUndo)
+	if afterUndo.Status != "active" {
+		t.Errorf("status want active, got %s", afterUndo.Status)
+	}
+	var afterCust Customer
+	DB.Where("id = ?", cust.ID).First(&afterCust)
+	if afterCust.TotalVisits != 3 {
+		t.Errorf("total_visits want 3 (initial), got %d", afterCust.TotalVisits)
+	}
+}
+
+func TestUncompleteAppointment_RejectsNonCompleted(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-u", "")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2099-12-31", "14:00")
+	// active 状态不能撤销
+	err := UncompleteAppointment(WithCtx(), appt.ID)
+	if err == nil {
+		t.Fatal("应拒绝 active 状态的撤销")
+	}
+}
+
+func TestUncancelAppointment_RestoresStatusAndClearsCancelFields(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-u", "")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2099-12-31", "14:00")
+	// 取消 → 撤销
+	_, err := CancelAppointmentWithPolicy(WithCtx(), appt.ID, CancelSourceAdmin, "测试")
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	var afterCancel Appointment
+	DB.Where("id = ?", appt.ID).First(&afterCancel)
+	if afterCancel.Status != "cancelled" {
+		t.Fatalf("status want cancelled, got %s", afterCancel.Status)
+	}
+	if afterCancel.CancelType == "" {
+		t.Error("cancel_type 应被设置")
+	}
+	if err := UncancelAppointment(WithCtx(), appt.ID); err != nil {
+		t.Fatalf("uncancel: %v", err)
+	}
+	var afterUndo Appointment
+	DB.Where("id = ?", appt.ID).First(&afterUndo)
+	if afterUndo.Status != "active" {
+		t.Errorf("status want active, got %s", afterUndo.Status)
+	}
+	if afterUndo.CancelType != "" {
+		t.Errorf("cancel_type 应清空, got %q", afterUndo.CancelType)
+	}
+	if afterUndo.CancelReason != "" {
+		t.Errorf("cancel_reason 应清空, got %q", afterUndo.CancelReason)
+	}
+	if afterUndo.CancelledAt != nil {
+		t.Errorf("cancelled_at 应清空, got %v", afterUndo.CancelledAt)
+	}
+}
+
+func TestUncancelAppointment_RejectsNonCancelled(t *testing.T) {
+	SetupTestDB(t)
+	shop := MakeShop(t, "shop-u", "")
+	cust := MakeCustomer(t, "Alice", 0, 0)
+	appt := MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2099-12-31", "14:00")
+	err := UncancelAppointment(WithCtx(), appt.ID)
+	if err == nil {
+		t.Fatal("应拒绝非 cancelled 状态的撤销")
+	}
+}

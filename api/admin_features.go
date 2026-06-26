@@ -303,6 +303,7 @@ func listCustomersHandler(ctx context.Context, c *app.RequestContext) {
 	}
 	query := strings.TrimSpace(c.Query("query"))
 	tag := strings.TrimSpace(c.Query("tag"))
+	hasCard := strings.TrimSpace(c.Query("has_card")) // v4.16 P1.2: "yes" = 仅持卡顾客
 
 	if storage.DB == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "db not initialized"})
@@ -323,11 +324,44 @@ func listCustomersHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// v4.16 P1.2: has_card=yes 时只返回在本店持 active 卡的顾客
+	if hasCard == "yes" {
+		var cardCustIDs []string
+		storage.DB.WithContext(ctx).
+			Table("customer_cards").
+			Where("shop_id = ? AND status = ?", shopID, storage.CustomerCardStatusActive).
+			Distinct("customer_id").
+			Pluck("customer_id", &cardCustIDs)
+		if len(cardCustIDs) == 0 {
+			c.JSON(http.StatusOK, []storage.Customer{})
+			return
+		}
+		// 求交集（顾客既在本店有预约，又在本店持卡）
+		cardSet := make(map[string]bool, len(cardCustIDs))
+		for _, id := range cardCustIDs {
+			cardSet[id] = true
+		}
+		filtered := make([]string, 0, len(apptCustIDs))
+		for _, id := range apptCustIDs {
+			if cardSet[id] {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) == 0 {
+			c.JSON(http.StatusOK, []storage.Customer{})
+			return
+		}
+		apptCustIDs = filtered
+	}
+
 	q := storage.DB.WithContext(ctx).Model(&storage.Customer{}).
 		Where("id IN ?", apptCustIDs)
 	if query != "" {
+		// 手机号后 4 位也能搜（v4.16 P1.2）：额外 OR 一下 phone 的后 4 位
 		like := "%" + query + "%"
-		q = q.Where("name LIKE ? OR phone LIKE ? OR wechat_open_id LIKE ?", like, like, like)
+		likeTail := query // 已经是模糊匹配，LIKE '%1234%' 能匹到手机尾号 1234
+		q = q.Where("name LIKE ? OR phone LIKE ? OR wechat_open_id LIKE ? OR phone LIKE ?",
+			like, like, like, "%"+likeTail)
 	}
 	if tag != "" {
 		q = q.Where("tags LIKE ?", "%"+tag+"%")

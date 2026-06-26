@@ -124,6 +124,8 @@ describe('admin.html IIFE return object audit', () => {
       'loadAlerts', 'loadChain', 'loadHandoffs', 'loadLeaves', 'loadMembers',
       'loadPlans', 'loadPlatformOverview', 'loadShop', 'loadShops', 'loadSubscription',
       'loadCards', 'loadSoldCards',  // v4.15 卡管理：tab 切换 + refreshCurrent 内部调
+      // v4.16 批量 / 撤销 / 内部 helper（裸名调用）
+      'closeApptMenu', 'refreshBatchToolbar', 'pushUndo', 'undoLast',
     ]);
 
     const deadExports = [...exposed].filter(name => !refs.has(name) && !ALLOWED_NO_REFS.has(name));

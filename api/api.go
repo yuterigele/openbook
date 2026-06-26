@@ -93,6 +93,9 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/alerts", auth.RequirePerm(storage.PermViewDashboard), getAlertsHandler) // 看板用
 	protected.POST("/appointment/complete", auth.RequirePerm(storage.PermEditAppointments), completeAppointmentHandler)
 	protected.POST("/appointment/cancel", auth.RequirePerm(storage.PermEditAppointments), adminCancelHandler)
+	// v4.16 P2.2: 撤销（5 分钟内）
+	protected.POST("/appointment/uncomplete", auth.RequirePerm(storage.PermEditAppointments), uncompleteAppointmentHandler)
+	protected.POST("/appointment/uncancel", auth.RequirePerm(storage.PermEditAppointments), uncancelAppointmentHandler)
 	protected.GET("/customers", auth.RequirePerm(storage.PermViewCustomers), listCustomersHandler)
 	protected.GET("/customers/:id", auth.RequirePerm(storage.PermViewCustomers), getCustomerDetailHandler)
 	protected.POST("/customers/tag", auth.RequirePerm(storage.PermEditCustomers), addCustomerTagHandler)
@@ -756,6 +759,67 @@ func completeAppointmentHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "completed"})
+}
+
+// uncompleteAppointmentHandler 撤销完成（v4.16 P2.2）
+// 限制：5 分钟内；权限与 complete 一致
+func uncompleteAppointmentHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	var req struct {
+		AppointmentID string `json:"appointment_id"`
+	}
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	appt, err := storage.GetAppointment(req.AppointmentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "预约不存在"})
+		return
+	}
+	if appt.ShopID != shopID {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的预约"})
+		return
+	}
+	if err := storage.UncompleteAppointment(ctx, req.AppointmentID); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "active"})
+}
+
+// uncancelAppointmentHandler 撤销取消（v4.16 P2.2）
+func uncancelAppointmentHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	var req struct {
+		AppointmentID string `json:"appointment_id"`
+	}
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	appt, err := storage.GetAppointment(req.AppointmentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "预约不存在"})
+		return
+	}
+	if appt.ShopID != shopID {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的预约"})
+		return
+	}
+	if err := storage.UncancelAppointment(ctx, req.AppointmentID); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "active"})
 }
 
 func adminCancelHandler(ctx context.Context, c *app.RequestContext) {

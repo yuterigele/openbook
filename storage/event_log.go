@@ -280,3 +280,92 @@ func MarkAppointmentCompleted(ctx context.Context, apptID string) error {
 		return nil
 	})
 }
+
+// UncompleteAppointment 撤销 MarkAppointmentCompleted（v4.16 P2.2）
+//
+// 把 status 从 completed 改回 active，同时：
+//   - 顾客 total_visits -1（如果 >0）
+//   - 写一条 uncomplete 事件（不增加累计，区别于 complete 事件）
+//
+// 限制：
+//   - 必须在 created_at 后 5 分钟内（防止追溯混乱）
+//   - 仅当 status='completed' 才允许
+func UncompleteAppointment(ctx context.Context, apptID string) error {
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var appt Appointment
+		if err := tx.Where("id = ?", apptID).First(&appt).Error; err != nil {
+			return err
+		}
+		if appt.Status != "completed" {
+			return fmt.Errorf("appointment %s is in status %q, cannot uncomplete", apptID, appt.Status)
+		}
+		// 5 分钟内允许撤销（用 updated_at 近似 "完成时间"）
+		if time.Since(appt.UpdatedAt) > 5*time.Minute {
+			return fmt.Errorf("完成已超过 5 分钟，无法撤销（请在顾客详情手动改状态）")
+		}
+		now := time.Now()
+		res := tx.Model(&Appointment{}).
+			Where("id = ? AND status = ?", apptID, "completed").
+			Updates(map[string]interface{}{
+				"status":     "active",
+				"updated_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("appointment %s status changed, retry", apptID)
+		}
+		// 顾客 total_visits -1（用 Exec 直接走 SQL，不被 GORM 的 map 模式吞掉 Where 子句）
+		if appt.CustomerID != "" {
+			if err := tx.Exec(
+				"UPDATE customers SET total_visits = total_visits - 1, updated_at = ? WHERE id = ? AND total_visits > 0",
+				now, appt.CustomerID,
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// UncancelAppointment 撤销 CancelAppointmentWithPolicy（v4.16 P2.2）
+//
+// 把 status 从 cancelled 改回 active，清空 cancel_type / cancel_reason / cancelled_at
+// 限制：5 分钟内（created_at 后）
+func UncancelAppointment(ctx context.Context, apptID string) error {
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var appt Appointment
+		if err := tx.Where("id = ?", apptID).First(&appt).Error; err != nil {
+			return err
+		}
+		if appt.Status != "cancelled" {
+			return fmt.Errorf("appointment %s is in status %q, cannot uncancel", apptID, appt.Status)
+		}
+		// cancelled_at 非空：用它判断；否则 fallback 到 updated_at
+		checkpoint := appt.UpdatedAt
+		if appt.CancelledAt != nil {
+			checkpoint = *appt.CancelledAt
+		}
+		if time.Since(checkpoint) > 5*time.Minute {
+			return fmt.Errorf("取消已超过 5 分钟，无法撤销")
+		}
+		now := time.Now()
+		res := tx.Model(&Appointment{}).
+			Where("id = ? AND status = ?", apptID, "cancelled").
+			Updates(map[string]interface{}{
+				"status":         "active",
+				"cancel_type":    "",
+				"cancel_reason":  "",
+				"cancelled_at":   nil,
+				"updated_at":     now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("appointment %s status changed, retry", apptID)
+		}
+		return nil
+	})
+}

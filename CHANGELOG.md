@@ -7,42 +7,67 @@
 
 ---
 
-## [v4.16] - 2026-06-26
-
-后台 UX 优化（P0）—— **从商户使用角度压缩高频操作路径**。基于盘点的"顾客消费完扣储值卡要走 9 步点击"痛点，三件事：
-
 ### Changed
 
-- **「完成」按钮合并「扣减」modal**（核心痛点）
+**P0 — 核心痛点压缩**
+
+- **「完成」按钮合并「扣减」modal**
   - 旧路径：预约 → 找预约行 → 找顾客 → 点顾客行 → 顾客详情 → "我的卡" → 点卡片 → 卡详情 → "扣减" → 输金额 → 确认 = **9 步**
   - 新路径：预约 → 行内 `···` 菜单 → "完成+扣减" → 选支付方式 + 选卡 + 确认 = **3 步**
-  - 商户选「储值卡」或「次卡」时，前端**自动**先调 consume API 再调 complete API（一次操作完成两件事）
-  - 没卡的顾客照样能用：选「现金 / 微信 / 支付宝 / 不收款」即可（系统只标记完成，金额不记入）
 - **行内「···」快速操作下拉**（替代分散的"完成/取消"按钮）
-  - 菜单项：完成+扣减 / 仅完成 / 取消预约 / 查看顾客
-  - 在预约管理表 + dashboard upcoming-card 都用
-- **取消预约必填原因**
-  - 旧：hardcoded `"admin manual"`，审计追溯丢信息
-  - 新：下拉 7 个常见原因（顾客打电话取消 / 临时有事 / 改约时间 / 师傅请假 / 迟到 15min+ / 重复预约 / 其他）+ 备注框
-  - reason 写入 `appointment.cancel_reason`，后面看周报能查到为什么
+  - 菜单：完成+扣减 / 仅完成 / 取消预约 / 查看顾客
+- **取消预约必填原因**（下拉 7 个常见原因 + 备注框）
+
+**P1 — 商户日常效率提升**
+
+- **Dashboard「现在该处理」卡片**（±30 分钟内的预约单独高亮 + 品牌色边框）
+  - 已过去 = 疑似迟到（优先处理）
+  - 即将到 = 马上要到的
+  - 排序按"绝对距离现在最近"优先
+- **顾客搜索增强**
+  - 支持手机号**后 4 位**搜索（POS 场景：顾客报手机尾号即查）
+  - 持卡过滤（has_card=yes 时只列持卡顾客，方便储值复购报表）
+  - 输入框 300ms **debounce 自动搜索**（边输边查，不用再点「查询」按钮）
+- **键盘快捷键**
+  - `?` → 显示帮助
+  - `Esc` → 关闭弹窗 + 关闭行内菜单（已存在，加强）
+  - `/` → 聚焦当前页面搜索框
+  - `C` → 跳顾客页 + focus 搜索
+  - `A` → 跳预约页
+  - `D` → 跳 dashboard
+  - `R` → 刷新当前页
+  - 在 input/textarea/select 里不抢键（避免误触）
+
+**P2 — 操作安全和效率**
+
+- **预约批量操作**
+  - 表格加 checkbox 列 + 全选
+  - 选中 ≥1 条时浮一个圆形工具栏（底部居中）
+  - 批量完成 / 批量取消（共用原因 modal，一次取消 N 条）
+  - 离开预约页时自动清空选择
+- **操作可撤销（5 分钟窗口）**
+  - 后端新增 `POST /appointment/uncomplete` + `POST /appointment/uncancel`
+  - 限制：5 分钟内，超时报错（提示「已超 5 分钟，请到顾客详情手动改」）
+  - 顾客 total_visits 自动 -1 / cancel 字段自动清空
+  - 前端每次成功操作后弹一个带「撤销」按钮的 toast（5 秒自动消失）
+  - 「完成 + 扣卡」是**一个合并 undo**：撤销时一次性反 complete + 调增卡余额
+
+### 后端
+
+- `storage.UncompleteAppointment(ctx, apptID)` — 5 分钟内把 completed → active；customer.total_visits -1
+- `storage.UncancelAppointment(ctx, apptID)` — 5 分钟内把 cancelled → active；清空 cancel_type / cancel_reason / cancelled_at
+- `POST /api/admin/appointment/uncomplete` + `POST /api/admin/appointment/uncancel` — 同 perm 限制（edit:appointments）
+- `GET /api/admin/customers` 加 `has_card=yes` 参数 + 手机号后 4 位搜索
 
 ### 测试
 
 ```
-ok  api       (cached)
-ok  storage   (cached)
-ok  auth      (cached)
-ok  web/lib   46 passed (含 IIFE audit 4 + format 42)
+ok  api       6.4s   (含 admin_cards + admin_features_v46 已有)
+ok  storage   1.3s   (含 uncomplete/uncancel 4 个新 case)
+ok  auth      cached
+ok  web/lib   46 passed (IIFE audit 4 + format 42，含 pushUndo/undoEntry 等新 export)
 0 failure
 ```
-
-### 后续可能
-
-- P1：dashboard 「现在该处理」专用卡片（±30min 预约一键操作）
-- P1：顾客搜索增强（手机后 4 位 / openid 模糊 / 持卡过滤）
-- P1：键盘快捷键（N=新建，C=查顾客，/=聚焦搜索）
-- P2：批量操作（多选预约批量完成）
-- P2：最近操作 5 分钟内可撤销
 
 ---
 

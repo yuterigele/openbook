@@ -177,6 +177,20 @@
     .appt-menu .menu-divider { height: 1px; background: var(--line); margin: 4px 0; }
     .menu-anchor { position: relative; display: inline-block; }
 
+    /* v4.16 P1.3 快捷键帮助 kbd 样式 */
+    kbd {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-family: var(--font-mono, monospace);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      box-shadow: 0 1px 0 var(--line);
+      min-width: 22px;
+      text-align: center;
+    }
+
     .card {
       background: var(--surface);
       border: 1px solid var(--line);
@@ -1536,6 +1550,8 @@ const App = (() => {
     ccDetail: null,       // v4.15 当前查看的顾客卡详情
     ccDetailLoading: false,
     ccTransactions: [],   // v4.15 当前卡的流水
+    selectedAppts: new Set(), // v4.16 P2.1: 预约批量操作选中集合
+    _undoStack: [],       // v4.16 P2.2: 最近操作撤销栈（最多 5 分钟内）
     subscription: [],     // v4.4 订阅历史
     weekly: null,         // v4.4 周报（单店）
     chainWeekly: null,    // v4.4 周报（跨店）
@@ -1626,6 +1642,10 @@ const App = (() => {
   // ---------- View rendering ----------
   function setView(v) {
     state.view = v;
+    // 离开预约页时清空批量选择
+    if (v !== 'appointments' && state.selectedAppts?.size > 0) {
+      state.selectedAppts = new Set();
+    }
     $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === v));
     const labels = {
       dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
@@ -1720,6 +1740,8 @@ const App = (() => {
         ${kpiCard('总事件数', d.lifecycle_count || 0, 'normal', '埋点事件累计', 'events')}
       </div>
 
+      ${renderNowActionable()}
+
       <div class="section">
         <div class="section-head">
           <h2>即将到店（接下来 2 小时）</h2>
@@ -1777,6 +1799,36 @@ const App = (() => {
   }
 
   // 告警 banner（dashboard 顶部）
+  // v4.16 P1.1 「现在该处理」section
+  // 复用 state.upcoming（未来 2 小时）+ 补查已过未完成的预约 = 现在 ±30min 一键操作区
+  function renderNowActionable() {
+    const now = Date.now();
+    const list = [];
+    // 已过未完成的（疑似迟到/未到）：state.upcoming 不含已过的，需要单独查
+    // 简化策略：从 state.upcoming 里挑 -30min ~ +30min 范围的
+    for (const a of (state.upcoming || [])) {
+      if (a._minutes >= -30 && a._minutes <= 30) list.push(a);
+    }
+    // 排序：过去的排前（更紧急），然后是即将到的
+    list.sort((x, y) => Math.abs(x._minutes) - Math.abs(y._minutes));
+    if (list.length === 0) {
+      return `<div class="section">
+        <div class="card card-pad" style="text-align:center; padding: 18px;">
+          <div style="color:var(--ink-muted); font-size: 13px;">✓ 现在 ±30 分钟没有需要处理的预约</div>
+        </div>
+      </div>`;
+    }
+    return `<div class="section">
+      <div class="section-head">
+        <h2 style="color:var(--brand);">⏰ 现在该处理（±30 分钟）</h2>
+        <span class="sub">点击右侧「···」完成 / 取消 / 扣卡</span>
+      </div>
+      <div class="upcoming-grid" style="border: 2px solid var(--brand-soft); border-radius: var(--radius-lg); padding: 12px; background: var(--brand-soft);">
+        ${list.map(renderUpcomingCard).join('')}
+      </div>
+    </div>`;
+  }
+
   function renderAlertsBanner() {
     const a = state.alerts;
     if (!a || !a.alerts || a.alerts.length === 0) return '';
@@ -1884,16 +1936,38 @@ const App = (() => {
             : renderApptTable(state.appointments)}
         </div>
       </div>
+
+      ${renderBatchToolbar()}
     `;
+  }
+
+  // v4.16 P2.1 批量操作浮动工具栏
+  // 选中 ≥1 条 active 预约时浮在底部；可批量完成 / 批量取消
+  function renderBatchToolbar() {
+    const n = (state.selectedAppts || new Set()).size;
+    if (n === 0) return '';
+    return `<div id="batchToolbar" style="position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+      background: var(--ink, #1f2937); color: white; padding: 12px 20px; border-radius: 999px;
+      box-shadow: var(--shadow-lg, 0 10px 25px rgba(0,0,0,0.2)); z-index: 100;
+      display: flex; align-items: center; gap: 12px; font-size: 14px;">
+      <span>已选 <strong style="color: var(--brand, #3b82f6);">${n}</strong> 条</span>
+      <span style="opacity:0.4;">|</span>
+      <button class="btn btn-sm" style="background:white;color:#1f2937;" onclick="App.batchCompleteAppts()">${icon('check', 14)} 批量完成</button>
+      <button class="btn btn-sm btn-danger" onclick="App.openBatchCancelModal()">${icon('x', 14)} 批量取消</button>
+      <span style="opacity:0.4;">|</span>
+      <button class="btn btn-sm btn-ghost" style="color:white;" onclick="App.clearApptSelection()">清空</button>
+    </div>`;
   }
 
   function renderApptTable(rows) {
 return `<table class="table">
       <thead><tr>
+        <th style="width:32px;"><input type="checkbox" id="apptSelectAll" onchange="App.toggleSelectAllAppts(this)" /></th>
         <th>日期</th><th>时间</th><th>理发师</th><th>顾客</th><th>服务</th><th>状态</th><th class="num">操作</th>
       </tr></thead>
       <tbody>${rows.map(a => `
-        <tr>
+        <tr class="${(a.status === 'active' && state.selectedAppts?.has(a.id)) ? 'selected' : ''}">
+          <td>${a.status === 'active' ? `<input type="checkbox" class="appt-select" data-id="${esc(a.id)}" ${state.selectedAppts?.has(a.id) ? 'checked' : ''} onchange="App.toggleApptSelect('${a.id}', this.checked)" />` : ''}</td>
           <td>${fmtDate(a.date)}</td>
           <td class="text-mono">${fmtTime(a.time)}</td>
           <td>${esc(a.barber_name)}</td>
@@ -2287,8 +2361,8 @@ return `<table class="table">
     </div>
     <div class="filterbar">
       <div class="field grow">
-        <label>搜索</label>
-        <input class="input" id="custQuery" placeholder="按姓名 / 手机号 / openid 搜索" />
+        <label>搜索 <span class="text-muted" style="font-weight:400;">（姓名 / 手机号（含后 4 位） / openid 模糊）</span></label>
+        <input class="input" id="custQuery" placeholder="按姓名 / 手机号 / 后 4 位 / openid 搜索" />
       </div>
       <div class="field">
         <label>标签</label>
@@ -2298,6 +2372,13 @@ return `<table class="table">
           <option value="FREQUENT">FREQUENT</option>
           <option value="BLACKLIST">BLACKLIST</option>
           <option value="NEW">NEW</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>持卡</label>
+        <select class="select" id="custHasCard">
+          <option value="">全部</option>
+          <option value="yes">仅持卡顾客</option>
         </select>
       </div>
       <button class="btn btn-primary" onclick="App.loadCustomers()">查询</button>
@@ -4003,6 +4084,8 @@ return `<table class="table">
     // v4.16 预约管理优化 modals
     else if (kind === 'apptCompletePay') body = apptCompletePayModal(data.apptId, data.skipPay);
     else if (kind === 'apptCancel') body = apptCancelModal(data.apptId);
+    else if (kind === 'shortcutHelp') body = shortcutHelpModal();
+    else if (kind === 'apptBatchCancel') body = apptBatchCancelModal();
     else return;
     root.innerHTML = body;
     // wire submit buttons by id
@@ -4246,6 +4329,79 @@ return `<table class="table">
         <div class="modal-foot">
           <button class="btn" onclick="App.closeModal()">取消</button>
           <button class="btn btn-primary" onclick="App.submitApptComplete('${esc(apptId)}', ${!!skipPay})">${icon('check', 14)} 确认完成</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.16 P2.1 批量取消 modal
+  function apptBatchCancelModal() {
+    const n = (state.selectedAppts || new Set()).size;
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 480px;">
+        <div class="modal-head">
+          <h2>批量取消 ${n} 条预约</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <div class="card-pad-sm" style="background:var(--warn-soft); border-radius:var(--radius); font-size: 12px; color:var(--warn); margin-bottom: 12px;">
+            ⚠ 所有选中的预约将用同一个原因取消，无法单独撤销
+          </div>
+          <div class="field">
+            <label>取消原因</label>
+            <select class="select" id="batchCancelReason">
+              <option value="顾客打电话取消">顾客打电话取消</option>
+              <option value="顾客临时有事">顾客临时有事</option>
+              <option value="顾客改约时间">顾客改约时间</option>
+              <option value="师傅请假">师傅请假</option>
+              <option value="营业时间调整">营业时间调整</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>补充说明（可选）</label>
+            <textarea class="textarea" id="batchCancelNote" maxlength="256" rows="2"></textarea>
+          </div>
+          <div id="batchCancelErr" class="err-banner hidden" style="margin-top: 12px;"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="App.closeModal()">不取消</button>
+          <button class="btn btn-danger" onclick="App.submitApptBatchCancel()">${icon('x', 14)} 全部取消</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // v4.16 P1.3 快捷键帮助 modal
+  function shortcutHelpModal() {
+    return `<div class="modal-backdrop" onclick="if(event.target===this)App.closeModal()">
+      <div class="modal" style="max-width: 480px;">
+        <div class="modal-head">
+          <h2>键盘快捷键</h2>
+          <div class="spacer"></div>
+          <button class="icon-btn" onclick="App.closeModal()">${icon('x', 16)}</button>
+        </div>
+        <div class="modal-body">
+          <table class="table">
+            <thead><tr><th>按键</th><th>作用</th></tr></thead>
+            <tbody>
+              <tr><td class="text-mono"><kbd>?</kbd></td><td>显示本帮助</td></tr>
+              <tr><td class="text-mono"><kbd>Esc</kbd></td><td>关闭弹窗 / 行内菜单</td></tr>
+              <tr><td class="text-mono"><kbd>/</kbd></td><td>聚焦当前页面搜索框</td></tr>
+              <tr><td class="text-mono"><kbd>C</kbd></td><td>跳到顾客页 + focus 搜索</td></tr>
+              <tr><td class="text-mono"><kbd>A</kbd></td><td>跳到预约管理</td></tr>
+              <tr><td class="text-mono"><kbd>D</kbd></td><td>跳到实时看板</td></tr>
+              <tr><td class="text-mono"><kbd>R</kbd></td><td>刷新当前页数据</td></tr>
+              <tr><td class="text-mono"><kbd>Enter</kbd></td><td>顾客搜索输入框里回车立即查</td></tr>
+            </tbody>
+          </table>
+          <div class="text-muted" style="font-size:11px; margin-top: 12px;">
+            💡 在输入框 / 下拉框里大部分快捷键不生效，避免输文字时误触
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-primary" onclick="App.closeModal()">知道了</button>
         </div>
       </div>
     </div>`;
@@ -5543,12 +5699,14 @@ return `<table class="table">
   async function loadCustomers() {
     const query = $('#custQuery')?.value.trim() || '';
     const tag = $('#custTag')?.value || '';
+    const hasCard = $('#custHasCard')?.value || '';
     const host = $('#custTable');
     if (host) host.innerHTML = '<div style="padding:20px;">' + renderSkeleton(5) + '</div>';
     try {
       let url = '/api/admin/customers?limit=200';
       if (query) url += '&query=' + encodeURIComponent(query);
       if (tag) url += '&tag=' + encodeURIComponent(tag);
+      if (hasCard) url += '&has_card=' + encodeURIComponent(hasCard);
       const data = await api(url);
       state.customers = Array.isArray(data) ? data : [];
       const ts = $('#custTs'); if (ts) ts.textContent = '最近刷新：' + new Date().toLocaleTimeString();
@@ -5561,6 +5719,7 @@ return `<table class="table">
   function resetCustFilters() {
     if ($('#custQuery')) $('#custQuery').value = '';
     if ($('#custTag')) $('#custTag').value = '';
+    if ($('#custHasCard')) $('#custHasCard').value = '';
     loadCustomers();
   }
 
@@ -6058,6 +6217,11 @@ return `<table class="table">
     }, 0);
   }
 
+  // 关闭所有行内菜单（Esc 触发）
+  function closeApptMenu() {
+    $$('.appt-menu').forEach(m => m.remove());
+  }
+
   // v4.16 完成+扣减 modal 切换支付方式时显示/隐藏卡选择
   function togglePayFields() {
     const method = $('#payMethod')?.value;
@@ -6084,6 +6248,7 @@ return `<table class="table">
     if (!skipPay && payInfo.method === 'card') {
       const svId = $('#paySvCardId')?.value;
       const countId = $('#payCountCardId')?.value;
+      let consumedCardId = null;
       if (svId) {
         const cents = yuanToCents($('#paySvAmountYuan')?.value);
         if (cents <= 0) {
@@ -6095,6 +6260,7 @@ return `<table class="table">
           });
           payInfo.card_id = svId;
           payInfo.amount_cents = cents;
+          consumedCardId = svId;
         } catch (e) {
           err.textContent = '扣储值卡失败：' + e.message; err.classList.remove('hidden'); return;
         }
@@ -6104,17 +6270,34 @@ return `<table class="table">
             method: 'POST', body: { reason: note || '次卡扣次（预约完成）' }
           });
           payInfo.card_id = countId;
+          consumedCardId = countId;
         } catch (e) {
           err.textContent = '扣次卡失败：' + e.message; err.classList.remove('hidden'); return;
         }
       } else {
         err.textContent = '请选择一张卡'; err.classList.remove('hidden'); return;
       }
+      // v4.16 P2.2: 推一个「撤销扣卡」到栈（统一在 complete 成功后合并推一个 combined undo）
     }
 
     // 调完成
     try {
       await api('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: apptId } });
+      // v4.16 P2.2: 推一个合并 undo（包含完成撤销 + 扣卡撤销）—— 一次 toast 撤销全部
+      const actions = [
+        { endpoint: '/api/admin/appointment/uncomplete', body: { appointment_id: apptId } }
+      ];
+      if (payInfo.method === 'card' && consumedCardId) {
+        actions.push({
+          endpoint: `/api/admin/customer-cards/${encodeURIComponent(consumedCardId)}/adjust`,
+          body: { direction: 'up', amount_cents: payInfo.amount_cents || 1, reason: '撤销完成+扣卡' }
+        });
+      }
+      pushUndo({
+        label: payInfo.method === 'card' ? '已完成 + 扣卡' : '已标记完成',
+        actions,
+        refreshFn: () => { refreshAll(); loadAppointments(); }
+      });
       let msg = '已标记完成';
       if (payInfo.method === 'card') msg = '已完成 + 扣卡';
       else if (payInfo.method === 'cash') msg = '已完成 · 现金';
@@ -6139,11 +6322,163 @@ return `<table class="table">
     const fullReason = note ? `${reason} · ${note}` : reason;
     try {
       await api('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: apptId, reason: fullReason } });
+      // 推撤销
+      pushUndo({
+        label: `已取消：${reason}`,
+        endpoint: '/api/admin/appointment/uncancel',
+        body: { appointment_id: apptId },
+        refreshFn: () => { refreshAll(); loadAppointments(); }
+      });
       showToast('已取消：' + reason, 'success');
       closeModal();
       refreshAll(); loadAppointments();
     } catch (e) {
       err.textContent = e.message; err.classList.remove('hidden');
+    }
+  }
+
+  // v4.16 P2.1: 批量操作 --------------------------------------------------------
+
+  function toggleApptSelect(apptId, checked) {
+    if (!state.selectedAppts) state.selectedAppts = new Set();
+    if (checked) state.selectedAppts.add(apptId);
+    else state.selectedAppts.delete(apptId);
+    refreshBatchToolbar();
+  }
+
+  function toggleSelectAllAppts(checkbox) {
+    if (!state.selectedAppts) state.selectedAppts = new Set();
+    const rows = state.appointments.filter(a => a.status === 'active');
+    if (checkbox.checked) {
+      rows.forEach(a => state.selectedAppts.add(a.id));
+    } else {
+      rows.forEach(a => state.selectedAppts.delete(a.id));
+    }
+    // 重新渲染表格 + toolbar
+    const host = $('#apptTable');
+    if (host) host.innerHTML = renderApptTable(state.appointments);
+    refreshBatchToolbar();
+  }
+
+  function clearApptSelection() {
+    state.selectedAppts = new Set();
+    const host = $('#apptTable');
+    if (host) host.innerHTML = renderApptTable(state.appointments);
+    refreshBatchToolbar();
+  }
+
+  function refreshBatchToolbar() {
+    // 简单粗暴：重渲染整个 view，state.selectedAppts 不会丢
+    const root = $('#content');
+    if (root && state.view === 'appointments') root.innerHTML = renderAppointments();
+  }
+
+  // 批量完成（不带扣减，纯标完成；扣减走单条 ··· 菜单）
+  async function batchCompleteAppts() {
+    const ids = [...(state.selectedAppts || [])];
+    if (ids.length === 0) return;
+    if (!confirm(`确认批量完成 ${ids.length} 条预约？\n\n（批量完成仅标记状态，不扣储值卡。如需扣卡请用单条「··· → 完成 + 扣减」）`)) return;
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try {
+        await api('/api/admin/appointment/complete', { method: 'POST', body: { appointment_id: id } });
+        ok++;
+      } catch (_) { fail++; }
+    }
+    showToast(`批量完成：成功 ${ok} 条${fail ? ' · 失败 ' + fail + ' 条' : ''}`, fail ? 'error' : 'success');
+    clearApptSelection();
+    refreshAll(); loadAppointments();
+  }
+
+  // 批量取消：弹一个共用的原因 modal
+  function openBatchCancelModal() {
+    const n = (state.selectedAppts || new Set()).size;
+    if (n === 0) return;
+    openModal('apptBatchCancel');
+  }
+
+  async function submitApptBatchCancel() {
+    const err = $('#batchCancelErr');
+    if (err) err.classList.add('hidden');
+    const ids = [...(state.selectedAppts || [])];
+    const reason = $('#batchCancelReason')?.value || '';
+    const note = $('#batchCancelNote')?.value.trim() || '';
+    const fullReason = note ? `${reason} · ${note}` : reason;
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try {
+        await api('/api/admin/appointment/cancel', { method: 'POST', body: { appointment_id: id, reason: fullReason } });
+        ok++;
+      } catch (_) { fail++; }
+    }
+    showToast(`批量取消：成功 ${ok} 条${fail ? ' · 失败 ' + fail + ' 条' : ''}`, fail ? 'error' : 'success');
+    closeModal();
+    clearApptSelection();
+    refreshAll(); loadAppointments();
+  }
+
+  // v4.16 P2.2 操作撤销（5 分钟窗口）----------------------------------------
+  // 商户完成 / 取消预约后，弹一个带「撤销」按钮的 toast
+  // 后端 endpoint 复用 uncomplete / uncancel 即可
+  function pushUndo(entry) {
+    if (!state._undoStack) state._undoStack = [];
+    entry.expiresAt = Date.now() + 5 * 60 * 1000;
+    state._undoStack.push(entry);
+    if (state._undoStack.length > 3) state._undoStack.shift();
+    showUndoToast(entry);
+    // 5 分钟后从栈里清掉
+    setTimeout(() => {
+      const i = state._undoStack.indexOf(entry);
+      if (i >= 0 && entry === state._undoStack[i]) state._undoStack.splice(i, 1);
+    }, 5 * 60 * 1000);
+  }
+
+  function showUndoToast(entry) {
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-undo';
+    toast.style.cssText = 'position: fixed; bottom: 24px; right: 24px; z-index: 200;' +
+      'padding: 12px 16px; border-radius: var(--radius); background: var(--ink, #1f2937);' +
+      'color: white; box-shadow: var(--shadow-lg); display: flex; align-items: center; gap: 12px;' +
+      'font-size: 13px; max-width: 360px;';
+    toast.innerHTML = `<span>${esc(entry.label)}</span>` +
+      `<button class="btn btn-sm" style="background:var(--brand);color:white;" onclick="App.undoEntry(this)">撤销</button>`;
+    toast._undoEntry = entry;
+    document.body.appendChild(toast);
+    setTimeout(() => { if (toast.parentNode) toast.remove(); }, 5000);
+  }
+
+  async function undoEntry(btn) {
+    const toast = btn.closest('.toast');
+    const entry = toast?._undoEntry;
+    if (!entry) return;
+    toast.remove();
+    try {
+      // 支持多步撤销：entry.actions 是数组则按序执行
+      const actions = entry.actions || [{ endpoint: entry.endpoint, body: entry.body }];
+      for (const a of actions) {
+        await api(a.endpoint, { method: 'POST', body: a.body });
+      }
+      showToast('已撤销', 'success');
+      const i = state._undoStack.indexOf(entry);
+      if (i >= 0) state._undoStack.splice(i, 1);
+      if (entry.refreshFn) entry.refreshFn();
+    } catch (e) {
+      showToast('撤销失败：' + e.message, 'error');
+    }
+  }
+
+  async function undoLast() {
+    const entry = (state._undoStack || []).pop();
+    if (!entry) return;
+    try {
+      const actions = entry.actions || [{ endpoint: entry.endpoint, body: entry.body }];
+      for (const a of actions) {
+        await api(a.endpoint, { method: 'POST', body: a.body });
+      }
+      showToast('已撤销', 'success');
+      if (entry.refreshFn) entry.refreshFn();
+    } catch (e) {
+      showToast('撤销失败：' + e.message, 'error');
     }
   }
 
@@ -6683,16 +7018,73 @@ return `<table class="table">
     // v4.12: nav click 也刷一下 plan（拿最新 grace_days）— loadPlans 内有 cache 兜底
     // 顾客搜索回车支持（v4.4 轻打磨）
     document.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && state.view === 'customers') {
-        if ($('#custQuery') && document.activeElement === $('#custQuery')) {
+      // v4.16 P1.2: 全局快捷键 —— 在 input/textarea/contenteditable 里不触发（避免误触）
+      const tag = (document.activeElement?.tagName || '').toLowerCase();
+      const isEditable = tag === 'input' || tag === 'textarea' || tag === 'select' ||
+        (document.activeElement?.isContentEditable);
+      // ESC 关闭 modal（不依赖焦点，任何时候都能按）
+      if (e.key === 'Escape') {
+        if (state.modal && state.modal.kind !== 'confirm') { closeModal(); e.preventDefault(); return; }
+        if (state._apptMenuOpen) { closeApptMenu(); e.preventDefault(); return; }
+      }
+      // ? 显示快捷键帮助
+      if (e.key === '?' && !isEditable) {
+        openModal('shortcutHelp');
+        e.preventDefault();
+        return;
+      }
+      // 在输入框里只让 Enter / Esc 生效，其他快捷键不抢
+      if (isEditable) {
+        if (e.key === 'Enter' && state.view === 'customers' && document.activeElement === $('#custQuery')) {
           loadCustomers();
         }
+        return;
       }
-      // v4.6 ESC 关闭 modal
-      if (e.key === 'Escape' && state.modal) {
-        if (state.modal.kind !== 'confirm') closeModal();
+      // / 聚焦当前页面的搜索框
+      if (e.key === '/') {
+        const sel = state.view === 'customers' ? '#custQuery'
+          : state.view === 'appointments' ? '#apptDate'
+          : null;
+        if (sel) { $(sel)?.focus(); $(sel)?.select?.(); e.preventDefault(); }
+        return;
+      }
+      // C → 跳到顾客页 + focus 搜索
+      if (e.key === 'c' || e.key === 'C') {
+        if (state.view !== 'customers') setView('customers');
+        setTimeout(() => $('#custQuery')?.focus(), 50);
+        e.preventDefault();
+        return;
+      }
+      // A → 跳到预约页
+      if (e.key === 'a' || e.key === 'A') {
+        setView('appointments');
+        e.preventDefault();
+        return;
+      }
+      // D → 跳到 dashboard
+      if (e.key === 'd' || e.key === 'D') {
+        setView('dashboard');
+        e.preventDefault();
+        return;
+      }
+      // R → 刷新当前页
+      if (e.key === 'r' || e.key === 'R') {
+        refreshCurrent();
+        showToast('已刷新', 'info');
+        e.preventDefault();
       }
     });
+
+    // v4.16 P1.2: 顾客搜索 debounce（输入 300ms 自动查）+ Enter 立即查
+    // 用 capture 阶段监听，覆盖动态生成的 #custQuery
+    let _custQueryTimer = null;
+    document.addEventListener('input', e => {
+      if (e.target?.id === 'custQuery' && state.view === 'customers') {
+        clearTimeout(_custQueryTimer);
+        _custQueryTimer = setTimeout(loadCustomers, 300);
+      }
+    });
+
     // initial load
     bootstrap();
   }
@@ -6738,8 +7130,14 @@ return `<table class="table">
     openSellCardToCustomerModal, submitSellCard,
     // v4.16 预约管理 UX 优化
     openCompleteWithPayModal, openCancelModal,
-    toggleApptMenu, togglePayFields,
+    toggleApptMenu, togglePayFields, closeApptMenu,
     submitApptComplete, submitApptCancel,
+    // v4.16 批量操作
+    toggleApptSelect, toggleSelectAllAppts, clearApptSelection,
+    batchCompleteAppts, openBatchCancelModal, submitApptBatchCancel,
+    refreshBatchToolbar,
+    // v4.16 操作撤销（占位）
+    pushUndo, undoLast, undoEntry,
   };
 })();
 
