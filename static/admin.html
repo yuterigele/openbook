@@ -2361,8 +2361,8 @@ return `<table class="table">
     </div>
     <div class="filterbar">
       <div class="field grow">
-        <label>搜索 <span class="text-muted" style="font-weight:400;">（姓名 / 手机号（含后 4 位） / openid 模糊）</span></label>
-        <input class="input" id="custQuery" placeholder="按姓名 / 手机号 / 后 4 位 / openid 搜索" />
+        <label>搜索 <span class="text-muted" style="font-weight:400;">（姓名 / 手机号 / 微信号）</span></label>
+        <input class="input" id="custQuery" placeholder="按姓名 / 手机号 / 微信号搜索" />
       </div>
       <div class="field">
         <label>标签</label>
@@ -3055,7 +3055,7 @@ return `<table class="table">
     }
   }
   async function disableMember(id, username) {
-    if (!confirm(`确定停用「${username}」吗？\n\n停用后该账号无法登录，店主可重新启用（v4.11 后端没启启用接口，停用 = 永久）。\n注意：本店最后一个 active owner 会被服务端拒绝`)) return;
+    if (!confirm(`确定停用「${username}」吗？\n\n停用后该账号无法登录，且无法恢复（需重新创建账号）。\n注意：本店最后一个店主账号无法停用`)) return;
     try {
       await api(`/api/admin/members/${id}`, { method: 'DELETE' });
       showToast(`已停用 ${username}`, 'success');
@@ -3206,7 +3206,7 @@ return `<table class="table">
               : '<span class="plan-pill plan-pill-status-warning">仅旗舰版可用</span>'}
           </div>
           <p class="text-muted" style="font-size:13px;margin:8px 0 0;">
-            API key 用于外部系统对接（POS / BI / 自建 CRM 等）。可通过 <code>GET /api/external/appointments</code> 读取本店的预约数据。
+            API key 用于外部系统对接（如 POS、BI、自建 CRM 等），可读取本店的预约数据。
           </p>
         </div>`;
       }
@@ -4392,12 +4392,6 @@ return `<table class="table">
               <tr><td class="text-mono"><kbd>Enter</kbd></td><td>顾客搜索框回车立即查</td></tr>
             </tbody>
           </table>
-          <div class="text-muted" style="font-size:11px; margin-top: 12px; line-height: 1.6;">
-            💡 设计原则：快捷键只在「不会跟浏览器/输入冲突」的范围内启用<br>
-            • <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>/<kbd>Alt</kbd> + 任何键 → 完全不接管（保留 Ctrl+C 复制等）<br>
-            • 在输入框 / 下拉框里只让 <kbd>Enter</kbd> 和 <kbd>Esc</kbd> 生效<br>
-            • 单字母跳转（C/A/D/R）容易误触，已砍掉
-          </div>
         </div>
         <div class="modal-foot">
           <button class="btn btn-primary" onclick="App.closeModal()">知道了</button>
@@ -4597,15 +4591,12 @@ return `<table class="table">
         <div class="modal-body">
           <div style="font-size:13px;line-height:1.7;">
             <p>您选择升级到 <b>${esc(data.planName)}</b>（${esc(data.planPrice)}）。</p>
-            <p>当前为 <b>v4.12 内测</b>，支付模块还在开发中。请用以下方式联系运营开通：</p>
+            <p>目前升级套餐需联系运营开通，请用以下方式：</p>
             <ul style="line-height:1.9; padding-left: 20px;">
               <li>微信：联系 <code>platform_admin</code> 商务</li>
               <li>邮件：<code>support@yuyuanyuan.cn</code></li>
               <li>电话：向 platform_admin 索取</li>
             </ul>
-            <p class="text-muted" style="font-size:12px; margin-top: 12px;">
-              v4.13 将接入微信支付，届时本按钮会自动改为"立即支付"，无需联系运营。
-            </p>
           </div>
         </div>
         <div class="modal-foot">
@@ -4746,7 +4737,7 @@ return `<table class="table">
           <div class="cust-detail-grid">
             <div class="k">顾客 ID</div><div class="v text-mono">${esc(p.id)}</div>
             <div class="k">手机号</div><div class="v text-mono">${esc(p.phone || '—')}</div>
-            <div class="k">微信 openid</div><div class="v text-mono" style="font-size: 11px;">${esc(p.wechat_open_id || '—')}</div>
+            <div class="k">微信标识</div><div class="v text-mono" style="font-size: 11px;">${esc(p.wechat_open_id || '—')}</div>
             <div class="k">最近到店</div><div class="v text-mono">${esc(p.last_visit_at ? (p.last_visit_at || '').slice(0, 10) : '—')}</div>
             <div class="k">标签</div><div class="v">${d.tags.length === 0
               ? '<span class="text-muted">—</span>'
