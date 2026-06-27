@@ -5855,20 +5855,30 @@ return `<table class="table">
     state.ccDetailLoading = true;
     openModal('customerCard');
     try {
-      // 通过 soldCards 列表里的快照找 cc
-      const all = state.soldCards || [];
-      const cc = all.find(c => c.id === ccId);
+      // v4.16.4 fix：直接从 API 拉详情，不依赖 soldCards 缓存
+      //   之前从 state.soldCards.find() —— 缓存没命中（如分页、过期、商户从顾客详情页点进）
+      //   → cc = undefined → state.ccDetail = null → modal 永远卡在骨架屏
+      //   新增 GET /api/admin/customer-cards/:id（v4.16.4）保证总能拿到详情
+      const cc = await api(`/api/admin/customer-cards/${encodeURIComponent(ccId)}`);
       state.ccDetail = cc || null;
-      state.ccDetailLoading = false;
-      openModal('customerCard');
       // 拉流水
       const txs = await api(`/api/admin/customer-cards/${encodeURIComponent(ccId)}/transactions`);
       state.ccTransactions = Array.isArray(txs) ? txs : [];
-      openModal('customerCard');
+      // 同步刷新 soldCards 缓存，让其他视图（卡管理、顾客详情）数据一致
+      if (state.soldCards && cc) {
+        const idx = state.soldCards.findIndex(c => c.id === cc.id);
+        if (idx >= 0) state.soldCards[idx] = cc;
+        else state.soldCards.push(cc);
+      }
     } catch (e) {
+      // 加载失败：关掉 modal（避免卡骨架屏），弹 toast 告知
       state.ccDetailLoading = false;
-      alert('加载失败：' + e.message);
+      showToast('顾客卡详情加载失败：' + e.message, 'error');
+      closeModal();
+      return;
     }
+    state.ccDetailLoading = false;
+    openModal('customerCard');
   }
 
   function openConsumeModal(ccId, isSV) {
@@ -5958,6 +5968,9 @@ return `<table class="table">
         method: 'POST', body: { card_id: cardId, note }
       });
       closeModal();
+      // v4.16.4：刷新 soldCards 列表 + 卡产品列表（库存/持有数可能变）
+      loadSoldCards();
+      loadCards();
       // 重新打开顾客详情以刷新「我的卡」tab
       if (state.customerDetail && state.customerDetail.profile && state.customerDetail.profile.id === customerId) {
         openCustomerDetail(customerId);
@@ -6263,17 +6276,23 @@ return `<table class="table">
   }
 
   // v4.16 提交「完成 + 扣减」
+  //
+  // v4.16.4 fix：consumedCardId 必须提到函数顶部声明（块作用域 bug）：
+  //   - 之前 let consumedCardId = null 在 if 块里，但 try 块里要用 → 块作用域不可见
+  //   - 后果：扣卡成功 + complete API 失败时进 catch，引用 consumedCardId → ReferenceError
+  //   - 用户报：「consumedCardId is not defined（已扣卡，请手动确认）」
   async function submitApptComplete(apptId, skipPay) {
     const err = $('#payErr');
     err.classList.add('hidden');
     const note = $('#payNote')?.value.trim() || '';
     let payInfo = { method: skipPay ? 'none' : ($('#payMethod')?.value || 'none'), note };
+    // v4.16.4: 顶部声明，下面的 try 块（块作用域）才能访问到
+    let consumedCardId = null;
 
     // 如果走卡：先调 consume，再 complete
     if (!skipPay && payInfo.method === 'card') {
       const svId = $('#paySvCardId')?.value;
       const countId = $('#payCountCardId')?.value;
-      let consumedCardId = null;
       if (svId) {
         const cents = yuanToCents($('#paySvAmountYuan')?.value);
         if (cents <= 0) {

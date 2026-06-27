@@ -235,3 +235,97 @@ func TestGetCustomerDetail_IncludesCards(t *testing.T) {
 		t.Errorf("响应应含卡名，实际：%s", body)
 	}
 }
+
+// ---- v4.16.4: GET /api/admin/customer-cards/:id 单卡详情 ----
+
+// TestGetCustomerCard_OK 验证 happy path：返回 cc 完整字段
+func TestGetCustomerCard_OK(t *testing.T) {
+	setupAPITestDB(t)
+	makeShopWithPlan(t, "shop-gcc", storage.PlanPro)
+	cust := storage.MakeCustomer(t, "李四", 0, 0)
+	claims := &auth.Claims{AdminID: 1, ShopID: "shop-gcc", Role: storage.RoleOwner}
+
+	// 建卡 + 售卡拿 cc
+	createBody := []byte(`{"name":"v4.16.4测试卡","type":"stored_value","price_cents":100000,"face_value_cents":100000,"bonus_cents":0,"valid_days":365}`)
+	ctx := newAPIContext(t, "POST", "/api/admin/cards", createBody, withClaims(claims))
+	_, body := runHandler(t, createCardHandler, ctx)
+	var card storage.Card
+	json.Unmarshal([]byte(body), &card)
+
+	sellBody := []byte(`{"card_id":"` + card.ID + `"}`)
+	ctx = newAPIContext(t, "POST", "/api/admin/customers/"+cust.ID+"/cards/sell", sellBody,
+		withClaims(claims), withPathParam("id", cust.ID))
+	_, body = runHandler(t, sellCardHandler, ctx)
+	var cc storage.CustomerCard
+	json.Unmarshal([]byte(body), &cc)
+
+	// 调新 endpoint
+	ctx = newAPIContext(t, "GET", "/api/admin/customer-cards/"+cc.ID, nil,
+		withClaims(claims), withPathParam("id", cc.ID))
+	status, body := runHandler(t, getCustomerCardHandler, ctx)
+	if status != http.StatusOK {
+		t.Fatalf("应 200，得到 %d body=%s", status, body)
+	}
+	var got storage.CustomerCard
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("parse: %v body=%s", err, body)
+	}
+	if got.ID != cc.ID {
+		t.Errorf("id 应回 %s，得到 %s", cc.ID, got.ID)
+	}
+	if got.BalanceCents != 100000 {
+		t.Errorf("balance 应回 100000，得到 %d", got.BalanceCents)
+	}
+	if got.Status != "active" {
+		t.Errorf("status 应为 active，得到 %s", got.Status)
+	}
+}
+
+// TestGetCustomerCard_NotFound 验证 cc 不存在时 404
+func TestGetCustomerCard_NotFound(t *testing.T) {
+	setupAPITestDB(t)
+	makeShopWithPlan(t, "shop-nf", storage.PlanPro)
+	claims := &auth.Claims{AdminID: 1, ShopID: "shop-nf", Role: storage.RoleOwner}
+
+	ctx := newAPIContext(t, "GET", "/api/admin/customer-cards/nonexistent-id", nil,
+		withClaims(claims), withPathParam("id", "nonexistent-id"))
+	status, _ := runHandler(t, getCustomerCardHandler, ctx)
+	if status != http.StatusNotFound {
+		t.Errorf("不存在 cc 应 404，得到 %d", status)
+	}
+}
+
+// TestGetCustomerCard_CrossShopIsolation 验证跨店访问 → 404（防泄漏）
+//
+// v4.16.4 真实事故：商户在「顾客详情」点卡进详情，缓存可能没这张卡。
+// 如果跨店能访问，会泄漏其他店的卡信息。
+func TestGetCustomerCard_CrossShopIsolation(t *testing.T) {
+	setupAPITestDB(t)
+	makeShopWithPlan(t, "shop-a", storage.PlanPro)
+	makeShopWithPlan(t, "shop-b", storage.PlanPro)
+	cust := storage.MakeCustomer(t, "跨店测试", 0, 0)
+	claimsA := &auth.Claims{AdminID: 1, ShopID: "shop-a", Role: storage.RoleOwner}
+	claimsB := &auth.Claims{AdminID: 2, ShopID: "shop-b", Role: storage.RoleOwner}
+
+	// shop-a 建卡 + 售卡
+	createBody := []byte(`{"name":"shop-a卡","type":"stored_value","price_cents":100000,"face_value_cents":100000,"bonus_cents":0}`)
+	ctx := newAPIContext(t, "POST", "/api/admin/cards", createBody, withClaims(claimsA))
+	_, body := runHandler(t, createCardHandler, ctx)
+	var card storage.Card
+	json.Unmarshal([]byte(body), &card)
+
+	sellBody := []byte(`{"card_id":"` + card.ID + `"}`)
+	ctx = newAPIContext(t, "POST", "/api/admin/customers/"+cust.ID+"/cards/sell", sellBody,
+		withClaims(claimsA), withPathParam("id", cust.ID))
+	_, body = runHandler(t, sellCardHandler, ctx)
+	var cc storage.CustomerCard
+	json.Unmarshal([]byte(body), &cc)
+
+	// shop-b 用 cc.ID 查 → 应 404（不泄漏）
+	ctx = newAPIContext(t, "GET", "/api/admin/customer-cards/"+cc.ID, nil,
+		withClaims(claimsB), withPathParam("id", cc.ID))
+	status, _ := runHandler(t, getCustomerCardHandler, ctx)
+	if status != http.StatusNotFound {
+		t.Errorf("跨店查 cc 应 404，得到 %d", status)
+	}
+}

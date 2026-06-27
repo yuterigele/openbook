@@ -150,6 +150,7 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.POST("/customer-cards/:id/consume", auth.RequirePerm(storage.PermManageCards), consumeCardHandler)
 	protected.POST("/customer-cards/:id/adjust", auth.RequirePerm(storage.PermManageCards), adjustCardHandler)
 	protected.GET("/customer-cards/:id/transactions", auth.RequirePerm(storage.PermViewCards), listCardTransactionsHandler)
+	protected.GET("/customer-cards/:id", auth.RequirePerm(storage.PermViewCards), getCustomerCardHandler) // v4.16.4：单卡详情，不靠 soldCards 缓存
 
 	// 跨店看板（连锁）—— v4.10.1：只给 platform_admin 看
 	// 之前用 RequirePerm + owner 默认有 AllPermissions → 单店 owner 也能看全平台所有店（权限泄漏）

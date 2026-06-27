@@ -11,6 +11,7 @@ package api
 //   GET    /api/admin/cards/sold                列本店所有顾客卡（管理视图）
 //   GET    /api/admin/customers/:id/cards       列某顾客的所有卡
 //   POST   /api/admin/customers/:id/cards/sell  售卡给顾客
+//   GET    /api/admin/customer-cards/:id              顾客卡详情（v4.16.4 补，前端不靠 soldCards 缓存）
 //   POST   /api/admin/customer-cards/:id/consume     扣减
 //   POST   /api/admin/customer-cards/:id/adjust      手动调账（reason 必填）
 //   GET    /api/admin/customer-cards/:id/transactions 流水
@@ -545,4 +546,37 @@ func listCardTransactionsHandler(ctx context.Context, c *app.RequestContext) {
 		txs = []storage.CardTransaction{}
 	}
 	c.JSON(http.StatusOK, txs)
+}
+
+// getCustomerCardHandler GET /api/admin/customer-cards/:id
+//
+// v4.16.4 补：返回单张顾客卡的完整详情（v4.15 之前前端只能从 cards/sold 缓存里找，
+// 缓存没命中就永远显示骨架屏——典型场景：商户在「顾客详情」页直接点某张卡进详情，
+// 而 soldCards 列表可能因为分页 / 缓存过期不含这张卡）。
+//
+// 返回的字段跟 storage.CustomerCard 完全一致，前端可直接渲染。
+func getCustomerCardHandler(ctx context.Context, c *app.RequestContext) {
+	shopID := shopFromClaims(c)
+	if shopID == "" {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
+		return
+	}
+	if !requireCardFeature(ctx, c, shopID) {
+		return
+	}
+	ccID := c.Param("id")
+	if ccID == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "customer_card id 必填"})
+		return
+	}
+	cc, err := storage.GetCustomerCardInShop(ctx, shopID, ccID)
+	if err != nil {
+		if errors.Is(err, storage.ErrCustomerCardNotFoundInShop) {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "顾客卡不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cc)
 }
