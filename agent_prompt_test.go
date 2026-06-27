@@ -100,6 +100,17 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 				"history 里的 barber_name 可能是旧的", // 为什么必调
 			},
 		},
+		{
+			desc: "【v4.16.2】list_shop_holidays 节假日拒绝时必调",
+			mustHave: []string{
+				"list_shop_holidays",            // 工具名
+				"必须",                          // 强约束
+				"前后两天",                       // 必须明确禁止凭印象推
+				"v4.16.1",                       // 真实事故背景
+				"顾客改日期时",                  // 改日期也要重查
+				"重新调 query_schedule 验证", // 不能凭上轮结果
+			},
+		},
 	}
 
 	for _, check := range checks {

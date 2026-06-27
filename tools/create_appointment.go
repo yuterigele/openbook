@@ -124,7 +124,9 @@ func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 			"  - 失败时**不要**把工具错误原文（如「ErrSlotTaken」）告诉顾客，翻译成场景化话术：\n" +
 			"    * 时段被占 → 「这个时段刚被别的顾客抢了，我帮你看下一个空档」\n" +
 			"    * 理发师请假 → 「Tony 师傅 X 点到 X 点请假了，要不要换 Kevin 师傅或换个时间？」\n" +
-			"    * 节假日 → 「X 月 X 日是节假日休息日，可以约前后两天吗？」",
+			"    * 节假日（v4.16.2 改）→ 先调 list_shop_holidays 拿本店完整节假日清单，再调 query_schedule 验证推荐日期可约，\n" +
+			"      最后回「X 月 X 日是节假日休息日，本店 X 月 X 日 / X 月 X 日也能约，您看哪天方便？」\n" +
+			"      **禁止**凭印象推「前后两天」（v4.16.1 事故：店设 7-1、7-2 休息，Agent 推 7-1 给顾客，实际 7-1 也是假期）。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"barber_name": {
 				Type: "string", Desc: "理发师姓名，例如：Tony、Kevin", Required: true,

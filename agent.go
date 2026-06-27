@@ -73,6 +73,9 @@ func buildAgentInstruction() string {
 		"  - list_barbers：列本店师傅（含今日请假标注）\n" +
 		"  - list_services：列本店服务项目（顾客问价格/项目时调）\n" +
 		"  - barber_leave：查某师傅某天的请假详情（顾客问「为什么没空」时调）\n" +
+		"  - **list_shop_holidays（v4.16.2 新增）**：列本店所有节假日 + 营业时间。**节假日拒绝时必调**——\n" +
+		"    拿到完整清单后推日期，**不能**凭印象推「前后两天」（v4.16.1 真实事故：店只设 7-1、7-2 休息，\n" +
+		"    Agent 推 7-1 给顾客，顾客同意后才发现 7-1 也是假期）。\n" +
 		"  - mark_no_show：把已过时间的预约标为爽约\n" +
 		"  - mark_completed：把到店的预约标为已完成（一般商户后台用）\n" +
 		"  - handoff_to_human：转人工（仅限 3 类场景，见下方）\n\n" +
@@ -81,7 +84,11 @@ func buildAgentInstruction() string {
 		"  - 节假日、过去时间、22:00 之后不接单。\n" +
 		"  - 顾客说「3 点」默认下午 15:00（不是凌晨 3 点）。\n" +
 		"  - 顾客说「明天 / 后天 / 3 号 / 周六」时，根据当天日期推 YYYY-MM-DD（调用方会在第一条 user 消息里给日期上下文）。\n" +
-		"  - 默认服务「剪发」；顾客要烫/染/护理时调 list_services 让他/她挑。\n\n" +
+		"  - 默认服务「剪发」；顾客要烫/染/护理时调 list_services 让他/她挑。\n" +
+		"  - **节假日处理（v4.16.2 关键）**：拒绝某天时**必须**先调 list_shop_holidays 看本店完整节假日清单，\n" +
+		"    再从清单里挑一个非假日的日期推荐给顾客——**严禁**凭 prompt 里的「前后两天」硬推日期（v4.16.1 真实事故）。\n" +
+		"    推荐前先调 query_schedule 验证推荐日期的师傅时段真空闲。\n" +
+		"  - **顾客改日期时**：每次都要重新调 query_schedule 验证该日期可约，不能凭上轮结果直接确认。\n\n" +
 		"【顾客等级】（create_appointment 工具会自动拦截黑名单）\n" +
 		"  - VIP：用尊称、主动提供 2+ 时段让其挑选、避免排队\n" +
 		"  - FREQUENT（累计 ≥5 次）：用熟称、提醒上次预约的师傅\n" +
@@ -101,7 +108,9 @@ func buildAgentInstruction() string {
 		"【常见错误翻译】\n" +
 		"  - 时段被占 → 「这个时段刚被别的顾客抢了，我帮你看下一个空档」\n" +
 		"  - 师傅请假 → 「Tony 师傅 X 点到 X 点请假了，要不要换 Kevin 师傅或换个时间？」\n" +
-		"  - 节假日 → 「X 月 X 日是节假日休息日，可以约前后两天吗？」\n" +
+		"  - 节假日（v4.16.2 改）→ **先调 list_shop_holidays 拿完整清单**，再调 query_schedule 验证推荐日期可约，\n" +
+		"    最后回「X 月 X 日是节假日休息日，本店 X 月 X 日 / X 月 X 日也能约，您看哪天方便？」\n" +
+		"    **禁止**凭印象推「前后两天」（v4.16.1 事故：店设 7-1、7-2 休息，Agent 推 7-1，实际 7-1 也是假期）。\n" +
 		"  - 师傅不存在 → 「本店现在有 Tony、Kevin 两位师傅，你选一位？」\n" +
 		"  - 晚退订 → 「本次取消距离预约不足 2 小时，下次请尽量提前 2 小时取消哦~」\n\n" +
 		"【人工兜底（MVP 第 5 项）】\n" +
@@ -144,6 +153,7 @@ func buildAgentInstruction() string {
 //   - tools.ListBarbersTool         列本店理发师（含请假标注）
 //   - tools.ListServicesTool        列本店服务项目
 //   - tools.BarberLeaveTool         查理发师请假详情（原因 + 区间）
+//   - tools.ListShopHolidaysTool    列本店节假日 + 营业时间（v4.16.2 加，避免 LLM 凭印象推日期）
 //   - tools.MarkNoShowTool / tools.MarkCompletedTool  标记爽约/完成
 //   - tools.HandoffToHumanTool      MVP 第 5 项：转人工兜底（写埋点 + 提示）
 //
@@ -194,6 +204,7 @@ func buildAgentTyped[M adk.MessageType](ctx context.Context) (adk.TypedResumable
 				&tools.ListServicesTool{},
 				&tools.BarberLeaveTool{},
 				&tools.GetAppointmentTool{}, // v4.13.6：改时间前必调，防 leave 改派后用旧 barber
+				&tools.ListShopHolidaysTool{}, // v4.16.2：节假日拒绝时必调，拿完整清单避免 LLM 凭印象推日期
 				&tools.HandoffToHumanTool{},
 			},
 			},
