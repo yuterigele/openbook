@@ -111,6 +111,20 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 				"重新调 query_schedule 验证", // 不能凭上轮结果
 			},
 		},
+		{
+			desc: "【v4.16.3】师傅请假信息必须来自工具，禁止凭空生成（hallucination 防御）",
+			mustHave: []string{
+				"v4.16.3",                                    // 版本标注 + 真实事故
+				"绝对禁止",                                    // 强约束
+				"凭印象",                                     // 禁止理由
+				"幻觉",                                       // 明确 hallucination 字样
+				"barber_leave",                               // 必须调的工具
+				"没有请假",                                    // 工具返回"无请假"时不能画蛇添足
+				"list_barbers",                               // 昵称映射时必调
+				"老王",                                        // 反例必须出现
+				"昵称",                                        // 昵称映射约束
+			},
+		},
 	}
 
 	for _, check := range checks {

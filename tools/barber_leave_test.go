@@ -24,6 +24,30 @@ func TestBarberLeave_InfoMentionsReason(t *testing.T) {
 	}
 }
 
+// TestBarberLeave_InfoMentionsUniqueSource 守住 v4.16.3 「本工具是师傅请假唯一源」约束
+//
+// 真实事故（v4.16.3）：Agent 没调本工具，凭印象对顾客说
+// 「老王 7-3 上午 10:15-11:15 请假一会儿」，商户后台查不到这条记录。
+//
+// 本测试确保工具描述明确告知 LLM：本工具是师傅请假信息的唯一可信来源，
+// 不调本工具就不能说"X 师傅 Y 时间在请假"。
+func TestBarberLeave_InfoMentionsUniqueSource(t *testing.T) {
+	c := &BarberLeaveTool{}
+	info, err := c.Info(context.Background())
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if !strings.Contains(info.Desc, "唯一") {
+		t.Errorf("Info.Desc 应明确说明本工具是「唯一可信来源」（防 LLM 幻觉）: %q", info.Desc)
+	}
+	if !strings.Contains(info.Desc, "v4.16.3") {
+		t.Errorf("Info.Desc 应标注 v4.16.3 事故背景: %q", info.Desc)
+	}
+	if !strings.Contains(info.Desc, "幻觉") {
+		t.Errorf("Info.Desc 应明确提到「幻觉」(LLM hallucination) 字样: %q", info.Desc)
+	}
+}
+
 func TestBarberLeave_NoLeave(t *testing.T) {
 	setupToolsTestDB(t)
 	shop := storage.MakeShop(t, "bl-none", "")
