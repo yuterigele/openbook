@@ -150,16 +150,17 @@
     .btn-sm { padding: 5px 10px; font-size: 12px; }
 
     /* v4.16: 行内操作下拉（预约管理 ··· 菜单） */
+    /* v4.16.3 fix：用 position: fixed + JS 算坐标，菜单挂 body，不依赖祖先定位。
+       之前用 absolute 但 ··· 按钮没包 .menu-anchor，导致菜单飘到 <html> 根，错乱。 */
     .appt-menu {
-      position: absolute; right: 0; top: 100%;
-      z-index: 50;
+      position: fixed;
+      z-index: 9999;
       min-width: 180px;
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: var(--radius);
       box-shadow: var(--shadow-md);
       padding: 4px 0;
-      margin-top: 4px;
     }
     .appt-menu button {
       display: flex; align-items: center; gap: 8px;
@@ -175,7 +176,6 @@
     .appt-menu button.danger:hover { background: #fef2f2; }
     .appt-menu button.primary { color: var(--brand); font-weight: 600; }
     .appt-menu .menu-divider { height: 1px; background: var(--line); margin: 4px 0; }
-    .menu-anchor { position: relative; display: inline-block; }
 
     /* v4.16 P1.3 快捷键帮助 kbd 样式 */
     kbd {
@@ -6171,6 +6171,11 @@ return `<table class="table">
   }
 
   // v4.16 行内「···」菜单
+  //
+  // v4.16.3 fix：菜单挂到 document.body，用 position: fixed + getBoundingClientRect 算坐标
+  //   - 之前用 absolute 但 ··· 按钮没包 .menu-anchor，菜单飘到 <html> 根 → 错乱
+  //   - 现在挂 body 不依赖任何祖先定位上下文，无论在 table 哪个 cell 都精准贴在按钮下方
+  //   - 滚动 / resize 时主动关闭菜单（fixed 不跟随滚动，会飘走）
   function toggleApptMenu(event, apptId) {
     event.stopPropagation();
     // 关闭其他已打开的菜单
@@ -6179,6 +6184,8 @@ return `<table class="table">
               ((state.dashboard && state.dashboard.upcoming) || []).find(x => x.id === apptId);
     if (!a) return;
     const anchor = event.currentTarget;
+    const rect = anchor.getBoundingClientRect();
+
     const menu = document.createElement('div');
     menu.className = 'appt-menu';
     menu.onclick = e => e.stopPropagation();
@@ -6189,7 +6196,26 @@ return `<table class="table">
       <div class="menu-divider"></div>
       <button data-act="view_customer">${icon('user', 14)} 查看顾客</button>
     `;
-    anchor.parentElement.appendChild(menu);
+    // 挂到 body（不挂 <td>，避开 table 定位 + 祖先 relative 缺失问题）
+    document.body.appendChild(menu);
+
+    // 先放进 DOM 再量真实尺寸（min-width 180px，但可能更宽）
+    const menuRect = menu.getBoundingClientRect();
+    const menuW = menuRect.width || 180;
+    const menuH = menuRect.height || 200;
+
+    // 默认：菜单右下角对齐按钮右下角（贴在按钮下方，右边缘齐平）
+    let top = rect.bottom + 4;
+    let left = rect.right - menuW;
+    // 边界保护：右边溢出 → 改用按钮左边对齐
+    if (left < 8) left = Math.max(8, rect.left);
+    // 边界保护：底部溢出（菜单高度 > 视口剩余空间）→ 改成按钮上方
+    if (top + menuH > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - menuH - 4);
+    }
+    menu.style.top = top + 'px';
+    menu.style.left = left + 'px';
+
     menu.querySelectorAll('button').forEach(btn => {
       btn.onclick = () => {
         menu.remove();
@@ -6202,8 +6228,17 @@ return `<table class="table">
     });
     // 点别处关闭
     setTimeout(() => {
-      const close = () => { menu.remove(); document.removeEventListener('click', close); };
+      const close = () => {
+        menu.remove();
+        document.removeEventListener('click', close);
+        window.removeEventListener('scroll', closeOnScroll, true);
+        window.removeEventListener('resize', closeOnScroll);
+      };
+      const closeOnScroll = () => close();
       document.addEventListener('click', close, { once: true });
+      // fixed 菜单不跟随滚动，滚动 / resize 时主动关掉，避免菜单飘到错位置
+      window.addEventListener('scroll', closeOnScroll, true);
+      window.addEventListener('resize', closeOnScroll);
     }, 0);
   }
 

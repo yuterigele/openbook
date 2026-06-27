@@ -125,6 +125,17 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 				"昵称",                                        // 昵称映射约束
 			},
 		},
+		{
+			desc: "【v4.16.4】history 里的具体陈述也不算事实（污染防御）",
+			mustHave: []string{
+				"v4.16.4",                       // 版本标注 + 真实事故
+				"历史消息",                       // 必须是 history 而不是新生成
+				"不算事实",                       // 强约束：history 不算事实
+				"幻觉",                           // 解释为什么：history 可能是之前 Agent 的幻觉
+				"绝不",                           // 强语气
+				"重新调工具",                      // 每轮必须重查
+			},
+		},
 	}
 
 	for _, check := range checks {
