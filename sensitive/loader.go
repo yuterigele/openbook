@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 
+// Sensitive word list source:
+//
+//	The bundled production list at sensitive/words_zh.json is generated
+//	from Konsheng/Sensitive-lexicon (MIT License) —
+//	https://github.com/Konsheng/Sensitive-lexicon
+//
+//	To regenerate after upstream updates:
+//	  go run ./cmd/sensitive-gen \
+//	    -in <path-to>/SensitiveLexicon.json \
+//	    -out ./sensitive/words_zh.json
+//
+//	The high-priority hand-picked lists in sensitive.go (politics /
+//	porn / violence / ad / abuse / illegal) act as a fallback when the
+//	JSON file is missing or fails to parse — they cover the categories
+//	where the upstream flat list has no built-in classification.
+
 package sensitive
 
 import (
