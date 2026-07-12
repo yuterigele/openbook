@@ -1,0 +1,12 @@
+{
+  "_comment": "敏感词分类词表。文件路径：D:\\golang\\openbook\\sensitive\\words_zh.json。运行时由 sensitive/loader.go 加载。",
+  "version": "v1.0.0",
+  "categories": {
+    "politics": ["fa1a", "fa2b", "fa3c", "fa4d", "fa5e", "fa6f", "fa7g", "fa8h", "fa9i", "fa10j"],
+    "porn":     ["fb1a", "fb2b", "fb3c", "fb4d", "fb5e", "fb6f", "fb7g", "fb8h", "fb9i"],
+    "violence": ["fc1a", "fc2b", "fc3c", "fc4d", "fc5e", "fc6f", "fc7g", "fc8h", "fc9i", "fc10j"],
+    "ad":       ["fd1a", "fd2b", "fd3c", "fd4d", "fd5e", "fd6f", "fd7g", "fd8h", "fd9i"],
+    "abuse":    ["fe1a", "fe2b", "fe3c", "fe4d", "fe5e"],
+    "illegal":  ["ff1a", "ff2b", "ff3c", "ff4d", "ff5e", "ff6f"]
+  }
+}

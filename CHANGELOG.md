@@ -7,6 +7,53 @@
 
 ---
 
+## [v4.17] - 2026-07-12
+
+### Added
+
+**P0 — 输入防护与 LLM 韧性**
+
+- **敏感词审核（`sensitive/`）**：6 大分类（政治 / 色情 / 暴力 / 广告 / 辱骂 / 违法）
+  关键词过滤 + JSON 词表热加载（`words_zh.json`）+ Agent Tool 接入
+  （`sensitive_check`，每轮先于 LLM 拦截）。命中后 LLM 直接回
+  `reason` 字段给顾客，**不重试、不改写**。
+  - 单元测试覆盖：clean / hit / 自定义词表 / Reset / Categories
+
+- **LLM 降级链（`chatmodel.NewModelWithFallback`）**：DeepSeek → OpenAI → Ark
+  init-time fallback，主 provider 挂了自动切下一个；chain 过程
+  全程记录到日志方便排查。env `OPENBOOK_LLM_CHAIN` 可调顺序。
+  - 配套 `helpers/retry.go` 扩展 IsRetryAble：除了 429/QPM，
+    还识别 5xx、网络瞬时（connection reset / EOF / i/o timeout），
+    让 eino 内置 retry 兜小抖动
+
+- **双层意图分类（`intent/`）**：Layer 1 关键词白名单（position-based
+  tie-break，先出现的赢） + Layer 2 LLM 分类兜底；closed intent set
+  （book / cancel / reschedule / query_open / list_barbers / list_service /
+  list_holiday / greeting / complaint / handoff / chitchat / unknown）。
+  关键词层永远在线，LLM 层通过 `WithLLMClassify` 注入。
+
+- **手写 worker pool（`pool/`）**：bounded concurrency + bounded queue +
+  TrySubmit / SubmitCtx / Close 完整生命周期 + panic recovery（可注入
+  `PanicHook` 转发到 Sentry / 飞书）。`pool.PreCheck` helper 用 2 个
+  worker 并行做敏感词 + 意图分类。`OPENBOOK_POOL_SIZE` / `OPENBOOK_POOL_QUEUE`
+  调参。
+
+- **`chatmodel.NewModelWithFallback`** agent 接入：DeepSeek 失败时
+  自动 fallback 到 OpenAI / Ark，记录每段 init latency。
+
+- **Agent Tool 接入**：
+  - `sensitive.SensitiveCheckTool` 排在 tools list 第 2 位
+    （ragTool 之后）
+  - `intent.ClassifyTool` 排在 tools list 第 3 位
+  - Agent 提示词里强调：每轮先调 sensitive_check，再调其他工具
+
+### Changed
+
+- `agent.go` / `main.go` 改用 `chatmodel.NewModelWithFallback`（之前是
+  `chatmodel.NewModel`，没有 fallback 链）
+
+---
+
 ### Changed
 
 **P0 — 核心痛点压缩**

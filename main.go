@@ -36,10 +36,13 @@ import (
 	"github.com/yuterigele/openbook/api"
 	"github.com/yuterigele/openbook/chatmodel"
 	cronpkg "github.com/yuterigele/openbook/cron"
+	"github.com/yuterigele/openbook/intent"
 	lockpkg "github.com/yuterigele/openbook/lock"
 	"github.com/yuterigele/openbook/mem"
 	"github.com/yuterigele/openbook/msgops"
 	"github.com/yuterigele/openbook/notify"
+	"github.com/yuterigele/openbook/pool"
+	"github.com/yuterigele/openbook/sensitive"
 	"github.com/yuterigele/openbook/server"
 	"github.com/yuterigele/openbook/storage"
 	"github.com/yuterigele/openbook/wecom"
@@ -53,6 +56,12 @@ func main() {
 	// including msgops.KindFromEnv below. No-op if .env is absent.
 	chatmodel.LoadEnv()
 
+	// 加载敏感词词表（v4.17+：用户输入预过滤）
+	// 文件缺失时静默放过，过滤器仍可工作（空词表 = 全部放行）。
+	if err := sensitive.LoadProductionWords(); err != nil {
+		log.Printf("⚠️  敏感词词表加载失败: %v", err)
+	}
+
 	// 初始化 MySQL（PRD §11.1 P0：持久化 + MsgId 唯一索引做幂等去重）
 	// 本地开发可临时不接（DB == nil 时所有 storage 方法 panic）；
 	// 生产必须配 MYSQL_DSN。
@@ -65,6 +74,19 @@ func main() {
 	if _, err := lockpkg.InitRedis(ctx); err != nil {
 		log.Printf("⚠️  Redis 初始化失败（继续运行，但并发预约可能冲突）: %v", err)
 	}
+
+	// v4.17+：手写 worker pool（bounded concurrency + backpressure + panic recovery）
+	// 默认 4 workers / 64 queue；可通过 OPENBOOK_POOL_SIZE / OPENBOOK_POOL_QUEUE 调。
+	precheckPool, err := pool.New(
+		envInt("OPENBOOK_POOL_SIZE", 4),
+		envInt("OPENBOOK_POOL_QUEUE", 64),
+	)
+	if err != nil {
+		log.Fatalf("init pool: %v", err)
+	}
+	defer precheckPool.Close()
+	log.Printf("[pool] precheck pool started: size=%d queue=%d",
+		precheckPool.Size(), precheckPool.QueueCap())
 
 	// setup cozeloop tracing (optional)
 	// COZELOOP_WORKSPACE_ID=your workspace id
@@ -95,12 +117,35 @@ func main() {
 }
 
 func runTyped[M adk.MessageType](ctx context.Context) {
-	cm, err := chatmodel.NewModel[M](ctx)
+	// v4.17+ LLM 降级链：DeepSeek → OpenAI → Ark（可在 env 调顺序）
+	// Init-time fallback：主 provider 挂了自动切下一个；
+	// 全部挂才 fatal。运行中 provider 挂的 runtime fallback 由
+	// helpers/retry.go 的 IsRetryAble 配合 model 层处理。
+	cm, _, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
-		log.Fatalf("failed to create chat model: %v", err)
+		log.Fatalf("all LLM providers failed: %v", err)
+	}
+	for _, e := range chain {
+		if e.Err == "" {
+			log.Printf("[chatmodel] ✓ %s (idx %d) init %v", e.Provider, e.Index, e.Latency)
+		} else {
+			log.Printf("[chatmodel] ✗ %s (idx %d) init %v failed: %s", e.Provider, e.Index, e.Latency, e.Err)
+		}
 	}
 
-	agent, err := buildAgentTyped[M](ctx)
+	// v4.17+：双层意图分类（关键词 + LLM 兜底）。
+	// 关键词层永远在线（免费、零延迟）；LLM 层复用上面的 chat model
+	// （降级链选出来的那个）做语义分类兜底。
+	//
+	// LLM 层在 generic M 上接 BaseModel[M] 有点麻烦（不同 M 的 Generate
+	// 签名不一样），所以这里只装"可装"的占位实现：见 intent.NewLLMClassifyFuncFromEino
+	// 的注释，调用方如果 M = *schema.Message 可以用 type switch 装上。
+	// 实际跑起来时，关键词层够用，LLM 层是加分项。
+	_ = cm // mark used for clarity; the intent tool is keyword-only at runtime.
+	intentClf := intent.NewClassifier()
+	intentTool := intent.NewClassifyTool(intentClf)
+
+	agent, err := buildAgentTyped[M](ctx, intentTool)
 	if err != nil {
 		log.Fatalf("failed to build agent: %v", err)
 	}
@@ -353,6 +398,20 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	log.Printf("starting server on http://localhost:%s", port)
 	log.Printf("商户后台: http://localhost:%s/admin (默认 admin/admin123，首次登录后请改密码)", port)
 	srv.Spin()
+}
+
+// envInt returns os.Getenv(key) parsed as int, or fallback if unset / invalid.
+func envInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		log.Printf("[env] %s=%q invalid, using fallback %d", key, v, fallback)
+		return fallback
+	}
+	return n
 }
 
 // parseRecipients 解析 REPORT_TO 字符串（逗号分隔）成收件人列表

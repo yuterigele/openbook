@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 
 	localbk "github.com/cloudwego/eino-ext/adk/backend/local"
 	"github.com/cloudwego/eino/adk"
@@ -29,6 +30,7 @@ import (
 	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/helpers"
 	"github.com/yuterigele/openbook/rag"
+	"github.com/yuterigele/openbook/sensitive"
 	"github.com/yuterigele/openbook/tools"
 )
 
@@ -95,7 +97,9 @@ func buildAgentInstruction() string {
 		"    Agent 推 7-1 给顾客，顾客同意后才发现 7-1 也是假期）。\n" +
 		"  - mark_no_show：把已过时间的预约标为爽约\n" +
 		"  - mark_completed：把到店的预约标为已完成（一般商户后台用）\n" +
-		"  - handoff_to_human：转人工（仅限 3 类场景，见下方）\n\n" +
+		"  - handoff_to_human：转人工（仅限 3 类场景，见下方）\n" +
+		"  - **sensitive_check（v4.17+ 必调）**：每轮用户消息的**第一件事**先调本工具做输入预过滤，\n" +
+		"    命中（blocked=true）就把返回的 `reason` 字段**原样**回给顾客，不要重试、不要改写、不要调其他工具。\n\n" +
 		"【业务规则】\n" +
 		"  - 工作时间：每天 09:00-18:00，每半小时一个时段，午休 12:00-13:30 不可约。\n" +
 		"  - 节假日、过去时间、22:00 之后不接单。\n" +
@@ -176,13 +180,24 @@ func buildAgentInstruction() string {
 //
 // 辅助工具：
 //   - ragTool                       RAG（理发店知识问答，可选）
+//   - sensitive.SensitiveCheckTool  v4.17+：输入预过滤（政治/色情/暴力/广告/辱骂/违法）
+//                                   命中后 LLM 直接回 `reason` 字段给顾客，不重试、不改写
+//   - intent.ClassifyTool           v4.17+：双层意图分类（关键词白名单 + LLM 兜底），
+//                                   给 LLM 一个路由提示而不是硬规则
 //
 // 微信场景下 Agent 不需要 interrupt 审批（顾客发消息 → Agent 直接调工具 → 回复），
 // 所以不再挂 approvalMiddleware；只保留 SafeToolMiddleware 防止工具抛错卡死循环。
-func buildAgentTyped[M adk.MessageType](ctx context.Context) (adk.TypedResumableAgent[M], error) {
-	cm, err := chatmodel.NewModel[M](ctx)
+func buildAgentTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool) (adk.TypedResumableAgent[M], error) {
+	cm, _, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
 		return nil, err
+	}
+	for _, e := range chain {
+		if e.Err == "" {
+			log.Printf("[chatmodel] ✓ %s (idx %d) init %v", e.Provider, e.Index, e.Latency)
+		} else {
+			log.Printf("[chatmodel] ✗ %s (idx %d) init %v failed: %s", e.Provider, e.Index, e.Latency, e.Err)
+		}
 	}
 
 	backend, err := localbk.NewBackend(ctx, &localbk.Config{})
@@ -212,6 +227,8 @@ func buildAgentTyped[M adk.MessageType](ctx context.Context) (adk.TypedResumable
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 			Tools: []tool.BaseTool{
 				ragTool,
+				&sensitive.SensitiveCheckTool{}, // v4.17+：输入预过滤，命中后由 LLM 回 `reason` 给顾客
+				intentTool,                       // v4.17+：双层意图分类
 				&tools.QueryScheduleTool{},
 				&tools.CreateAppointmentTool{},
 				&tools.CancelAppointmentTool{},
