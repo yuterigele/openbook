@@ -33,6 +33,7 @@ import (
 	"github.com/coze-dev/cozeloop-go"
 
 	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
+	"github.com/yuterigele/openbook/internal/agent"
 	"github.com/yuterigele/openbook/api"
 	"github.com/yuterigele/openbook/chatmodel"
 	cronpkg "github.com/yuterigele/openbook/cron"
@@ -145,7 +146,7 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	intentClf := intent.NewClassifier()
 	intentTool := intent.NewClassifyTool(intentClf)
 
-	agent, err := buildAgentTyped[M](ctx, intentTool)
+	agent, err := agent.BuildTyped[M](ctx, intentTool)
 	if err != nil {
 		log.Fatalf("failed to build agent: %v", err)
 	}

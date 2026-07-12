@@ -14,7 +14,16 @@
  * limitations under the License.
  */
 
-package main
+// Package agent builds the eino-ADK Agent for the booking assistant.
+//
+// Lives under internal/ so it's not part of the public API surface —
+// only main.go (and tests) import it.
+//
+// v4.17+ 关键改动：
+//   - chatmodel.NewModelWithFallback：DeepSeek → OpenAI → Ark 降级链
+//   - sensitive.SensitiveCheckTool：每轮先于 LLM 拦截
+//   - intent.ClassifyTool：双层意图分类
+package agent
 
 import (
 	"context"
@@ -187,7 +196,13 @@ func buildAgentInstruction() string {
 //
 // 微信场景下 Agent 不需要 interrupt 审批（顾客发消息 → Agent 直接调工具 → 回复），
 // 所以不再挂 approvalMiddleware；只保留 SafeToolMiddleware 防止工具抛错卡死循环。
-func buildAgentTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool) (adk.TypedResumableAgent[M], error) {
+// BuildTyped constructs the booking-assistant agent. The caller passes the
+// intent classification tool (built in main.go) so the agent can branch
+// on the LLM result.
+//
+// M is the eino MessageType — *schema.Message for chat, *schema.AgenticMessage
+// for tool-loop agents. The caller chooses at the boundary.
+func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool) (adk.TypedResumableAgent[M], error) {
 	cm, _, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
 		return nil, err

@@ -7,6 +7,17 @@ chatwitheino-windows*.exe
 *.exe
 *.exe~
 
+# Local scratch / dev artifacts
+_srv.err
+_srv.out
+_srv.py
+args_*.json
+*.pdf.tmp
+
+# Resume / personal artifacts (not part of the openbook product)
+特日格乐_*.html
+特日格乐_*.pdf
+
 # Local config / secrets — never commit
 .env
 .env.local
