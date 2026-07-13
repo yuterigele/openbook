@@ -11,7 +11,7 @@
 
 ### Added
 
-**P0 — 敏感词审核 LLM 兜底层 + 可观测性**
+**P0 — 敏感词审核 LLM 兜底层 + 可观测性 + LLM 降级链兜底**
 
 - **敏感词 LLM 兜底（`sensitive/`）**：在原有 Layer 1 关键词匹配
   （51,345 词 / 6 大类 / JSON 热加载）之上，加 Layer 2 LLM 语义兜底——
@@ -67,6 +67,34 @@
     - `rate(openbook_sensitive_llm_errors_total[5m])` — LLM 错误率（>5% 告警）
     - `openbook_sensitive_llm_latency_us_avg` — 平均延迟（>500ms 告警）
     - `openbook_sensitive_category_hits_total{category="porn"}` — 各 category 命中分布
+
+- **v4.18+ LLM 降级链兜底（`chatmodel/stub.go` + `fallback.go`）**：
+  之前 `DeepSeek → OpenAI → Ark` 三段全挂时 main.go 调
+  `log.Fatalf("all LLM providers failed: ...")` **直接退出进程**——storefront
+  对正在对话的顾客直接 502/refused。新增 `stubChatModel`（chat-only）：
+  - **实现**：`stubMessageModel` 实现 `einomodel.ToolCallingChatModel`（即
+    `BaseChatModel` + `WithTools(...)`）给 M = `*schema.Message` 路径；
+    `stubAgenticModel` 实现 `einomodel.AgenticModel`（=`BaseModel[*schema.AgenticMessage]`）
+    给 M = `*schema.AgenticMessage` 路径。两个具体类型，eino 的泛型约束
+    `messageType = *schema.Message | *schema.AgenticMessage` 不允许
+    单个泛型 stub 同时满足两个，所以拆分。
+  - **行为契约**：`Generate / Stream` 返回 assistant-role 消息，**ToolCalls
+    永远为空**——adk.ChatModelAgent 看到 no tool call 立即结束当轮，
+    不会触发 `sensitive_check / query_schedule / create_appointment`
+    任何 tool，**MySQL / Redis 零写入**。
+  - **话术**：`PickStubReply(userText)` 用 `intent.Classifier` 关键词层
+    按意图选 canned reply（greeting / handoff / complaint / book-cancel-
+    reschedule / list-* / chitchat / default），跟真 agent 走同一套
+    意图分类，区别只是"输出 canned text" vs "调 tool"。
+  - **接入**：`NewModelWithFallback[M]` 链全挂时返回 `&stubMessageModel{}`
+    或 `&stubAgenticModel{}`（按 M 分发），`used = ProviderStub`；
+    main.go 检测到 stub 模式打醒目 warning 但**继续启动**——storefront
+    保持在线，顾客收到"AI 助手暂不可用，请工作日 9-18 点来电"的人话回复。
+  - **配套修一个预存在 bug**：`parseProviderList` 全 unknown 名字时
+    `return DefaultFallbackChain()` 会无限递归（env 仍设着原值）——
+    改为直接返回空 slice，触发 stub 分支。
+  - **测试**：`chatmodel/stub_test.go`（9 个）+ `chatmodel/fallback_test.go`
+    （2 个，验证空 chain → stub + 模拟真实 chat 流程不写库），全过。
 
 ### Added
 

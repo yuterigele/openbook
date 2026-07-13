@@ -53,6 +53,12 @@ type FallbackEntry struct {
 	Latency  time.Duration
 }
 
+// ProviderStub is the sentinel Provider value returned by
+// NewModelWithFallback when every real provider failed and the
+// returned model is a stubChatModel (chat-only, no tools). Use it
+// to log a one-line "running in degraded mode" warning at startup.
+const ProviderStub Provider = "stub"
+
 // DefaultFallbackChain is the order to try providers at init time.
 //
 // Tunable via env: OPENBOOK_LLM_CHAIN = "deepseek,openai,ark"
@@ -77,9 +83,13 @@ func parseProviderList(s string) []Provider {
 			out = append(out, ProviderArk)
 		}
 	}
-	if len(out) == 0 {
-		return DefaultFallbackChain()
-	}
+	// v4.18+ bug fix: if every name was unknown, return an empty
+	// chain (NOT a recursive fallback to DefaultFallbackChain, which
+	// would re-read OPENBOOK_LLM_CHAIN and infinite-loop if the env
+	// var still holds the unrecognized value).
+	//
+	// The empty chain is the trigger for the stub branch in
+	// NewModelWithFallback — see "all providers failed" handling.
 	return out
 }
 
@@ -94,8 +104,16 @@ func parseProviderList(s string) []Provider {
 //     via the eino retry config in helpers/retry.go + per-request try-next
 //     wrapping. See `tryNextProvider` (planned, not yet implemented).
 //
+// v4.18+ degradation: when EVERY provider has failed to initialize,
+// the function now returns a stubChatModel (chat-only, no tools)
+// instead of an error. This lets the process keep running so the
+// store-front stays online: the customer gets a canned "AI 助手暂
+// 不可用" reply instead of a connection-refused error. The caller
+// detects this via `used == ProviderStub`.
+//
 // `chain` is a recorded slice (one entry per provider attempt) so callers
-// can log / assert which provider actually answered.
+// can log / assert which provider actually answered (or whether they
+// all failed).
 func NewModelWithFallback[M adk.MessageType](ctx context.Context) (m einomodel.BaseModel[M], used Provider, chain []FallbackEntry, err error) {
 	providers := DefaultFallbackChain()
 	chain = make([]FallbackEntry, 0, len(providers))
@@ -128,7 +146,30 @@ func NewModelWithFallback[M adk.MessageType](ctx context.Context) (m einomodel.B
 		return mm, p, chain, nil
 	}
 
-	return nil, "", chain, fmt.Errorf("all LLM providers failed: %s", formatChain(chain))
+	// v4.18+ degraded-mode fallback: every provider failed. Return a
+	// stub model instead of an error so the process can keep running.
+	// The stub is chat-only: no LLM, no tool calls, no DB writes.
+	log.Printf("[chatmodel] ⚠️  ALL providers failed — entering degraded mode (chat-only stub)")
+	return newStubForType[M](), ProviderStub, chain, nil
+}
+
+// newStubForType returns the stub model matching the M generic. The
+// two concrete types are necessary because einomodel.BaseModel[M]
+// has a fixed type-set constraint:
+//
+//	*schema.Message | *schema.AgenticMessage
+//
+// A single generic stub can't satisfy both at once (the methods
+// would need to return either of two incompatible concrete types).
+// Instead we keep two stubs and pick at the call site.
+func newStubForType[M adk.MessageType]() einomodel.BaseModel[M] {
+	var zero M
+	switch any(zero).(type) {
+	case *schema.AgenticMessage:
+		return any(&stubAgenticModel{}).(einomodel.BaseModel[M])
+	default:
+		return any(&stubMessageModel{}).(einomodel.BaseModel[M])
+	}
 }
 
 // buildProvider constructs a single provider's model. M selects whether to

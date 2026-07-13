@@ -129,19 +129,29 @@ func main() {
 
 func runTyped[M adk.MessageType](ctx context.Context) {
 	// v4.17+ LLM 降级链：DeepSeek → OpenAI → Ark（可在 env 调顺序）
-	// Init-time fallback：主 provider 挂了自动切下一个；
-	// 全部挂才 fatal。运行中 provider 挂的 runtime fallback 由
-	// helpers/retry.go 的 IsRetryAble 配合 model 层处理。
-	cm, _, chain, err := chatmodel.NewModelWithFallback[M](ctx)
+	// Init-time fallback：主 provider 挂了自动切下一个。
+	// v4.18+ 进一步降级：链全挂时返回 stubChatModel（chat-only，
+	// 不调 tool、不写库），服务继续启动，让 storefront 保持在线
+	// 给顾客"AI 助手暂不可用"的人话回复，比 502/refused 友好。
+	// 运行中 provider 挂的 runtime fallback 由 helpers/retry.go 的
+	// IsRetryAble 配合 model 层处理。
+	cm, used, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
-		log.Fatalf("all LLM providers failed: %v", err)
+		log.Fatalf("chatmodel init failed: %v", err)
 	}
+	// 打印每段 provider 的 init 结果（成功 ✓ / 失败 ✗）。
 	for _, e := range chain {
 		if e.Err == "" {
 			log.Printf("[chatmodel] ✓ %s (idx %d) init %v", e.Provider, e.Index, e.Latency)
 		} else {
 			log.Printf("[chatmodel] ✗ %s (idx %d) init %v failed: %s", e.Provider, e.Index, e.Latency, e.Err)
 		}
+	}
+	if used == chatmodel.ProviderStub {
+		// 降级模式启动 —— 打醒目 warning 让运维知道。
+		log.Printf("⚠️  [chatmodel] running in DEGRADED mode (chat-only stub). " +
+			"All LLM providers failed at init. Customers will receive canned " +
+			"\"AI 助手暂不可用\" replies. No tool calls, no DB writes from agent.")
 	}
 
 	// v4.17+：双层意图分类（关键词 + LLM 兜底）。

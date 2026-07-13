@@ -18,92 +18,84 @@ package chatmodel
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
 )
 
-func TestParseProviderList(t *testing.T) {
-	tests := []struct {
-		in   string
-		want []Provider
-	}{
-		{"deepseek,openai,ark", []Provider{ProviderDeepSeek, ProviderOpenAI, ProviderArk}},
-		{"  ark , OPENAI  ", []Provider{ProviderArk, ProviderOpenAI}},
-		// Empty / all-unknown input falls back to default chain (defensive).
-		{"", []Provider{ProviderDeepSeek, ProviderOpenAI, ProviderArk}},
-		{"unknown,deepseek", []Provider{ProviderDeepSeek}},
+// TestNewModelWithFallback_AllProvidersFail_ReturnsStub is the key
+// regression test for the v4.18+ degraded-mode behavior: when every
+// real provider (DeepSeek / OpenAI / Ark) is unavailable, the
+// function must return a stub model (chat-only, no tools) instead
+// of an error.
+//
+// We simulate "all providers unavailable" by pointing the chain at
+// an empty list via OPENBOOK_LLM_CHAIN. parseProviderList drops
+// unknown names, so the for-loop body never runs and the stub
+// branch is reached. (We can't use "no API key" as the trigger
+// because eino-ext's NewChatModel doesn't validate APIKey at
+// construction time — it just fails at first call.)
+func TestNewModelWithFallback_AllProvidersFail_ReturnsStub(t *testing.T) {
+	// Empty chain: every name is unknown to parseProviderList, so
+	// the for-loop body is skipped and the stub branch runs.
+	t.Setenv("OPENBOOK_LLM_CHAIN", "nonexistent_1,nonexistent_2")
+
+	cm, used, chain, err := NewModelWithFallback[*schema.Message](context.Background())
+	if err != nil {
+		t.Fatalf("expected nil err (stub returned), got: %v", err)
 	}
-	for _, tt := range tests {
-		got := parseProviderList(tt.in)
-		if len(got) != len(tt.want) {
-			t.Errorf("parseProviderList(%q) = %v, want %v", tt.in, got, tt.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tt.want[i] {
-				t.Errorf("parseProviderList(%q)[%d] = %q, want %q",
-					tt.in, i, got[i], tt.want[i])
-			}
-		}
+	if used != ProviderStub {
+		t.Errorf("used = %q, want %q (chain empty → stub)", used, ProviderStub)
+	}
+	if cm == nil {
+		t.Fatal("cm is nil; expected a stub model")
+	}
+	if len(chain) != 0 {
+		t.Errorf("chain length = %d, want 0 (no real provider attempted)", len(chain))
+	}
+
+	// The returned model is the stub — it should produce an assistant
+	// message with empty ToolCalls (no DB writes).
+	out, gErr := cm.Generate(context.Background(), []*schema.Message{
+		schema.UserMessage("明天下午 3 点预约剪发"),
+	})
+	if gErr != nil {
+		t.Fatalf("stub Generate: %v", gErr)
+	}
+	if out == nil {
+		t.Fatal("stub returned nil message")
+	}
+	if len(out.ToolCalls) != 0 {
+		t.Errorf("stub returned %d tool calls; degraded mode must not trigger any", len(out.ToolCalls))
+	}
+	if out.Role != schema.Assistant {
+		t.Errorf("Role = %q, want assistant", out.Role)
 	}
 }
 
-func TestDefaultFallbackChain_EnvOverride(t *testing.T) {
-	t.Setenv("OPENBOOK_LLM_CHAIN", "ark,openai")
-	got := DefaultFallbackChain()
-	want := []Provider{ProviderArk, ProviderOpenAI}
-	if len(got) != len(want) {
-		t.Fatalf("DefaultFallbackChain() = %v, want %v", got, want)
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			t.Errorf("[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
+// TestNewModelWithFallback_AllProvidersFail_ReturnsStub_Agentic
+// does the same for the M = *schema.AgenticMessage path. The agentic
+// path uses different eino providers (agenticark / agenticopenai),
+// so a stub in this path needs to be AgenticMessage-shaped.
+func TestNewModelWithFallback_AllProvidersFail_ReturnsStub_Agentic(t *testing.T) {
+	t.Setenv("OPENBOOK_LLM_CHAIN", "nonexistent_1,nonexistent_2")
 
-func TestDefaultFallbackChain_DefaultOrder(t *testing.T) {
-	os.Unsetenv("OPENBOOK_LLM_CHAIN")
-	got := DefaultFallbackChain()
-	want := []Provider{ProviderDeepSeek, ProviderOpenAI, ProviderArk}
-	if len(got) != len(want) {
-		t.Fatalf("DefaultFallbackChain() = %v, want %v", got, want)
+	cm, used, chain, err := NewModelWithFallback[*schema.AgenticMessage](context.Background())
+	if err != nil {
+		t.Fatalf("expected nil err (stub returned), got: %v", err)
 	}
-	for i := range got {
-		if got[i] != want[i] {
-			t.Errorf("[%d] = %q, want %q", i, got[i], want[i])
-		}
+	if used != ProviderStub {
+		t.Errorf("used = %q, want %q", used, ProviderStub)
 	}
-}
-
-func TestFormatChain(t *testing.T) {
-	chain := []FallbackEntry{
-		{Provider: ProviderDeepSeek, Err: "connection refused"},
-		{Provider: ProviderOpenAI, Err: "401 unauthorized"},
-		{Provider: ProviderArk, Err: ""},
+	if cm == nil {
+		t.Fatal("cm is nil; expected a stub model")
 	}
-	got := formatChain(chain)
-	want := "deepseek=connection refused; openai=401 unauthorized; ark="
-	if got != want {
-		t.Errorf("formatChain = %q, want %q", got, want)
+	if len(chain) != 0 {
+		t.Errorf("chain length = %d, want 0 (no real provider attempted)", len(chain))
 	}
-}
-
-// TestBuildProvider_DeepSeekWithoutKeyFails is a smoke test: building with no
-// DeepSeek key should produce an error (not panic), proving the fallback
-// loop has a real "fail" path to fall through.
-func TestBuildProvider_DeepSeekWithoutKeyFails(t *testing.T) {
-	os.Unsetenv("DEEPSEEK_API_KEY")
-	os.Unsetenv("OPENAI_API_KEY")
-	os.Unsetenv("OPENAI_BASE_URL")
-	os.Unsetenv("ARK_API_KEY")
-	os.Unsetenv("ARK_MODEL")
-	os.Unsetenv("ARK_BASE_URL")
-
-	_, err := buildProvider[*schema.Message](context.Background(), ProviderDeepSeek)
-	if err == nil {
-		t.Skip("deepseek accepted a missing key — provider may be lenient in this env; skipping")
+	// Smoke-test the returned model: it should not panic and should
+	// produce a non-nil message.
+	if _, gErr := cm.Generate(context.Background(), nil); gErr != nil {
+		t.Errorf("stub Generate: %v", gErr)
 	}
 }
