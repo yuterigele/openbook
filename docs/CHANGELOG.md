@@ -7,6 +7,75 @@
 
 ---
 
+## [v4.19] - 2026-07-13
+
+### Added
+
+**P0 — 防 LLM token 滥用：usage 追踪 + per-customer 限流**
+
+痛点：一个失控的顾客（或伪造 OpenID 的攻击者）能几秒内刷出
+数百次 LLM 调用，DeepSeek charges ~¥0.001/1k tokens 但 deepseek-r1
+之类推理模型单次能烧 10k+ tokens，几分钟就能跑出 ¥10,000+ 账单——
+月结前根本看不见。
+
+两层防护：
+- **第 1 层：LLM token usage 实时采集（`chatmodel/usage.go`）**
+  - `UsageTracker` 包级 atomic 计数器（PromptTokens / CompletionTokens
+    / TotalTokens / Calls / ErroredCalls / Streaming vs NonStreaming）
+  - `NewUsageHandler()` 是 eino `callbacks.Handler`，用
+    `callbacks.NewHandlerBuilder` 构造；hook 到 `OnEnd` /
+    `OnError` / `OnEndWithStreamOutput` 三个时机
+  - 自动过滤非 `ChatModel` 组件（tool / agent / retriever 不算
+    LLM token）
+  - 同时支持 chat 路径（`*schema.Message.ResponseMeta.Usage`）和
+    agentic 路径（`*schema.AgenticMessage.ResponseMeta.TokenUsage`，
+    字段名差一个词！）
+  - main.go 用 `callbacks.AppendGlobalHandlers(chatmodel.NewUsageHandler())`
+    接入（always-on，不像 cozeloop 需要外部凭证）
+  - `/metrics` 端点加 8 个新 series：`openbook_llm_prompt_tokens_total` /
+    `completion_tokens_total` / `total_tokens_total` / `calls_total` /
+    `errored_calls_total` / `streaming_calls_total` /
+    `non_streaming_calls_total` / `avg_tokens_per_call`
+  - 关键 promQL 告警：`rate(openbook_llm_total_tokens_total[5m]) > 1e6`
+    （5 分钟 100 万 tokens = 异常，触发排查）
+
+- **第 2 层：per-customer 限流（`server/ratelimit.go`）**
+  - `golang.org/x/time/rate.Limiter` token bucket（go.mod 已
+    upgraded 0.0.0-20210723 → 0.15.0）
+  - LRU cap 10K（`container/list` + map），避免百万 OpenID OOM
+  - 默认参数：1 msg/s sustained + 5 burst（一个真人用户
+    几秒发 1 条远超不触发；bot/攻击者秒级 50+ 条秒挂）
+  - 包级 `DefaultRateLimitMetrics` counter：`Allowed` / `Throttled`
+  - `/metrics` 端点加 2 个新 series：
+    `openbook_ratelimit_allowed_total` / `throttled_total`
+  - 关键 promQL 告警：
+    `rate(openbook_ratelimit_throttled_total[1m]) > 5`（每分钟超过
+    5 个顾客被限流 = 有攻击）
+
+- **设计取舍**：
+  - **限流层 reject 不 queue** —— 不缓冲 LLM 请求，恢复时容易
+    thundering-herd 一起涌入打爆
+  - **DefaultLimiter 用 wecom OpenID 作 key**（不是 IP）—— 因为
+    攻击者用 NAT 后 IP 一样；OpenID 是业务唯一标识
+  - **不抢用户主流程** —— Allow 是 in-memory atomic 操作，
+    <1μs；hot path 几乎无感
+  - **per-shop 预算留作 future work**（当前只要全局 token
+    监控 + per-customer 限流足够；plan billing 层需要 DB schema
+    改 daily counter，超出本次范围）
+
+### Tests
+
+- `chatmodel/usage_test.go`（9 个）：usage 累加 / nil 容错 / chat 路径 /
+  agentic 路径 / 过滤非 ChatModel / OnError 计数 / AvgTokensPerCall /
+  PrometheusText / nil RunInfo 容错
+- `server/ratelimit_test.go`（9 个）：首次允许 / 突发耗尽 / key 独立 /
+  时间补充 / LRU 驱逐 / LRU 访问刷新 / 100 goroutine 并发（精度 ±1）/
+  metrics 计数 / zero-cap 模式
+
+合计 chatmodel 27→36 / server 31→40 个测试，全过。
+
+---
+
 ## [v4.18] - 2026-07-13
 
 ### Added

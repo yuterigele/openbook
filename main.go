@@ -119,6 +119,12 @@ func main() {
 		callbacks.AppendGlobalHandlers(clc.NewLoopHandler(client))
 	}
 
+	// v4.19+ LLM token usage 追踪：每个 Generate / Stream 完成时
+	// 提取 Message.ResponseMeta.Usage 累加到 chatmodel.DefaultUsageTracker。
+	// /metrics 端点 + 告警（>X tokens / min）+ per-shop 看板都用得上。
+	// Always wired in (不像 cozeloop 需要外部凭证)。
+	callbacks.AppendGlobalHandlers(chatmodel.NewUsageHandler())
+
 	switch msgops.KindFromEnv() {
 	case msgops.KindAgentic:
 		runTyped[*schema.AgenticMessage](ctx)

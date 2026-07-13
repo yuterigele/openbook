@@ -18,14 +18,18 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/sensitive"
+	"github.com/yuterigele/openbook/server"
 )
 
-// metricsHandler exposes the sensitive-word filter's in-process
-// counters in Prometheus text exposition format (version 0.0.4).
+// metricsHandler exposes the in-process observability counters
+// (sensitive-word filter + LLM token usage + per-customer rate
+// limiter) in Prometheus text exposition format (version 0.0.4).
 //
 // Mounted at /metrics (unauthenticated by design — that's the
 // standard prometheus scrape path). In production this endpoint
@@ -38,9 +42,28 @@ import (
 //     Authorization header) — left as a future enhancement.
 //
 // The endpoint is cheap to call: it reads a small set of atomic
-// counters and serializes ~10 lines of text. Safe to scrape at
+// counters and serializes ~30 lines of text. Safe to scrape at
 // 1Hz without any rate limiting.
 func metricsHandler(_ context.Context, c *app.RequestContext) {
 	c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	c.String(http.StatusOK, sensitive.DefaultMetrics.PrometheusText())
+	body := sensitive.DefaultMetrics.PrometheusText() +
+		"\n" + chatmodel.DefaultUsageTracker.PrometheusText() +
+		"\n" + rateLimitPromText()
+	c.String(http.StatusOK, body)
+}
+
+// rateLimitPromText renders the per-customer rate-limiter counters
+// in prom format. Lives here (not in server/) to keep all metrics
+// output in one place for /metrics.
+func rateLimitPromText() string {
+	snap := server.DefaultRateLimitMetrics.Snapshot()
+	return fmt.Sprintf(
+		"# HELP openbook_ratelimit_allowed_total Total customer requests that passed the per-customer token-bucket rate limiter.\n"+
+			"# TYPE openbook_ratelimit_allowed_total counter\n"+
+			"openbook_ratelimit_allowed_total %d\n"+
+			"# HELP openbook_ratelimit_throttled_total Total customer requests rejected by the per-customer token-bucket rate limiter (suspected abuse / bot).\n"+
+			"# TYPE openbook_ratelimit_throttled_total counter\n"+
+			"openbook_ratelimit_throttled_total %d\n",
+		snap.Allowed, snap.Throttled,
+	)
 }

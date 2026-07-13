@@ -47,6 +47,8 @@
 | 敏感词审核 | **trie 字典树 + LLM 双保险**：Layer 1 前缀树（51,345 词 / 6 大类 / JSON 热加载 / **实测 0.4μs/op**）+ Layer 2 LLM 兜底（关键词未命中时调小模型判灰区语义违规） |
 | 可观测性 | in-process `atomic.Int64` 计数器 + 结构化日志 + `/metrics` 端点（Prometheus 格式，不引第三方库） |
 | LLM 降级链 | DeepSeek → OpenAI → Ark 顺序 fallback，5xx/网络瞬时自动重试；**全挂时降级到 chat-only stub**（不调 LLM / 不触发 tool / 不写库），服务继续启动 |
+| Token 监控 | eino callback handler 提取 `Message.ResponseMeta.Usage` 累加到 `/metrics` 端点（prompt / completion / total tokens + calls / errored） |
+| 防滥用限流 | per-customer token bucket（`golang.org/x/time/rate`），LRU cap 10K，burst 5 / sustained 1 msg/s；超限返回"请稍后再试"+ 0 LLM 调用 |
 | 意图识别 | 关键词白名单（position-based tie-break）+ LLM 分类兜底 |
 | 并发控制 | 手写 worker pool（bounded + backpressure + panic recovery） |
 | 状态一致性 | MySQL 持久化 + Redis 分布式锁（防撞单） |
