@@ -1,7 +1,5 @@
-# 美业预约助手 · OpenBook
+# OpenBook · 基于 DeepSeek API 的垂直行业智能 Agent 助手
 
-> **基于 DeepSeek API 的垂直行业智能 Agent 助手** · `2026 · 个人核心`
->
 > 面向本地生活服务门店（理发 / 美容 / 家政等）的智能 Agent 助手。
 >
 > 顾客在微信里说一句话，AI 自动完成查档期、创建预约、改时间、改师傅、转人工；商家零成本上线。
@@ -104,8 +102,48 @@ go run .
 - **LLM 降级**：OpenAI / 字节 Ark
 - **后端**：CloudWeGo Hertz + SSE
 - **存储**：MySQL 8.0 + Redis 7.0
+- **规划**：PostgreSQL 17 + pgvector（v5.x 商家知识库 RAG）
 - **接入**：企业微信客服 API
 - **前端测试**：vitest（web/）
+
+---
+
+## 演进路线：RAG 与向量检索
+
+### 现状（v4.17）
+
+- **单文档 RAG**（`answer_from_document` 工具）：用户上传 PDF/文档问问题
+- 实现：eino compose.Workflow 4 节点，**LLM-as-judge 评分**（无向量库）
+  - `load` 读文件 → `chunk` 按段落切 ~800 char → `score` 每个 chunk 调 LLM 打 0-10 分（MaxConcurrency=5） → `filter` 取 top-3（score ≥ 3） → `answer` LLM 综合
+- **不直接上向量库的原因**：
+  1. **规模小**：单文档场景，< 1 MB LLM-scoring 完全够用（~35K token / 查询，~12s 延迟，~0.08 元）
+  2. **精度高**：LLM 全文理解 > embedding cosine similarity
+  3. **部署轻**：0 额外基础设施
+
+### 演进路径（按规模）
+
+| 文档规模 | 方案 | 触发条件 |
+|---|---|---|
+| < 1 MB | LLM-scoring（现状） | 单文档场景，量小 |
+| 1-10 MB | **Hybrid 检索**：embedding 粗筛 top-20 + LLM 重排 top-3 | chunk 切分超过 100 |
+| > 10 MB / 商家知识库 | **纯向量库**：bge-m3 + pgvector | 累积到一定规模 |
+
+### v5.x 规划：商家知识库 RAG
+
+**场景**：顾客问"有啥项目 / 染发有啥区别 / 现在有什么优惠"——这类非结构化查询，`list_services` 工具查不到。
+
+**方案**：
+- **embedding 模型**：bge-m3（本地部署，中文 SOTA，支持稠密+稀疏+多向量）
+- **向量库**：**pgvector**（复用现有 MySQL 集群，运维负担最小）
+- **Hybrid 检索**：向量召回 top-20 + Cross-Encoder（bge-reranker-large）精排 top-3
+- **多租户隔离**：`shop_id` 作为 metadata 过滤，每个商家知识库独立
+- **实时更新**：单条 upsert + 重建索引，商家改价目表秒级生效
+
+**为什么选 pgvector**：
+- 已有 MySQL，加 PG 实例 + pgvector 扩展，**0 新增组件类型**
+- 10M 向量内性能够用
+- 支持 metadata 过滤（`WHERE shop_id = ?`）
+- GIN 索引 / HNSW 索引都支持
 
 ---
 
