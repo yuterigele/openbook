@@ -39,6 +39,8 @@ data/*.db
 data/*.db-journal
 data/sessions/   # 运行时 chat session（不要入库）
 data/sessions/*.jsonl
+data/sessions_agentic/   # 运行时 agentic session（不要入库）
+data/sessions_agentic/*.jsonl
 data/**/*.jsonl
 
 # Build / coverage
@@ -64,3 +66,4 @@ web/coverage/
 
 # Personal notes (本地草稿,不入公开仓)
 docs/notes/
+docs/business/   # 本地商业/产品草稿,放飞书/wiki
