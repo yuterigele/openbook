@@ -29,6 +29,7 @@ import (
 	clc "github.com/cloudwego/eino-ext/callbacks/cozeloop"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/coze-dev/cozeloop-go"
 
@@ -61,6 +62,15 @@ func main() {
 	// 文件缺失时静默放过，过滤器仍可工作（空词表 = 全部放行）。
 	if err := sensitive.LoadProductionWords(); err != nil {
 		log.Printf("⚠️  敏感词词表加载失败: %v", err)
+	}
+
+	// v4.18+：敏感词 LLM 兜底层（关键词 + LLM 双保险）。
+	// 默认关闭（关键词层 51,345 词已够用，开 LLM 兜底意味着每条非空消息
+	// 关键词没命中时多一次 LLM 调用，~150+30 tokens / call）。生产环境
+	// 想兜灰区语义违规时，设 SENSITIVE_LLM_FALLBACK=1 启用。
+	// 注入在 runTyped 内部按 M 类型分发（仅 *schema.Message 分支有效）。
+	if os.Getenv("SENSITIVE_LLM_FALLBACK") == "1" {
+		log.Printf("[sensitive] SENSITIVE_LLM_FALLBACK=1，将注入 LLM 兜底（按 M 分支）")
 	}
 
 	// 初始化 MySQL（PRD §11.1 P0：持久化 + MsgId 唯一索引做幂等去重）
@@ -145,6 +155,14 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	_ = cm // mark used for clarity; the intent tool is keyword-only at runtime.
 	intentClf := intent.NewClassifier()
 	intentTool := intent.NewClassifyTool(intentClf)
+
+	// v4.18+：敏感词 LLM 兜底层（关键词 + LLM 双保险）。
+	// 跟 intent 同款模式：M 是个泛型，*schema.Message 分支能注入。
+	// *schema.AgenticMessage 分支（KindAgentic）不注入，关键词层够用。
+	// 启用条件：env SENSITIVE_LLM_FALLBACK=1。
+	if os.Getenv("SENSITIVE_LLM_FALLBACK") == "1" {
+		injectSensitiveLLMFallback(cm)
+	}
 
 	agent, err := agent.BuildTyped[M](ctx, intentTool)
 	if err != nil {
@@ -413,6 +431,38 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// injectSensitiveLLMFallback wires the LLM fallback into the sensitive
+// package if (and only if) cm implements the *schema.Message Generate
+// signature.
+//
+// Why the type assertion: cm is einomodel.BaseModel[M] where M is either
+// *schema.Message or *schema.AgenticMessage. *schema.Message models
+// expose
+//
+//	Generate(ctx, []*schema.Message, ...model.Option) (*schema.Message, error)
+//
+// *schema.AgenticMessage models expose the same shape but with
+// *schema.AgenticMessage slices. The sensitive.LLMClassifyFunc path is
+// defined for the *schema.Message variant (matching intent/llm.go).
+// For the Agentic variant we currently do not wire the LLM fallback —
+// the keyword layer alone has been enough in production. If we ever
+// need it, the fix is a parallel sensitive.NewLLMClassifyFuncFromAgentic.
+//
+// Safe to call when the env flag is off (no-op).
+func injectSensitiveLLMFallback[M adk.MessageType](cm einomodel.BaseModel[M]) {
+	// any(cm) → interface{}; then assert to the *schema.Message
+	// Generate signature. Fails silently for *schema.AgenticMessage.
+	type msgCM interface {
+		Generate(ctx context.Context, msgs []*schema.Message, opts ...einomodel.Option) (*schema.Message, error)
+	}
+	if v, ok := any(cm).(msgCM); ok {
+		sensitive.WithLLMClassify(sensitive.NewLLMClassifyFuncFromEino(v))
+		log.Printf("[sensitive] LLM 兜底已注入（Layer 2 启用）")
+	} else {
+		log.Printf("[sensitive] M 分支不支持 LLM 兜底（仅 *schema.Message 分支），保持纯关键词模式")
+	}
 }
 
 // parseRecipients 解析 REPORT_TO 字符串（逗号分隔）成收件人列表

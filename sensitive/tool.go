@@ -40,6 +40,11 @@ import (
 //	{"blocked": false, "category": "",      "reason": ""}      →  continue
 //	                                                         normal flow.
 //
+// Under the hood the tool runs a two-layer filter:
+//   - Layer 1: keyword match (always on, <1ms, 51,345 production words)
+//   - Layer 2: LLM fallback (optional, wired in via WithLLMClassify)
+//     catches paraphrased / slang attacks the keyword list misses.
+//
 // Why a tool (not a pre-model middleware): the LLM needs to *see* the
 // blocked reason so it can pass it to the customer in the right tone and
 // also record a handoff_to_human event for compliance audit. A pre-model
@@ -53,10 +58,12 @@ func (t *SensitiveCheckTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 		Desc: `Pre-check the user's message for sensitive content before further processing.
 Call this on EVERY user message at the start of a turn.
 Input: {"text": "the user's most recent message"}.
-Output: {"blocked": bool, "category": "politics|porn|violence|ad|abuse|illegal|", "word": "...", "reason": "user-facing message when blocked"}.
+Output: {"blocked": bool, "category": "politics|porn|violence|ad|abuse|illegal|", "word": "...", "reason": "user-facing message when blocked", "source": "keyword|llm"}.
 
 If blocked=true, return the value of "reason" VERBATIM to the customer and stop processing this turn. Do NOT retry, do NOT rephrase, do NOT call any other tool.
-If blocked=false, continue the normal flow (call query_schedule / create_appointment / etc.).`,
+If blocked=false, continue the normal flow (call query_schedule / create_appointment / etc.).
+
+The filter runs two layers: (1) keyword match, (2) LLM semantic fallback (only when keyword misses). The "source" field tells you which layer produced the block.`,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"text": {
 				Type:     "string",
@@ -76,6 +83,10 @@ type sensitiveCheckOutput struct {
 	Category Category `json:"category"`
 	Word     string   `json:"word,omitempty"`
 	Reason   string   `json:"reason,omitempty"`
+	// Source is "keyword" / "llm" / "" (empty when not blocked). Useful
+	// for observability: a flood of LLM-source blocks is a strong
+	// signal the keyword list needs expanding.
+	Source string `json:"source,omitempty"`
 }
 
 // InvokableRun executes the filter and returns JSON to the LLM.
@@ -87,12 +98,13 @@ func (t *SensitiveCheckTool) InvokableRun(ctx context.Context, argsIn string, op
 	if in.Text == "" {
 		return "", fmt.Errorf("sensitive_check: text is empty")
 	}
-	r := Check(in.Text)
+	r := CheckCtx(ctx, in.Text)
 	out := sensitiveCheckOutput{
 		Blocked:  r.Blocked,
 		Category: r.Category,
 		Word:     r.Word,
 		Reason:   r.Reason,
+		Source:   r.Source,
 	}
 	b, err := json.Marshal(out)
 	if err != nil {

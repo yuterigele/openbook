@@ -7,6 +7,56 @@
 
 ---
 
+## [v4.18] - 2026-07-13
+
+### Added
+
+**P0 — 敏感词审核 LLM 兜底层**
+
+- **敏感词 LLM 兜底（`sensitive/`）**：在原有 Layer 1 关键词匹配
+  （51,345 词 / 6 大类 / JSON 热加载）之上，加 Layer 2 LLM 语义兜底——
+  关键词未命中时调小模型判灰区语义违规（paraphrase / slang / 隐喻攻击）。
+  完整两段式设计：
+  - Layer 1：关键词 substring 匹配，<1ms 命中即返回 reason；
+    ALWAYS runs，是安全兜底。
+  - Layer 2：LLM 闭集分类（politics / porn / violence / ad / abuse / illegal），
+    仅在 Layer 1 未命中 + 文本 ≥4 字符时触发；置信度 <0.6 视为放行；
+    LLM 报错 fail-open 不阻塞用户。
+  - 启用：`SENSITIVE_LLM_FALLBACK=1`（默认关闭，关键词层已够用）。
+  - 配套 `Result.Source` 字段（"keyword" / "llm"）记录是哪层挡的，
+    方便后续看 LLM 兜底命中率来反哺关键词词库。
+
+### Added
+
+- **`sensitive.NewLLMClassifyFuncFromEino`**：eino chat model → LLMClassifyFunc
+  适配器。复用 `chatmodel/fallback.go` 的降级链选出来的模型。
+- **`sensitive.WithLLMClassify(fn)`**：全局注入 LLM 兜底（thread-safe，
+  test cleanup 用 `WithLLMClassify(nil)` 关闭）。
+- **`sensitive.CheckCtx(ctx, text)`**：新签名，带 ctx 的 Check。
+  老的 `Check(text)` 保留并转发到 `CheckCtx(context.Background(), text)`，
+  向后兼容。
+
+### Changed
+
+- **`sensitive.SensitiveCheckTool`**：调用 `CheckCtx(ctx, ...)` 透传 ctx；
+  输出新增 `source` 字段（"keyword" / "llm" / ""）；tool 描述里说明
+  两层结构，方便 LLM 理解命中来源。
+- **`SensitiveCheckTool.Info`**：描述更新，明确"两段式（keyword + LLM）"。
+
+### Tests
+
+新增 `sensitive/llm_test.go`（16 个测试）：
+
+- `TestLLMClassify_*`：LLMClassifyFunc / 适配器 / 解析容错（porn 命中、
+  none 放行、短输入跳过 LLM、nil 模型、错误传播、坏 JSON、code fence 剥离、
+  置信度 clamp 到 [0,1]）
+- `TestCheckCtx_LLMFallback_*`：CheckCtx 集成（兜底触发 / 关键词优先 /
+  默认禁用 / 短输入跳过 / 低置信放行 / 错误 fail-open / 空文本）
+
+合计 `sensitive/` 包测试从 13 个增加到 29 个。
+
+---
+
 ## [v4.17] - 2026-07-12
 
 ### Added

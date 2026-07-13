@@ -1,7 +1,27 @@
 // Package sensitive provides input content filtering.
+//
+// Two-layer design (matches the resume's "关键词 + LLM 兜底双保险"):
+//
+//	Layer 1 — keyword match: substring against per-category word lists.
+//	          Cheap, deterministic, <1ms, catches the obvious cases
+//	          (51,345 production words across 6 categories).
+//	          ALWAYS runs.
+//
+//	Layer 2 — LLM fallback: when Layer 1 has no hit AND a chat model
+//	          has been wired in via WithLLMClassify, ask a small LLM
+//	          call to judge the text semantically. This catches
+//	          paraphrased / slang / role-play attacks the keyword
+//	          list misses. Optional (off by default; costs ~150+30
+//	          tokens per fallback call).
+//
+// The keyword layer is the safety floor; the LLM layer only ADDS
+// detection, never relaxes it. If the LLM errors out, CheckCtx fails
+// open (text passes) so a degraded LLM does not block legitimate
+// users.
 package sensitive
 
 import (
+	"context"
 	"strings"
 	"sync"
 )
@@ -18,16 +38,33 @@ const (
 	CategoryOther    Category = "other"
 )
 
+// Source tags which layer produced a Blocked=true result. Empty when
+// the text was not blocked at all.
+const (
+	SourceKeyword = "keyword"
+	SourceLLM     = "llm"
+)
+
+// LLM layer tunables. LLMMinLength skips empty / "hi" / "ok" so we
+// don't pay the LLM cost on every short acknowledgement. LLMConfidence
+// is the minimum model-reported confidence to escalate to Blocked.
+const (
+	LLMMinLength          = 4
+	LLMConfidenceThreshold = 0.6
+)
+
 type Result struct {
 	Blocked  bool
 	Category Category
 	Word     string
 	Reason   string
+	Source   string // "keyword" / "llm" / ""
 }
 
 var (
-	checkerMu sync.RWMutex
-	checker   = defaultChecker()
+	checkerMu   sync.RWMutex
+	checker     = defaultChecker()
+	llmFallback LLMClassifyFunc
 )
 
 // defaultWords uses placeholders. Real word lists are added via
@@ -61,12 +98,60 @@ func cloneWordMap(src map[Category][]string) map[Category][]string {
 	return dst
 }
 
-// Check tests text against the active word list.
+// Check tests text against the active word list. It is equivalent to
+// CheckCtx with a background context — it is kept for backward compat
+// and for the keyword-only call sites that don't need to plumb a
+// context (e.g. tests, the cmd/sensitive-gen generator).
 func Check(text string) Result {
+	return CheckCtx(context.Background(), text)
+}
+
+// CheckCtx runs Layer 1 (keyword) first; on miss it runs Layer 2
+// (LLM fallback) if a fallback has been wired in via WithLLMClassify.
+// The LLM call is short-circuited on short inputs and on LLM errors
+// (fail-open).
+func CheckCtx(ctx context.Context, text string) Result {
+	if text == "" {
+		return Result{Blocked: false}
+	}
 	checkerMu.RLock()
 	c := checker
+	llm := llmFallback
 	checkerMu.RUnlock()
-	return c.check(text)
+
+	// Layer 1: keyword fast path. Always runs.
+	if r := c.check(text); r.Blocked {
+		r.Source = SourceKeyword
+		return r
+	}
+
+	// No LLM fallback wired in → done.
+	if llm == nil {
+		return Result{Blocked: false}
+	}
+	// Short inputs ("hi" / "ok" / "1") don't pay the LLM cost.
+	if len([]rune(text)) < LLMMinLength {
+		return Result{Blocked: false}
+	}
+	cat, blocked, conf, err := llm(ctx, text)
+	if err != nil {
+		// Fail-open: a degraded LLM must not block legitimate users.
+		// The keyword layer already covered the high-confidence hits.
+		return Result{Blocked: false}
+	}
+	if !blocked {
+		return Result{Blocked: false}
+	}
+	if conf < LLMConfidenceThreshold {
+		// Model is unsure; default to letting it through.
+		return Result{Blocked: false}
+	}
+	return Result{
+		Blocked:  true,
+		Category: cat,
+		Reason:   reasonFor(cat) + " (LLM)",
+		Source:   SourceLLM,
+	}
 }
 
 func (c *Checker) check(text string) Result {
@@ -161,4 +246,15 @@ func Categories() []Category {
 		out = append(out, c)
 	}
 	return out
+}
+
+// WithLLMClassify wires in the LLM fallback for Layer 2 of CheckCtx.
+// Pass nil to disable the LLM layer. Thread-safe.
+//
+// Production wiring is done in main.go under the SENSITIVE_LLM_FALLBACK
+// env var; tests call this directly to inject stubs.
+func WithLLMClassify(fn LLMClassifyFunc) {
+	checkerMu.Lock()
+	defer checkerMu.Unlock()
+	llmFallback = fn
 }
