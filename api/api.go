@@ -208,6 +208,11 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
 	})
+
+	// v4.18+ 可观测性：敏感词审核的 in-process 计数器，prometheus
+	// text format。未鉴权（标准 scrape 路径），生产用反向代理 /
+	// 内网监听限制访问。详见 api/metrics.go。
+	h.GET("/metrics", metricsHandler)
 }
 
 // authChain 鉴权链：优先 JWT，失败则 fallback 到 legacy ADMIN_TOKEN（兼容旧版）

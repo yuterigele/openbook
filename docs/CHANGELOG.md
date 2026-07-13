@@ -11,7 +11,7 @@
 
 ### Added
 
-**P0 — 敏感词审核 LLM 兜底层**
+**P0 — 敏感词审核 LLM 兜底层 + 可观测性**
 
 - **敏感词 LLM 兜底（`sensitive/`）**：在原有 Layer 1 关键词匹配
   （51,345 词 / 6 大类 / JSON 热加载）之上，加 Layer 2 LLM 语义兜底——
@@ -25,6 +25,24 @@
   - 启用：`SENSITIVE_LLM_FALLBACK=1`（默认关闭，关键词层已够用）。
   - 配套 `Result.Source` 字段（"keyword" / "llm"）记录是哪层挡的，
     方便后续看 LLM 兜底命中率来反哺关键词词库。
+
+- **可观测性（`sensitive/metrics.go` + `api/metrics.go`）**：v4.18
+  的兜底有了"谁挡的"还不够，得"挡了多少、挡多快、挡得对不对"全可查：
+  - **`sensitive.Metrics`**：in-process `atomic.Int64` 计数器（不引
+    `prometheus/client_golang`，~30 行自实现），6 类全局 counter
+    （KeywordHits / LLMHits / Passes / SkippedShort / LLMErrored /
+    LLMLowConf）+ 7 个 per-category counter + LLM 调用平均延迟
+    （LLMLatencySumUs / LLMLatencyCount）。
+  - **`/metrics` endpoint（`api/metrics.go`）**：未鉴权（标准 prom
+    scrape 路径），返回 Prometheus text exposition format v0.0.4，
+    生产用反向代理 / 内网监听限制访问。
+  - **结构化日志**：CheckCtx 各分支 `log.Printf` 输出
+    `source/category/word/conf/latency`（不打印原文，避免 PII 泄漏）。
+  - **关键指标**（promQL 直接可用）：
+    - `openbook_sensitive_llm_hit_rate` — 兜底命中率（>0.5 说明词库该扩了）
+    - `rate(openbook_sensitive_llm_errors_total[5m])` — LLM 错误率（>5% 告警）
+    - `openbook_sensitive_llm_latency_us_avg` — 平均延迟（>500ms 告警）
+    - `openbook_sensitive_category_hits_total{category="porn"}` — 各 category 命中分布
 
 ### Added
 

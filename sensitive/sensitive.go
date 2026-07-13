@@ -22,8 +22,10 @@ package sensitive
 
 import (
 	"context"
+	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Category string
@@ -110,6 +112,10 @@ func Check(text string) Result {
 // (LLM fallback) if a fallback has been wired in via WithLLMClassify.
 // The LLM call is short-circuited on short inputs and on LLM errors
 // (fail-open).
+//
+// Observability: every branch updates DefaultMetrics (counters +
+// per-category) and emits a structured log line so an operator can
+// trace any single block back to its source without scraping.
 func CheckCtx(ctx context.Context, text string) Result {
 	if text == "" {
 		return Result{Blocked: false}
@@ -122,36 +128,61 @@ func CheckCtx(ctx context.Context, text string) Result {
 	// Layer 1: keyword fast path. Always runs.
 	if r := c.check(text); r.Blocked {
 		r.Source = SourceKeyword
+		DefaultMetrics.observe(r)
+		// Structured log: keeps an audit trail of what got blocked and
+		// which word triggered. The text itself is NOT logged (PII
+		// concerns: customer messages may contain names, phones, etc).
+		log.Printf("[sensitive] block source=keyword category=%q word=%q len=%d",
+			r.Category, r.Word, len([]rune(text)))
 		return r
 	}
 
 	// No LLM fallback wired in → done.
 	if llm == nil {
+		DefaultMetrics.Passes.Add(1)
 		return Result{Blocked: false}
 	}
 	// Short inputs ("hi" / "ok" / "1") don't pay the LLM cost.
 	if len([]rune(text)) < LLMMinLength {
+		DefaultMetrics.SkippedShort.Add(1)
 		return Result{Blocked: false}
 	}
+
+	// Layer 2: LLM semantic fallback. Time the call so we can spot a
+	// degraded provider (latency creep is often the first sign).
+	start := time.Now()
 	cat, blocked, conf, err := llm(ctx, text)
+	latencyUs := time.Since(start).Microseconds()
+	DefaultMetrics.observeLLMLatency(latencyUs)
+
 	if err != nil {
 		// Fail-open: a degraded LLM must not block legitimate users.
 		// The keyword layer already covered the high-confidence hits.
+		DefaultMetrics.LLMErrored.Add(1)
+		log.Printf("[sensitive] LLM 兜底 fail-open: %v (latency=%dus)", err, latencyUs)
 		return Result{Blocked: false}
 	}
 	if !blocked {
+		DefaultMetrics.Passes.Add(1)
 		return Result{Blocked: false}
 	}
 	if conf < LLMConfidenceThreshold {
 		// Model is unsure; default to letting it through.
+		DefaultMetrics.LLMLowConf.Add(1)
+		log.Printf("[sensitive] LLM 低置信放行 cat=%q conf=%.2f (latency=%dus)",
+			cat, conf, latencyUs)
 		return Result{Blocked: false}
 	}
-	return Result{
+	r := Result{
 		Blocked:  true,
 		Category: cat,
 		Reason:   reasonFor(cat) + " (LLM)",
 		Source:   SourceLLM,
 	}
+	DefaultMetrics.observe(r)
+	log.Printf("[sensitive] block source=llm category=%q conf=%.2f (latency=%dus)",
+		cat, conf, latencyUs)
+	return r
 }
 
 func (c *Checker) check(text string) Result {
