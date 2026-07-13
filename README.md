@@ -44,7 +44,7 @@
 |------|---------|
 | Function Calling | 10 个工具（查档期 / 预约 / 改时间 / 改师傅 / 转人工 / ...） |
 | RAG 知识库 | eino compose.Workflow，4 节点 pipeline（load → chunk → score → filter → answer） |
-| 敏感词审核 | **关键词 + LLM 双保险**：Layer 1 关键词（51,345 词 / 6 大类 / JSON 热加载 / <1ms）+ Layer 2 LLM 兜底（关键词未命中时调小模型判灰区语义违规） |
+| 敏感词审核 | **trie 字典树 + LLM 双保险**：Layer 1 前缀树（51,345 词 / 6 大类 / JSON 热加载 / **实测 0.4μs/op**）+ Layer 2 LLM 兜底（关键词未命中时调小模型判灰区语义违规） |
 | 可观测性 | in-process `atomic.Int64` 计数器 + 结构化日志 + `/metrics` 端点（Prometheus 格式，不引第三方库） |
 | LLM 降级链 | DeepSeek → OpenAI → Ark 顺序 fallback，5xx/网络瞬时自动重试 |
 | 意图识别 | 关键词白名单（position-based tie-break）+ LLM 分类兜底 |

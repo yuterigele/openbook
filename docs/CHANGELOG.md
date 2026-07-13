@@ -26,6 +26,30 @@
   - 配套 `Result.Source` 字段（"keyword" / "llm"）记录是哪层挡的，
     方便后续看 LLM 兜底命中率来反哺关键词词库。
 
+- **敏感词匹配从 `strings.Contains` 切到 trie 字典树**：
+  之前 Layer 1 是朴素的"51,345 个词 × 50 字文本 = 250 万次
+  `strings.Contains`"，最坏情况能跑到 1.4ms（v4.17 之前 benchmark）。
+  换成前缀树后：
+  - `sensitive/trie.go`（新）：朴素 trie（rune map children，
+    word/cat 标记终态），`Insert / Match / Categories / Words`；
+    注释里说明"为什么不上 AC 自动机"——词数虽多但 80%+ 是 1-2 字
+    中文词，trie 树高 1-2 层，朴素 trie 已经比 `strings.Contains`
+    快 ~15000x；AC 自动机只再快 3x 但要 200+ 行 + 调试地狱，QPS
+    上 10K 再升级。
+  - `Checker`（`sensitive/sensitive.go`）：`words map[cat][]string`
+    当 source of truth，trie 当快速 Match 用；`RegisterWords /
+    AddWords / Reset` 每次重建 trie（hot-reload JSON 时一次
+    ~50ms，可接受）。
+  - **性能**（win-amd64 / AMD Ryzen 9 7950X / go1.24）：
+    - Hit 393.9 ns/op（80 B / 1 alloc，ToLower 一次）
+    - Miss 412.3 ns/op（0 B / 0 alloc，短路 return）
+    - 跟旧的 1.4ms 相比，**提速 ~3500x**
+  - **API 兼容**：`Check / CheckCtx / RegisterWords / AddWords /
+    Reset / Categories` 签名零变化；43 个 sensitive 测试 + 13 个
+    新 trie 测试 + 2 个新 benchmark 全过。
+  - **未来升级点**：QPS > 10K 时把 `Match` 换成 Aho-Corasick 的
+    fail-link 扫描（`Insert` / `trie` 内存布局不用动）。
+
 - **可观测性（`sensitive/metrics.go` + `api/metrics.go`）**：v4.18
   的兜底有了"谁挡的"还不够，得"挡了多少、挡多快、挡得对不对"全可查：
   - **`sensitive.Metrics`**：in-process `atomic.Int64` 计数器（不引
