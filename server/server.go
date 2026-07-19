@@ -40,8 +40,8 @@ import (
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
-	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
 	"github.com/yuterigele/openbook/a2ui"
+	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
 	"github.com/yuterigele/openbook/mem"
 	"github.com/yuterigele/openbook/msgops"
 	"github.com/yuterigele/openbook/storage"
@@ -74,11 +74,13 @@ type Config[M adk.MessageType] struct {
 	Store           *mem.Store[M]
 	WorkspaceDir    string
 	ProjectRoot     string // root of the codebase the agent can explore
-	ExamplesDir     string // root of the eino-examples repo (for example searches)
 	Port            string
 	// 企业微信配置（多店版：Router 优先；WeComConfig 作为 fallback）
 	WeComConfig *wecom.Config
 	WeComRouter *wecom.Router
+	// RateLimiter controls per-customer Agent request rate. Nil uses
+	// DefaultRateLimiter. Tests may inject an isolated limiter.
+	RateLimiter *RateLimiter
 }
 
 // Server wraps a Hertz HTTP server with the chat-with-doc routes.
@@ -97,6 +99,9 @@ func (s *Server[M]) Hertz() *hserver.Hertz { return s.h }
 // New creates a Server from the given config.
 func New[M adk.MessageType](cfg Config[M]) *Server[M] {
 	cfg.CheckPointStore = withDeleteCheckpointStore(cfg.CheckPointStore)
+	if cfg.RateLimiter == nil {
+		cfg.RateLimiter = DefaultRateLimiter
+	}
 	return &Server[M]{cfg: cfg}
 }
 
@@ -203,16 +208,16 @@ func (s *Server[M]) startLoopCleanup(ts *sessionTurnState[M], loop *adk.TurnLoop
 	}()
 }
 
-	// Spin starts the HTTP server (blocking).
-	func (s *Server[M]) Spin() {
-		h := s.EnsureHertz()
+// Spin starts the HTTP server (blocking).
+func (s *Server[M]) Spin() {
+	h := s.EnsureHertz()
 
-		// 全局中间件：记录所有请求，用于排查回调是否到达
-		h.Use(func(ctx context.Context, c *app.RequestContext) {
-			log.Printf("[http] %s %s query=%s contentType=%s contentLength=%d",
-				c.Method(), c.Path(), c.QueryArgs().String(), c.GetHeader("Content-Type"), len(c.Request.Body()))
-			c.Next(ctx)
-		})
+	// 全局中间件：记录所有请求，用于排查回调是否到达
+	h.Use(func(ctx context.Context, c *app.RequestContext) {
+		log.Printf("[http] %s %s query=%s contentType=%s contentLength=%d",
+			c.Method(), c.Path(), c.QueryArgs().String(), c.GetHeader("Content-Type"), len(c.Request.Body()))
+		c.Next(ctx)
+	})
 
 	h.GET("/", func(ctx context.Context, c *app.RequestContext) {
 		data, err := os.ReadFile("static/index.html")
@@ -284,7 +289,7 @@ func (s *Server[M]) startLoopCleanup(ts *sessionTurnState[M], loop *adk.TurnLoop
 	})
 
 	// 企业微信回调接口
-	if s.cfg.WeComConfig != nil && s.cfg.WeComConfig.CorpID != "" {
+	if s.cfg.WeComRouter != nil && s.cfg.WeComRouter.Count() > 0 {
 		s.registerWeComCallback(h)
 	}
 
@@ -324,6 +329,11 @@ func (s *Server[M]) handleChat(ctx context.Context, c *app.RequestContext) {
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil || req.Message == "" {
 		c.JSON(consts.StatusBadRequest, map[string]string{"error": "message is required"})
+		return
+	}
+	if decision := s.cfg.RateLimiter.AllowDecision(customerRateLimitKey("web", id)); !decision.Allowed {
+		log.Printf("[ratelimit] rejected reason=%s source=web session=%s", decision.Reason, id)
+		c.JSON(consts.StatusTooManyRequests, map[string]string{"error": rateLimitReply})
 		return
 	}
 
@@ -374,7 +384,7 @@ func (s *Server[M]) handleChat(ctx context.Context, c *app.RequestContext) {
 			localHandlerDone = ts.handlerDone
 			ts.mu.Unlock()
 			loop.Push(item)
-			loop.Run(context.Background())
+			loop.Run(webSessionContext(id))
 			s.startLoopCleanup(ts, loop, id)
 		}
 	} else {
@@ -388,7 +398,7 @@ func (s *Server[M]) handleChat(ctx context.Context, c *app.RequestContext) {
 		localHandlerDone = ts.handlerDone
 		ts.mu.Unlock()
 		loop.Push(item)
-		loop.Run(context.Background())
+		loop.Run(webSessionContext(id))
 		s.startLoopCleanup(ts, loop, id)
 	}
 
@@ -519,7 +529,7 @@ func (s *Server[M]) handleApprove(ctx context.Context, c *app.RequestContext) {
 		ApprovalResult: result,
 		InterruptID:    interruptID,
 	})
-	loop.Run(context.Background())
+	loop.Run(webSessionContext(id))
 	s.startLoopCleanup(ts, loop, id)
 
 	// Open SSE stream and start keepalives before waiting.
@@ -617,6 +627,16 @@ func (s *Server[M]) newLoop(sess *mem.Session[M], sessionID string, withResume b
 		cfg.GenResume = s.makeGenResume()
 	}
 	return adk.NewTurnLoop(cfg)
+}
+
+// webSessionContext gives the local demo UI a server-generated identity. It
+// keeps customer-scoped tools usable without accepting identity fields from
+// model output or browser requests. The Compose demo binds this UI to localhost.
+func webSessionContext(sessionID string) context.Context {
+	identity := "web-session:" + sessionID
+	ctx := tools.WithShopID(context.Background(), "default")
+	ctx = tools.WithOpenID(ctx, identity)
+	return tools.WithExternalUserID(ctx, identity)
 }
 
 // makeGenInput returns the GenInput callback. It builds agent messages from
@@ -805,75 +825,12 @@ func (s *Server[M]) makeGenResume() func(ctx context.Context, loop *adk.TurnLoop
 	}
 }
 
-// buildRunMessages prepends a context message so the agent knows about the
-// project root and the session workspace. This message is never stored in history.
-func (s *Server[M]) buildRunMessages(sessionID string, history []M) []M {
-	var lines []string
-	lines = append(lines, "[Context]")
-	lines = append(lines,
-		"IMPORTANT RULES:",
-		"  1. Always use filesystem tools to look up real code before answering. Do not guess or make up information.",
-		"  2. After using tools (even if they return no results), you MUST write a text response to the user summarizing what you found.",
-		"  3. Never end your turn without a text response — tool calls alone are not sufficient.",
-		"  4. When asked to build or test code, use the execute tool to run the command.",
-		"     Each Go example has its own go.mod. To build an example, run:",
-		"       cd <example-dir> && go build ./...",
-		"     NEVER assume a build succeeded without actually running it.",
-		"  5. When writing or editing a file and then claiming it compiles, you MUST run the build tool to verify.",
-	)
-
-	if s.cfg.ProjectRoot != "" {
-		lines = append(lines,
-			fmt.Sprintf("Project root: %s", s.cfg.ProjectRoot),
-			"  IMPORTANT: Always pass the project root as the path argument when using filesystem tools.",
-			fmt.Sprintf("  - grep(pattern=\"...\", path=\"%s\")", s.cfg.ProjectRoot),
-			fmt.Sprintf("  - glob(pattern=\"%s/**/*.go\")", s.cfg.ProjectRoot),
-			fmt.Sprintf("  - read_file(file_path=\"%s/some/file.go\")", s.cfg.ProjectRoot),
-			"  grep and glob recurse into ALL subdirectories under the given path.",
-			"  Top-level subdirectories of the project root:",
-		)
-		if entries, err := os.ReadDir(s.cfg.ProjectRoot); err == nil {
-			for _, e := range entries {
-				if e.IsDir() {
-					lines = append(lines, "    - "+filepath.Join(s.cfg.ProjectRoot, e.Name())+"/")
-				}
-			}
-		}
-		lines = append(lines, "  Use these tools to read actual source code before answering questions about the codebase.")
-	}
-
-	if s.cfg.ExamplesDir != "" && s.cfg.ExamplesDir != s.cfg.ProjectRoot {
-		lines = append(lines,
-			fmt.Sprintf("eino-examples directory: %s", s.cfg.ExamplesDir),
-			"  When the user asks about examples or sample code, search here specifically:",
-			fmt.Sprintf("  - grep(pattern=\"...\", path=\"%s\")", s.cfg.ExamplesDir),
-			fmt.Sprintf("  - glob(pattern=\"%s/**/*.go\")", s.cfg.ExamplesDir),
-		)
-	}
-
-	absWorkDir, err := filepath.Abs(filepath.Join(s.cfg.WorkspaceDir, sessionID))
-	if err == nil {
-		entries, _ := os.ReadDir(absWorkDir)
-		var uploadedFiles []string
-		for _, e := range entries {
-			if !e.IsDir() {
-				uploadedFiles = append(uploadedFiles, filepath.Join(absWorkDir, e.Name()))
-			}
-		}
-		if len(uploadedFiles) > 0 {
-			lines = append(lines,
-				fmt.Sprintf("Session workspace: %s", absWorkDir),
-				"  Uploaded files:",
-			)
-			for _, f := range uploadedFiles {
-				lines = append(lines, "    - "+f)
-			}
-		}
-	}
-
-	ctx := strings.Join(lines, "\n")
+// buildRunMessages prepends fresh booking context for every turn. It is never
+// persisted, so relative dates cannot be polluted by old conversation history.
+func (s *Server[M]) buildRunMessages(_ string, history []M) []M {
+	ctx := buildTodayContext() + "\n[系统约束]\n你是美发预约助手，只能使用已注册的预约业务工具；不要执行命令、读写文件或处理其他顾客的预约。\n"
 	runMessages := make([]M, 0, len(history)+1)
-	runMessages = append(runMessages, msgops.NewUser[M](ctx))
+	runMessages = append(runMessages, msgops.NewSystem[M](ctx))
 	runMessages = append(runMessages, msgops.NormalizeMessagesForModelInput(history)...)
 	return runMessages
 }
@@ -979,11 +936,11 @@ func (s *Server[M]) registerWeComCallback(h *hserver.Hertz) {
 	}
 
 	router := s.cfg.WeComRouter
-log.Printf("[wecom] 多店 router 已注册，已加载 %d 个店铺的加密实例", router.Count())
+	log.Printf("[wecom] 多店 router 已注册，已加载 %d 个店铺的加密实例", router.Count())
 
 	// lookupCorpID 从 ShopCrypto 反查 corpID（用于判断 ToUserName 是不是企业应用消息）
 	//
-	// ShopCrypto 自带 CorpID 字段（Register / SetFallback 时填好），优先用它。
+	// ShopCrypto 自带 CorpID 字段，避免对 Router 做额外反查。
 	// LookupCorpIDByPtr 是 fallback 兜底（O(n)）。
 	lookupCorpID := func(sc *wecom.ShopCrypto) string {
 		if sc == nil {
@@ -1005,10 +962,12 @@ log.Printf("[wecom] 多店 router 已注册，已加载 %d 个店铺的加密实
 			return
 		}
 
-		// 选 corpID：query ?corp_id= 优先；不传则用 fallback 单 corpID
+		// 选 corpID：query ?corp_id= 优先；只有一个企业主体时可自动选择。
 		corpID := c.Query("corp_id")
-		if corpID == "" && s.cfg.WeComConfig != nil {
-			corpID = s.cfg.WeComConfig.CorpID
+		if corpID == "" && router.CorpCount() == 1 {
+			for _, candidate := range router.AllShops() {
+				corpID = candidate.CorpID
+			}
 		}
 		if corpID == "" {
 			log.Printf("[wecom] URL验证：未指定 corp_id 且无 fallback")
@@ -1037,7 +996,7 @@ log.Printf("[wecom] 多店 router 已注册，已加载 %d 个店铺的加密实
 		c.Data(consts.StatusOK, "text/plain", []byte(plaintext))
 	})
 
-h.POST("/wecom/callback", func(ctx context.Context, c *app.RequestContext) {
+	h.POST("/wecom/callback", func(ctx context.Context, c *app.RequestContext) {
 		msgSignature := c.Query("msg_signature")
 		timestamp := c.Query("timestamp")
 		nonce := c.Query("nonce")
@@ -1091,6 +1050,17 @@ h.POST("/wecom/callback", func(ctx context.Context, c *app.RequestContext) {
 			c.Data(consts.StatusOK, "text/plain", []byte("success"))
 			return
 		}
+		// 同一企业微信主体下，微信客服账号（OpenKfId）才是门店边界。
+		// 解密仍按 CorpID 做；解密成功后立即切换到该客服账号所属门店。
+		if msg.OpenKfId != "" {
+			if shopRoute, ok := router.LookupByOpenKfID(msg.OpenKfId); ok {
+				sc = shopRoute
+			} else if msg.MsgType == "event" && msg.Event == "kf_msg_or_event" {
+				log.Printf("[wecom] 未配置 OpenKfId=%s 对应店铺，拒绝处理客服回调", msg.OpenKfId)
+				c.Data(consts.StatusOK, "text/plain", []byte("success"))
+				return
+			}
+		}
 
 		// MsgId 幂等去重（PRD §11.1 P0：防微信回调重试导致重复处理）
 		first, dedupErr := wecom.MarkMessageProcessed(ctx, msg)
@@ -1131,75 +1101,75 @@ h.POST("/wecom/callback", func(ctx context.Context, c *app.RequestContext) {
 		c.Data(consts.StatusOK, "text/plain", []byte("success"))
 	})
 
-		// 生成「联系我」二维码接口
-		// 员工个人生成的二维码不会触发回调，必须使用此 API 生成官方二维码。
-		// 返回二维码图片 URL，客户扫码发消息时企业微信会将消息推送到 /wecom/callback。
-		//
-		// 使用方式：curl http://localhost:38080/wecom/contact-qrcode?user_id=ZhangSan
-		// 可选参数 is_temp=1（临时会话，未认证企业必须用 1）默认为 1
-		// 返回：{"qr_code": "https://..."}，将二维码 URL 生成图片后展示给客户扫码。
-		h.GET("/wecom/contact-qrcode", func(ctx context.Context, c *app.RequestContext) {
-			userID := c.Query("user_id")
-			if userID == "" {
-				c.JSON(consts.StatusBadRequest, map[string]string{"error": "user_id 是必需的"})
-				return
-			}
+	// 生成「联系我」二维码接口
+	// 员工个人生成的二维码不会触发回调，必须使用此 API 生成官方二维码。
+	// 返回二维码图片 URL，客户扫码发消息时企业微信会将消息推送到 /wecom/callback。
+	//
+	// 使用方式：curl http://localhost:38080/wecom/contact-qrcode?user_id=ZhangSan
+	// 可选参数 is_temp=1（临时会话，未认证企业必须用 1）默认为 1
+	// 返回：{"qr_code": "https://..."}，将二维码 URL 生成图片后展示给客户扫码。
+	h.GET("/wecom/contact-qrcode", func(ctx context.Context, c *app.RequestContext) {
+		userID := c.Query("user_id")
+		if userID == "" {
+			c.JSON(consts.StatusBadRequest, map[string]string{"error": "user_id 是必需的"})
+			return
+		}
 
-			isTemp := 1 // 默认临时会话（兼容未认证企业）
-			if tmpStr := c.Query("is_temp"); tmpStr == "0" {
-				isTemp = 0
-			}
+		isTemp := 1 // 默认临时会话（兼容未认证企业）
+		if tmpStr := c.Query("is_temp"); tmpStr == "0" {
+			isTemp = 0
+		}
 
-			// 选 client：query ?corp_id= 优先；不传则 router 第一个
-			corpIDHint := c.Query("corp_id")
-			var wecomClient *wecom.Client
-			if corpIDHint != "" {
-				if sc, ok := router.Lookup(corpIDHint); ok {
-					wecomClient = sc.Client
-				}
+		// 选 client：query ?corp_id= 优先；不传则 router 第一个
+		corpIDHint := c.Query("corp_id")
+		var wecomClient *wecom.Client
+		if corpIDHint != "" {
+			if sc, ok := router.Lookup(corpIDHint); ok {
+				wecomClient = sc.Client
 			}
-			if wecomClient == nil {
-				all := router.AllShops()
-				if len(all) > 0 {
-					wecomClient = all[0].Client
-				}
+		}
+		if wecomClient == nil {
+			all := router.AllShops()
+			if len(all) > 0 {
+				wecomClient = all[0].Client
 			}
-			if wecomClient == nil {
-				c.JSON(consts.StatusServiceUnavailable, map[string]string{"error": "router 未加载任何店铺"})
-				return
+		}
+		if wecomClient == nil {
+			c.JSON(consts.StatusServiceUnavailable, map[string]string{"error": "router 未加载任何店铺"})
+			return
+		}
+
+		result, err := wecomClient.AddContactWay(ctx, userID, "chatwitheino", isTemp)
+		if err != nil {
+			log.Printf("[wecom] 创建联系我二维码失败: %v", err)
+			c.JSON(consts.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("创建失败: %v", err)})
+			return
+		}
+
+		// scene=2 时 API 会直接返回 qr_code；若未返回则通过 get_contact_way 补查
+		if result.QrCode == "" && result.ConfigID != "" {
+			log.Printf("[wecom] 未返回 qr_code，通过 config_id 补查: %s", result.ConfigID)
+			detail, err := wecomClient.GetContactWay(ctx, result.ConfigID)
+			if err != nil {
+				log.Printf("[wecom] 查询二维码详情失败: %v", err)
+			} else if detail.QrCode != "" {
+				result.QrCode = detail.QrCode
 			}
+		}
 
-			result, err := wecomClient.AddContactWay(ctx, userID, "chatwitheino", isTemp)
-				if err != nil {
-					log.Printf("[wecom] 创建联系我二维码失败: %v", err)
-					c.JSON(consts.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("创建失败: %v", err)})
-					return
-				}
-
-				// scene=2 时 API 会直接返回 qr_code；若未返回则通过 get_contact_way 补查
-				if result.QrCode == "" && result.ConfigID != "" {
-					log.Printf("[wecom] 未返回 qr_code，通过 config_id 补查: %s", result.ConfigID)
-					detail, err := wecomClient.GetContactWay(ctx, result.ConfigID)
-					if err != nil {
-						log.Printf("[wecom] 查询二维码详情失败: %v", err)
-					} else if detail.QrCode != "" {
-						result.QrCode = detail.QrCode
-					}
-				}
-
-				log.Printf("[wecom] 联系我二维码已生成: userID=%s configID=%s qrCode=%s", userID, result.ConfigID, result.QrCode)
-				c.JSON(consts.StatusOK, map[string]interface{}{
-					"qr_code":   result.QrCode,
-					"config_id": result.ConfigID,
-					"user_id":   userID,
-					"tip":       "将此二维码展示给客户扫码，客户发送的消息将通过回调送达服务器",
-				})
+		log.Printf("[wecom] 联系我二维码已生成: userID=%s configID=%s qrCode=%s", userID, result.ConfigID, result.QrCode)
+		c.JSON(consts.StatusOK, map[string]interface{}{
+			"qr_code":   result.QrCode,
+			"config_id": result.ConfigID,
+			"user_id":   userID,
+			"tip":       "将此二维码展示给客户扫码，客户发送的消息将通过回调送达服务器",
 		})
+	})
 
-		// 本地测试接口：模拟企业微信发送消息（多店版）
-//
-// 从 router 里取第一个店铺的 client 处理；指定 ?shop_id= 可覆盖。
-		h.POST("/wecom/test/send", func(ctx context.Context, c *app.RequestContext) {
+	// 本地测试接口：模拟企业微信发送消息（多店版）
+	//
+	// 从 router 里取第一个店铺的 client 处理；指定 ?shop_id= 可覆盖。
+	h.POST("/wecom/test/send", func(ctx context.Context, c *app.RequestContext) {
 		var req struct {
 			UserID  string `json:"user_id"`
 			Content string `json:"content"`
@@ -1268,6 +1238,11 @@ func (s *Server[M]) handleWeComMessage(ctx context.Context, client *wecom.Client
 // v4.13.1：参数 client 改成 replySender interface（*wecom.Client 自动满足），便于 handleKfCallback
 // 把 syncMsgFetcher mock 同时当 replySender mock 传进来——单测只需要一个 mock 对象。
 func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client replySender, msg *wecom.MessageXML, openKfID, shopID string) {
+	if decision := s.cfg.RateLimiter.AllowDecision(customerRateLimitKey(shopID, msg.FromUserName)); !decision.Allowed {
+		log.Printf("[ratelimit] rejected reason=%s source=wecom shop=%s user=%s", decision.Reason, shopID, msg.FromUserName)
+		sendReply(ctx, client, msg.FromUserName, openKfID, rateLimitReply, shopID)
+		return
+	}
 	sessionID := "wecom_" + shopID + "_" + msg.FromUserName // 加 shopID 防止多店用户串号
 	sess, err := s.cfg.Store.GetOrCreate(sessionID)
 	if err != nil {
@@ -1317,6 +1292,7 @@ var sendKfRateMu sync.Mutex
 // 区分两种 95001：
 //   - "95001 send msg count limit" — 限流，应重试
 //   - "95001 no valid kf account" / "95001 kf account not exist" — 未认证/无接待人员，**不**重试
+//
 // 错误格式来自 wecom/client.go SendKfTextMessage（err 包含 errcode + errmsg）。
 func isKfRateLimited(err error) bool {
 	if err == nil {
@@ -1395,7 +1371,7 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 	log.Printf("[wecom] 发送回复成功: to=%s shop=%s", fromUser, shopID)
 }
 
-// buildTodayContext 返回动态日期上下文（用作 Agent Run 的第一条 user message，
+// buildTodayContext 返回动态日期上下文（用作 Agent Run 的 system message，
 // 让模型知道"今天/明天"对应到具体日期）。
 func buildTodayContext() string {
 	now := time.Now()
@@ -1415,7 +1391,9 @@ func buildTodayContext() string {
 // 注意：DeepAgent 每次 Run 不带历史，调用方要把"上下文 + 历史 + 当前用户消息"全部装进 input。
 //
 // shopID：注入 ctx，Agent 工具（create_appointment 等）通过 tools.ShopIDFromCtx 取。
-//         也作为 system prompt 的提示，让 Agent 知道当前是哪家店。
+//
+//	也作为 system prompt 的提示，让 Agent 知道当前是哪家店。
+//
 // agentHistoryLimit 历史消息条数上限（env AGENT_HISTORY_LIMIT，默认 6，比之前 10 紧）
 //
 // 设计权衡：
@@ -1428,6 +1406,19 @@ const defaultAgentHistoryLimit = 6
 //
 // 兜底：即使条数 ≤ limit，某条 tool_call 返回特别长也会爆；按字符再砍一次
 const defaultAgentHistoryMaxChars = 12000
+
+// defaultAgentExecutionTimeout bounds a complete customer turn, including
+// model calls and business tools. A single model request has its own shorter
+// provider timeout in chatmodel.
+const defaultAgentExecutionTimeout = 60 * time.Second
+
+// agentExecutionTimeout reads the total Agent turn deadline. Keep this
+// separate from AGENT_HISTORY_*: it protects workers from a stalled tool-call
+// loop rather than limiting prompt size.
+func agentExecutionTimeout() time.Duration {
+	seconds := getEnvInt("AGENT_MAX_EXECUTION_SECONDS", int(defaultAgentExecutionTimeout.Seconds()))
+	return time.Duration(seconds) * time.Second
+}
 
 // trimHistory 按"条数上限 + 字符预算"双约束截断历史，从最新往旧取
 //
@@ -1451,7 +1442,8 @@ const defaultAgentHistoryMaxChars = 12000
 //   - 偏差 30% 也比"没限制爆掉"好
 //
 // 测试覆盖：TestTrimHistory_LimitByMessageCount / TestTrimHistory_LimitByCharBudget /
-//            TestTrimHistory_BothLimitsApply / TestTrimHistory_Empty / msgLen 单测
+//
+//	TestTrimHistory_BothLimitsApply / TestTrimHistory_Empty / msgLen 单测
 func trimHistory[M adk.MessageType](history []M, maxMessages, maxChars int) []M {
 	if len(history) == 0 {
 		return history
@@ -1473,7 +1465,7 @@ func trimHistory[M adk.MessageType](history []M, maxMessages, maxChars int) []M 
 		if totalChars+n > maxChars {
 			out = out[i+1:] // 从 i+1 开始保留
 			trimmed = true
-			break          // 后续更早的不用算了
+			break // 后续更早的不用算了
 		}
 		totalChars += n
 	}
@@ -1541,6 +1533,9 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M], userContent, shopID string) string {
+	ctx, cancel := context.WithTimeout(ctx, agentExecutionTimeout())
+	defer cancel()
+
 	history := sess.GetMessages()
 
 	// 历史消息精简：先按条数砍，再按字符预算砍（v4.9.2）
@@ -1556,7 +1551,7 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 		ctxMsg += fmt.Sprintf("\n[店铺上下文]\n当前服务店铺 ID：%s\n（创建预约时工具会自动用这个店铺，无需在工具参数里指定）\n", shopID)
 	}
 	var messages []M
-	messages = append(messages, msgops.NewUser[M](ctxMsg))
+	messages = append(messages, msgops.NewSystem[M](ctxMsg))
 
 	// 历史消息（已精简）
 	messages = append(messages, history...)
@@ -1626,6 +1621,7 @@ func (s *Server[M]) drainAgentEvents(events *adk.AsyncIterator[*adk.TypedAgentEv
 // 决定"多久之前的消息会被处理"：
 //   - 太短 → 老的活跃用户消息被丢
 //   - 太长 → 历史积压 spam（重启后第一次拉取就触发一堆历史回复）
+//
 // 48 小时匹配企业微信"客服消息 48 小时窗口"配额（95002 errcode 的来源）—— 一致。
 const kfSyncWindow = 48 * time.Hour
 
@@ -1683,6 +1679,7 @@ func filterKfMsgsByWindow(msgList []wecom.KfMsgItem, now time.Time) (kept []weco
 //   - agent 不知道其他 3 条同时存在的消息
 //   - 4 次推理给出语义雷同但措辞不同的 4 条回复
 //   - 4 次 sendReply 都执行 → 顾客看到 4 条混乱 spam
+//
 // 同步串行后：msg1 处理完（session 状态从 N → N+2）才处理 msg2，agent 每次都看到完整有序 history。
 // 注意：handleKfCallback 本身已经在 goroutine 里跑（line 1122），所以同步处理不会阻塞 HTTP 回调。
 //
@@ -1842,10 +1839,10 @@ func (s *Server[M]) handleAddExternalContact(ctx context.Context, client *wecom.
 		log.Printf("[external] 无 WelcomeCode，无法给客户发送欢迎语")
 	}
 
-	// 同时通知员工：有新客户添加，引导客户进入KF
+	// 通知员工：客户已添加，可在当前外部联系人会话中直接使用 Agent；客服链接是备用入口。
 	if employeeUserID != "" && kfLink != "" {
 		notifyText := fmt.Sprintf(
-			"🔔 有新客户添加了你（ExternalUserID: %s）\n\n请将以下客服链接发给客户，后续对话将由AI助手处理：\n%s",
+			"🔔 有新客户添加了你（ExternalUserID: %s）\n\n客户可直接在当前会话咨询，消息将由 AI 助手处理；也可按需发送客服入口：\n%s",
 			externalUserID, kfLink,
 		)
 		if err := client.SendTextMessage(ctx, employeeUserID, notifyText); err != nil {
@@ -1858,11 +1855,9 @@ func (s *Server[M]) handleAddExternalContact(ctx context.Context, client *wecom.
 
 // buildWelcomeText 构建客户欢迎语
 func buildWelcomeText(kfLink string) string {
-	text := "您好！欢迎添加我们的理发预约助手。"
+	text := "您好！欢迎添加我们的理发预约助手，您可直接在当前微信会话咨询排班、预约或取消预约。"
 	if kfLink != "" {
-		text += fmt.Sprintf("请点击链接进入客服对话，我可以帮您查询排班、创建预约和取消预约：\n%s", kfLink)
-	} else {
-		text += "请稍候，我们的客服将尽快为您服务。"
+		text += fmt.Sprintf("\n\n也可点击专用客服入口：\n%s", kfLink)
 	}
 	return text
 }
@@ -1890,6 +1885,20 @@ func (s *Server[M]) handleExternalContactMessage(ctx context.Context, client *we
 		shopID, externalUserID, employeeUserID, msg.Content)
 
 	userMsg := wecom.FromExternalContactMsg(externalUserID, employeeUserID, msg.Content)
+	if decision := s.cfg.RateLimiter.AllowDecision(customerRateLimitKey(shopID, externalUserID)); !decision.Allowed {
+		log.Printf("[ratelimit] rejected reason=%s source=external shop=%s user=%s", decision.Reason, shopID, externalUserID)
+		replyReq := &wecom.ReplyRequest{
+			UserID:         userMsg.UserID,
+			ExternalUserID: externalUserID,
+			Content:        rateLimitReply,
+			SourceType:     wecom.SourceExternal,
+			EmployeeUserID: userMsg.EmployeeUserID,
+		}
+		if err := client.SendReply(ctx, replyReq); err != nil {
+			log.Printf("[external] 发送限流提示失败: %v", err)
+		}
+		return
+	}
 
 	sessionID := "external_" + shopID + "_" + externalUserID // 加 shopID 防止多店用户串号
 	sess, err := s.cfg.Store.GetOrCreate(sessionID)

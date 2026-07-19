@@ -122,7 +122,6 @@ func newTestServer(t *testing.T, agent adk.TypedAgent[*schema.Message]) (*Server
 		Store:           store,
 		WorkspaceDir:    t.TempDir(),
 		ProjectRoot:     t.TempDir(),
-		ExamplesDir:     t.TempDir(),
 		Port:            "0", // unused — we test via the handler functions directly
 	})
 
@@ -161,6 +160,25 @@ func TestNewLoopCreation(t *testing.T) {
 	ts := srv.getTurnState(sessionID)
 	if ts == nil {
 		t.Fatal("getTurnState returned nil")
+	}
+}
+
+func TestBuildRunMessagesUsesFreshSystemDateContext(t *testing.T) {
+	srv, _, cleanup := newTestServer(t, simpleReplyAgent("ok"))
+	defer cleanup()
+
+	messages := srv.buildRunMessages("session", []*schema.Message{schema.UserMessage("明天上午十点")})
+	if len(messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(messages))
+	}
+	if messages[0].Role != schema.System {
+		t.Fatalf("first message role = %q, want system", messages[0].Role)
+	}
+	if !strings.Contains(messages[0].Content, "当前日期："+time.Now().Format("2006-01-02")) {
+		t.Fatalf("fresh date context missing: %q", messages[0].Content)
+	}
+	if strings.Contains(messages[0].Content, "filesystem tools") {
+		t.Fatalf("booking context must not include stale code-assistant instructions: %q", messages[0].Content)
 	}
 }
 
@@ -668,6 +686,52 @@ func TestTrimHistory_Empty(t *testing.T) {
 	out := trimHistory([]*schema.Message{}, 5, 100)
 	if len(out) != 0 {
 		t.Errorf("want 0, got %d", len(out))
+	}
+}
+
+func TestAgentExecutionTimeout(t *testing.T) {
+	t.Setenv("AGENT_MAX_EXECUTION_SECONDS", "75")
+	if got := agentExecutionTimeout(); got != 75*time.Second {
+		t.Fatalf("agentExecutionTimeout() = %v, want 75s", got)
+	}
+}
+
+func TestAgentExecutionTimeoutFallsBackForInvalidValue(t *testing.T) {
+	t.Setenv("AGENT_MAX_EXECUTION_SECONDS", "invalid")
+	if got := agentExecutionTimeout(); got != defaultAgentExecutionTimeout {
+		t.Fatalf("agentExecutionTimeout() = %v, want %v", got, defaultAgentExecutionTimeout)
+	}
+}
+
+func TestProcessAgentMessageAppliesExecutionDeadline(t *testing.T) {
+	t.Setenv("AGENT_MAX_EXECUTION_SECONDS", "75")
+	deadlineSeen := make(chan time.Time, 1)
+	agent := &mockAgent{
+		name: "deadline-agent",
+		onRun: func(ctx context.Context, _ *adk.TypedAgentInput[*schema.Message], gen *adk.AsyncGenerator[*adk.TypedAgentEvent[*schema.Message]]) {
+			defer gen.Close()
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Error("Agent context has no execution deadline")
+				return
+			}
+			deadlineSeen <- deadline
+			gen.Send(&adk.TypedAgentEvent[*schema.Message]{Action: adk.NewExitAction()})
+		},
+	}
+	srv, _, cleanup := newTestServer(t, agent)
+	defer cleanup()
+
+	sess, err := srv.cfg.Store.GetOrCreate("deadline-test")
+	if err != nil {
+		t.Fatalf("GetOrCreate session: %v", err)
+	}
+	_ = srv.processAgentMessage(context.Background(), sess, "查询预约", "default")
+
+	deadline := <-deadlineSeen
+	remaining := time.Until(deadline)
+	if remaining < 73*time.Second || remaining > 75*time.Second {
+		t.Fatalf("execution deadline remaining = %v, want about 75s", remaining)
 	}
 }
 

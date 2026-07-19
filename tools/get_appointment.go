@@ -15,7 +15,7 @@ package tools
 //   不要再凭 history 里的旧 barber_name 拼工具调用。
 //
 // 关键设计：
-//   - 只支持按 appointment_id 查（精确），不支持按 phone / customer 查（防越权 + 防名字撞）
+//   - 只支持按 appointment_id 查（精确），并强制绑定服务端验证过的顾客身份与店铺
 //   - 返回完整字段（barber_name / date / time / service / status），Agent 一次拿到全部
 //   - 隐私：customer 字段保留（Agent 已经知道是谁在对话），phone 字段**不**返回（Agent 不需要）
 //   - 跨店：GetAppointment 不带 shop_id 过滤——Agent 上下文里已经隐含了 shop，靠 appointment_id 唯一性保护
@@ -23,6 +23,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -75,9 +76,13 @@ func (t *GetAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		return "", err
 	}
 
-	appt, err := storage.GetAppointment(params.AppointmentID)
+	customer, err := currentCustomer(ctx)
 	if err != nil {
-		return "", fmt.Errorf("找不到预约 %s，确认下 ID 没复制错？", params.AppointmentID)
+		return "", err
+	}
+	appt, err := storage.GetAppointmentForCustomer(ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID)
+	if err != nil {
+		return "", fmt.Errorf("找不到属于您的预约，确认下预约号是否正确？")
 	}
 
 	// 故意不返回 phone 字段（Agent 不需要，避免越权）
@@ -91,6 +96,17 @@ func (t *GetAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		appt.Status,
 		formatCancelReason(appt),
 	), nil
+}
+
+func currentCustomer(ctx context.Context) (*storage.Customer, error) {
+	customer, err := storage.GetCustomerByMessagingIdentity(ctx, OpenIDFromCtx(ctx), ExternalUserIDFromCtx(ctx))
+	if err == nil {
+		return customer, nil
+	}
+	if errors.Is(err, storage.ErrCustomerIdentityRequired) {
+		return nil, fmt.Errorf("当前会话未完成身份验证，无法处理预约查询或取消")
+	}
+	return nil, fmt.Errorf("找不到当前顾客身份，无法处理该预约")
 }
 
 // formatCancelReason 拼接取消原因（如果有）

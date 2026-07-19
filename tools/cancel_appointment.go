@@ -17,10 +17,10 @@ import (
 // 行为：
 //   - 调用 storage.CancelAppointmentWithPolicy(source="agent")
 //   - 根据 cancel_type 给 Agent 返回不同的提示语：
-//     * early_cancel → "已成功取消"
-//     * late_cancel  → "已取消，但本次属于'晚退订'，下次请提前 2h 取消避免影响预约权益"
-//     * after_due    → "已过预约时间无法取消；如需标记爽约请用 mark_no_show 工具"
-//     * admin/system → 不从 Agent 路径触发，保留兼容
+//   - early_cancel → "已成功取消"
+//   - late_cancel  → "已取消，但本次属于'晚退订'，下次请提前 2h 取消避免影响预约权益"
+//   - after_due    → "已过预约时间无法取消；如需标记爽约请用 mark_no_show 工具"
+//   - admin/system → 不从 Agent 路径触发，保留兼容
 //   - 如果本次触发 BLACKLIST，自动加到 Warning 让 Agent 友好提示顾客
 type CancelAppointmentTool struct{}
 
@@ -61,8 +61,15 @@ func (t *CancelAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		return "", fmt.Errorf("appointment_id 参数不能为空")
 	}
 
-	// 调用带策略的取消 API
-	result, err := storage.CancelAppointmentWithPolicy(ctx, params.AppointmentID, storage.CancelSourceAgent, params.Reason)
+	customer, err := currentCustomer(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// 取消范围固定为服务端注入的 shop + 已验证顾客，模型只能提供预约号和原因。
+	result, err := storage.CancelAppointmentForCustomerWithPolicy(
+		ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID, storage.CancelSourceAgent, params.Reason,
+	)
 	if err != nil {
 		// 已过预约时间：特殊错误，引导 Agent 改用 mark_no_show
 		if errors.Is(err, storage.ErrAfterDueCancel) {
@@ -72,9 +79,14 @@ func (t *CancelAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		}
 		return "", err
 	}
+	// 再读取受当前门店和顾客约束的记录，禁止仅凭取消函数返回值向顾客确认。
+	persisted, err := storage.GetAppointmentForCustomer(ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID)
+	if err != nil || persisted.Status != "cancelled" {
+		return "", fmt.Errorf("取消结果校验失败，请勿向顾客确认已取消；请稍后查询预约状态")
+	}
 
 	// 根据 cancel_type 拼装回复
-	msg := fmt.Sprintf("预约 %s 已成功取消。", params.AppointmentID)
+	msg := fmt.Sprintf("预约 %s 已成功取消。", persisted.ID)
 	switch result.CancelType {
 	case storage.CancelTypeLate:
 		msg += "\n\n⚠️ 注意：本次取消距离预约时间不足 2 小时，已记录为'晚退订'。" +

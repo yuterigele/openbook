@@ -275,26 +275,34 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		}
 		return "", fmt.Errorf("系统忙不过来了，请稍后再试")
 	}
+	// 写入成功不等于可以向顾客宣称成功。重新读取最终记录，确保事务提交后的
+	// 门店归属、状态和关键字段都与本次请求一致；校验失败时让 Agent 安全降级，
+	// 而不是生成“已预约”的幻觉回复。
+	persisted, err := storage.GetAppointment(appointment.ID)
+	if err != nil || persisted.ShopID != appointment.ShopID || persisted.Status != "active" ||
+		persisted.BarberName != params.BarberName || persisted.Date != params.Date || persisted.Time != params.Time {
+		return "", fmt.Errorf("预约结果校验失败，请勿向顾客确认成功；请稍后查询预约状态")
+	}
 
 	// 埋点（PRD §11.2 续费漏斗）
-	storage.TrackEvent(ctx, appointment.ShopID, storage.EventAppointmentCreated, appointment.ID, map[string]any{
-		"barber_name": appointment.BarberName,
-		"customer":    appointment.Customer,
-		"date":        appointment.Date,
-		"time":        appointment.Time,
+	storage.TrackEvent(ctx, persisted.ShopID, storage.EventAppointmentCreated, persisted.ID, map[string]any{
+		"barber_name": persisted.BarberName,
+		"customer":    persisted.Customer,
+		"date":        persisted.Date,
+		"time":        persisted.Time,
 	})
 	// 该店铺首次预约 → 触发 D+N 漏斗起点
-	if has, _ := storage.HasShopEvent(ctx, appointment.ShopID, storage.EventFirstAppointment); !has {
-		storage.TrackEvent(ctx, appointment.ShopID, storage.EventFirstAppointment, appointment.ID, nil)
+	if has, _ := storage.HasShopEvent(ctx, persisted.ShopID, storage.EventFirstAppointment); !has {
+		storage.TrackEvent(ctx, persisted.ShopID, storage.EventFirstAppointment, persisted.ID, nil)
 	}
 
 	return fmt.Sprintf("预约创建成功！\n预约ID：%s\n理发师：%s\n顾客：%s\n日期：%s\n时间：%s\n服务：%s",
-		appointment.ID,
-		appointment.BarberName,
-		appointment.Customer,
-		appointment.Date,
-		appointment.Time,
-		appointment.Service,
+		persisted.ID,
+		persisted.BarberName,
+		persisted.Customer,
+		persisted.Date,
+		persisted.Time,
+		persisted.Service,
 	), nil
 }
 

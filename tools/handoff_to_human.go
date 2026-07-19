@@ -89,9 +89,9 @@ func (t *HandoffToHumanTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 				Required: true,
 			},
 			"last_user_message": {
-				Type: "string",
-				Desc: "顾客触发的最后一条原文（让商户知道上下文）。",
-				Required: false,
+				Type:     "string",
+				Desc:     "顾客触发的最后一条原文（让商户知道上下文，也用于阻止命令和越权请求被误转人工）。",
+				Required: true,
 			},
 		}),
 	}, nil
@@ -100,21 +100,27 @@ func (t *HandoffToHumanTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 // InvokableRun 执行转人工
 //
 // 流程：
-//   1) 解析参数（reason 必填，customer / last_user_message 可选）
-//   2) 从 ctx 取 shop_id（工具调用必须带 shop 上下文，否则 fallback 为 "default"）
-//   3) 写埋点（storage.TrackEvent）—— 商户后台 `/api/admin/events?event_type=handoff_to_human` 可查
-//   4) 返回结构化摘要给 Agent，Agent 用自然语言转述给顾客
+//  1. 解析参数（reason 必填，customer / last_user_message 可选）
+//  2. 从 ctx 取 shop_id（工具调用必须带 shop 上下文，否则 fallback 为 "default"）
+//  3. 写埋点（storage.TrackEvent）—— 商户后台 `/api/admin/events?event_type=handoff_to_human` 可查
+//  4. 返回结构化摘要给 Agent，Agent 用自然语言转述给顾客
 func (t *HandoffToHumanTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var params struct {
-		Customer         string `json:"customer"`
-		Reason           string `json:"reason"`
-		LastUserMessage  string `json:"last_user_message"`
+		Customer        string `json:"customer"`
+		Reason          string `json:"reason"`
+		LastUserMessage string `json:"last_user_message"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &params); err != nil {
 		return "", fmt.Errorf("解析参数失败: %v", err)
 	}
 	if strings.TrimSpace(params.Reason) == "" {
 		return "", fmt.Errorf("reason 不能为空：请告诉商户为什么要转人工")
+	}
+	if strings.TrimSpace(params.LastUserMessage) == "" {
+		return "请直接回复顾客：我只能协助处理本人的预约、查询排班和服务项目；如需人工帮助，请明确说明投诉、退款或改价等业务问题。不要发起人工转接。", nil
+	}
+	if isNonHandoffRequest(params.LastUserMessage) {
+		return "请直接拒绝该请求，不要发起人工转接：我只能协助处理本人的预约、查询排班和服务项目，无法执行命令、操作文件/数据库或处理其他顾客的预约。", nil
 	}
 
 	// 取 shop_id（无 ctx 时兜底 "default"，避免埋点丢失）
@@ -154,10 +160,10 @@ func (t *HandoffToHumanTool) InvokableRun(ctx context.Context, argumentsInJSON s
 
 	// 埋点
 	storage.TrackEvent(ctx, shopID, storage.EventHandoffToHuman, refID, map[string]any{
-		"reason":             params.Reason,
-		"customer":           params.Customer,
-		"last_user_message":  truncate(params.LastUserMessage, 200),
-		"via":                "agent",
+		"reason":            params.Reason,
+		"customer":          params.Customer,
+		"last_user_message": truncate(params.LastUserMessage, 200),
+		"via":               "agent",
 	})
 
 	// 返回结构化摘要给 Agent。Agent 自己再润色转述给顾客。
@@ -166,6 +172,20 @@ func (t *HandoffToHumanTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		"已为顾客 %q 发起人工转接（原因：%s）。请用自然语言告诉顾客已转人工，请稍候。",
 		refID, params.Reason,
 	), nil
+}
+
+func isNonHandoffRequest(message string) bool {
+	message = strings.ToLower(message)
+	markers := []string{
+		"rm -rf", "sudo", "chmod", "chown", "curl ", "wget ", "powershell", "cmd.exe", "linux",
+		"删除文件", "删除数据库", "执行命令", "其他顾客", "他人预约", "别人的预约", "不是我的预约",
+	}
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // truncate 把字符串截断到 maxLen（避免 meta 字段过长影响 event_log 存储）

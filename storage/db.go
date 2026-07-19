@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,9 +77,9 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&ReminderLog{},
 		&EventLog{},
 		&ShopAdmin{},
-		&BarberLeave{}, // P4 理发师请假（2026-06-21）
-		&Service{},     // v4.4 服务目录（2026-06-22）
-		&RolePermission{}, // v4.7 RBAC：role → permission 映射表
+		&BarberLeave{},          // P4 理发师请假（2026-06-21）
+		&Service{},              // v4.4 服务目录（2026-06-22）
+		&RolePermission{},       // v4.7 RBAC：role → permission 映射表
 		&CustomerNotification{}, // v4.10 leave notify 持久化（2026-06-23）
 		&APIKey{},               // v4.12.1 api_access feature 实战
 		&KfSyncState{},          // v4.13.1 微信客服 sync cursor 持久化
@@ -91,6 +90,9 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
+
+	// 后续 seed 与自愈逻辑通过包级 DB 访问数据库，必须在首次调用前完成绑定。
+	DB = db
 
 	// 跑完后列出所有已建的表，便于排查"表不存在"问题
 	if tables, listErr := db.WithContext(ctx).Migrator().GetTables(); listErr == nil {
@@ -140,7 +142,6 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		log.Printf("[storage] BackfillMissingCustomers 警告: %v", err)
 	}
 
-	DB = db
 	log.Printf("[storage] MySQL 初始化完成")
 	return db, nil
 }
@@ -150,7 +151,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 // 配置来源：
 //   - DEFAULT_SHOP_ID     店铺 ID（默认 "default"）
 //   - DEFAULT_SHOP_NAME   店铺名（默认 "默认理发店"）
-//   - WECOM_CORP_ID / WECOM_AGENT_ID / WECOM_SECRET / WECOM_TOKEN / WECOM_ENCODING_AES_KEY / WECOM_KF_LINK
+//   - 企业微信凭据由店铺管理配置写入 shops 表，不从环境变量读取
 //   - DEFAULT_ADMIN_USERNAME / DEFAULT_ADMIN_PASSWORD（默认 admin / admin123）
 //
 // 修复（2026-06-20）：之前如果店铺已存在就直接 return，导致 admin 永远建不出来。
@@ -158,61 +159,32 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
 	shopID := getenv("DEFAULT_SHOP_ID", "default")
 	now := time.Now()
-	agentID, _ := strconv.Atoi(getenv("WECOM_AGENT_ID", "0"))
 
-	// 1) 建店铺（已存在则跳过；但 wecom_* 字段空时回填 env）
+	// 1) 建店铺。企业微信凭据必须随后写入 shops 表，避免环境变量
+	// 覆盖已有门店配置或将单一主体错误套用到所有门店。
 	var existing Shop
 	if err := db.WithContext(ctx).Where("id = ?", shopID).First(&existing).Error; err != nil {
 		shop := Shop{
-			ID:                shopID,
-			Name:              getenv("DEFAULT_SHOP_NAME", "默认理发店"),
+			ID:   shopID,
+			Name: getenv("DEFAULT_SHOP_NAME", "默认理发店"),
 			// v4.14 修：地址不再走 .env 配置。Owner 在店铺设置 UI 里手填。
 			//   之前默认 "请到 .env 配置" 提示很奇怪——顾客看不到，店主不填。
-			Address:           "",
-			Timezone:          "Asia/Shanghai",
-			OpenHour:          9,
-			CloseHour:         18,
-			LunchStart:        12,
-			LunchEnd:          13,
-			LunchEndMin:       30,
-			Plan:              "basic",
-			ExpiresAt:         now.AddDate(1, 0, 0),
-			WecomCorpID:       os.Getenv("WECOM_CORP_ID"),
-			WecomAgentID:      agentID,
-			WecomSecret:       os.Getenv("WECOM_SECRET"),
-			WecomToken:        os.Getenv("WECOM_TOKEN"),
-			WecomEncodingAESKey: os.Getenv("WECOM_ENCODING_AES_KEY"),
-			WecomKFLink:       os.Getenv("WECOM_KF_LINK"),
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			Address:     "",
+			Timezone:    "Asia/Shanghai",
+			OpenHour:    9,
+			CloseHour:   18,
+			LunchStart:  12,
+			LunchEnd:    13,
+			LunchEndMin: 30,
+			Plan:        "basic",
+			ExpiresAt:   now.AddDate(1, 0, 0),
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 		if createErr := db.WithContext(ctx).Create(&shop).Error; createErr != nil {
 			return createErr
 		}
 		log.Printf("[storage] 种子店铺: %s (id=%s)", shop.Name, shop.ID)
-	} else {
-		log.Printf("[storage] 店铺 %s 已存在，检查 wecom_* 字段是否需要回填", shopID)
-		// 老数据兜底：如果 wecom_* 字段空但 env 有值，回填
-		needUpdate := false
-		updates := map[string]interface{}{"updated_at": now}
-		if existing.WecomCorpID == "" && os.Getenv("WECOM_CORP_ID") != "" {
-			updates["wecom_corp_id"] = os.Getenv("WECOM_CORP_ID")
-			updates["wecom_agent_id"] = agentID
-			updates["wecom_secret"] = os.Getenv("WECOM_SECRET")
-			updates["wecom_token"] = os.Getenv("WECOM_TOKEN")
-			updates["wecom_encoding_aes_key"] = os.Getenv("WECOM_ENCODING_AES_KEY")
-			if os.Getenv("WECOM_KF_LINK") != "" {
-				updates["wecom_kf_link"] = os.Getenv("WECOM_KF_LINK")
-			}
-			needUpdate = true
-		}
-		if needUpdate {
-			if err := db.WithContext(ctx).Model(&existing).Updates(updates).Error; err != nil {
-				log.Printf("[storage] 回填 wecom_* 失败: %v", err)
-			} else {
-				log.Printf("[storage] 已回填店铺 %s 的 wecom_* 字段", shopID)
-			}
-		}
 	}
 
 	// 2) 建 admin（按 username 查重，已存在则跳过）—— 修复点：无论店铺新建还是已存在都要执行

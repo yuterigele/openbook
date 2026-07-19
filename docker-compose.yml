@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   mysql:
     image: mysql:8.0
@@ -9,13 +7,14 @@ services:
       MYSQL_DATABASE: chatwitheino
       MYSQL_CHARSET: utf8mb4
       MYSQL_COLLATION: utf8mb4_unicode_ci
+      MYSQL_APP_PASSWORD: ${MYSQL_APP_PASSWORD:-openbook-local-only}
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --default-time-zone=+08:00
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -28,28 +27,51 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
 
+  db-bootstrap:
+    image: mysql:8.0
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_APP_PASSWORD: ${MYSQL_APP_PASSWORD:-openbook-local-only}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mysql -hmysql -uroot -p"$$MYSQL_ROOT_PASSWORD" <<SQL
+        CREATE USER IF NOT EXISTS 'openbook'@'%' IDENTIFIED BY '$$MYSQL_APP_PASSWORD';
+        GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON chatwitheino.* TO 'openbook'@'%';
+        FLUSH PRIVILEGES;
+        SQL
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
     restart: unless-stopped
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
-      MYSQL_USER: root
-      MYSQL_PASS: root
+      MYSQL_USER: openbook
+      MYSQL_PASS: ${MYSQL_APP_PASSWORD:-openbook-local-only}
       MYSQL_DB: chatwitheino
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
@@ -58,8 +80,8 @@ services:
       MESSAGE_KIND: message
       MODEL_TYPE: ""
       OPENAI_BASE_URL: https://api.deepseek.com/v1
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-your-key}
-      OPENAI_MODEL: deepseek-chat
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-chat}
       # 企业微信
       WECOM_CORP_ID: ${WECOM_CORP_ID:-}
       WECOM_AGENT_ID: ${WECOM_AGENT_ID:-}
@@ -67,10 +89,17 @@ services:
       WECOM_TOKEN: ${WECOM_TOKEN:-}
       WECOM_ENCODING_AES_KEY: ${WECOM_ENCODING_AES_KEY:-}
       WECOM_KF_LINK: ${WECOM_KF_LINK:-}
+      # Default to a safe local demonstration mode: replies are recorded instead
+      # of being sent to a real enterprise-WeChat account.
+      AGENT_REPLY_MODE: ${AGENT_REPLY_MODE:-mock}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-change-me-before-exposing}
+      DEFAULT_PLATFORM_ADMIN_USERNAME: ${DEFAULT_PLATFORM_ADMIN_USERNAME:-platform}
+      DEFAULT_PLATFORM_ADMIN_PASSWORD: ${DEFAULT_PLATFORM_ADMIN_PASSWORD:-change-me-before-exposing}
       PORT: "38080"
       TZ: Asia/Shanghai
     ports:
-      - "38080:38080"
+      - "127.0.0.1:38080:38080"
     volumes:
       - app_data:/app/data
 

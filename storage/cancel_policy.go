@@ -47,11 +47,11 @@ const (
 
 // CancelType 取消类型（持久化到 Appointment.CancelType）
 const (
-	CancelTypeEmpty    = ""            // 未取消（默认值）
-	CancelTypeEarly    = "early_cancel" // 提前 ≥ free_window 取消，无 penalty
-	CancelTypeLate     = "late_cancel"  // 提前 < free_window 取消，+late_cancel_count
-	CancelTypeAfterDue = "after_due"    // 已过预约时间（拒绝取消，标记爽约）
-	CancelTypeAdmin    = "admin_cancel" // 商户操作，无 penalty
+	CancelTypeEmpty    = ""              // 未取消（默认值）
+	CancelTypeEarly    = "early_cancel"  // 提前 ≥ free_window 取消，无 penalty
+	CancelTypeLate     = "late_cancel"   // 提前 < free_window 取消，+late_cancel_count
+	CancelTypeAfterDue = "after_due"     // 已过预约时间（拒绝取消，标记爽约）
+	CancelTypeAdmin    = "admin_cancel"  // 商户操作，无 penalty
 	CancelTypeSystem   = "system_cancel" // 系统触发，无 penalty
 )
 
@@ -80,9 +80,9 @@ type CancelPolicy struct {
 //   - LateCancelThreshold = 3：累计 3 次晚退订 → 黑名单（容忍偶尔临时有事）
 //   - NoShowThreshold = 2：爽约 2 次直接黑名单（比晚退订更严）
 var DefaultCancelPolicy = CancelPolicy{
-	FreeWindow:                    2 * time.Hour,
+	FreeWindow:                   2 * time.Hour,
 	LateCancelBlacklistThreshold: 3,
-	NoShowBlacklistThreshold:      2,
+	NoShowBlacklistThreshold:     2,
 }
 
 // CurrentCancelPolicy 取当前生效策略（MVP 写死 DefaultCancelPolicy）
@@ -94,12 +94,12 @@ func CurrentCancelPolicy() CancelPolicy {
 
 // CancelResult 取消操作的结果（包含策略副作用，便于调用方提示用户）
 type CancelResult struct {
-	AppointmentID string
-	CancelType    string    // early/late/admin/system/after_due（after_due 通常伴随 ErrAfterDueCancel 返回）
-	PenaltyApplied bool     // 是否触发 +1 penalty 计数
-	Blacklisted   bool      // 本次操作是否触发 BLACKLIST 加标签
-	BlacklistReason string  // 触发原因，便于日志/事件埋点
-	Warning       string    // 提示语（Agent 调用时可附加到回复："这次晚了，下次请提前 2h 取消"）
+	AppointmentID   string
+	CancelType      string // early/late/admin/system/after_due（after_due 通常伴随 ErrAfterDueCancel 返回）
+	PenaltyApplied  bool   // 是否触发 +1 penalty 计数
+	Blacklisted     bool   // 本次操作是否触发 BLACKLIST 加标签
+	BlacklistReason string // 触发原因，便于日志/事件埋点
+	Warning         string // 提示语（Agent 调用时可附加到回复："这次晚了，下次请提前 2h 取消"）
 }
 
 // CancelAppointmentWithPolicy 带策略的取消预约（PRD §11.4 P3）
@@ -121,6 +121,19 @@ type CancelResult struct {
 //   - 顾客字段更新在同一事务
 //   - 埋点 TrackEvent 在事务内（参与回滚）
 func CancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason string) (*CancelResult, error) {
+	return cancelAppointmentWithPolicy(ctx, apptID, source, reason, "", "")
+}
+
+// CancelAppointmentForCustomerWithPolicy cancels an appointment only when it
+// belongs to the verified customer in the current shop.
+func CancelAppointmentForCustomerWithPolicy(ctx context.Context, apptID, shopID, customerID, source, reason string) (*CancelResult, error) {
+	if shopID == "" || customerID == "" {
+		return nil, ErrCustomerIdentityRequired
+	}
+	return cancelAppointmentWithPolicy(ctx, apptID, source, reason, shopID, customerID)
+}
+
+func cancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason, shopID, customerID string) (*CancelResult, error) {
 	if apptID == "" {
 		return nil, fmt.Errorf("apptID 不能为空")
 	}
@@ -141,8 +154,15 @@ func CancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason str
 
 	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var appt Appointment
-		if err := tx.Where("id = ?", apptID).First(&appt).Error; err != nil {
+		lookup := tx.Where("id = ?", apptID)
+		if shopID != "" {
+			lookup = lookup.Where("shop_id = ? AND customer_id = ?", shopID, customerID)
+		}
+		if err := lookup.First(&appt).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if shopID != "" {
+					return ErrAppointmentForbidden
+				}
 				return ErrAppointmentNotFound
 			}
 			return err
@@ -190,16 +210,19 @@ func CancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason str
 		// 状态更新（带 WHERE status='active' 兜底）
 		now2 := time.Now()
 		updates := map[string]interface{}{
-			"status":        "cancelled",
-			"cancel_type":   cancelType,
-			"cancelled_at":  now2,
-			"updated_at":    now2,
+			"status":       "cancelled",
+			"cancel_type":  cancelType,
+			"cancelled_at": now2,
+			"updated_at":   now2,
 		}
 		if reason != "" {
 			updates["cancel_reason"] = reason
 		}
-		txRes := tx.Model(&Appointment{}).
-			Where("id = ? AND status = ?", apptID, "active").
+		update := tx.Model(&Appointment{}).Where("id = ? AND status = ?", apptID, "active")
+		if shopID != "" {
+			update = update.Where("shop_id = ? AND customer_id = ?", shopID, customerID)
+		}
+		txRes := update.
 			Updates(updates)
 		if txRes.Error != nil {
 			return txRes.Error
@@ -224,18 +247,18 @@ func CancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason str
 
 		// 埋点（事务内，写 event_logs 也参与回滚）
 		rec := EventLog{
-			ShopID:    appt.ShopID,
+			ShopID:     appt.ShopID,
 			CustomerID: appt.CustomerID,
-			EventType: EventAppointmentCancelled,
-			RefID:     apptID,
-			CreatedAt: now2,
+			EventType:  EventAppointmentCancelled,
+			RefID:      apptID,
+			CreatedAt:  now2,
 			Meta: mustJSON(map[string]any{
-				"cancel_type":    cancelType,
-				"source":         source,
-				"reason":         reason,
-				"hours_ahead":    apptTime.Sub(now).Hours(),
+				"cancel_type":     cancelType,
+				"source":          source,
+				"reason":          reason,
+				"hours_ahead":     apptTime.Sub(now).Hours(),
 				"penalty_applied": res.PenaltyApplied,
-				"blacklisted":    res.Blacklisted,
+				"blacklisted":     res.Blacklisted,
 			}),
 		}
 		if err := tx.Create(&rec).Error; err != nil {

@@ -1,177 +1,106 @@
-# OpenBook · 基于 DeepSeek API 的垂直行业智能 Agent 助手
+# OpenBook · 微信一句话预约的 Agent MVP
 
-> 面向本地生活服务门店（理发 / 美容 / 家政等）的智能 Agent 助手。
->
-> 顾客在微信里说一句话，AI 自动完成查档期、创建预约、改时间、改师傅、转人工；商家零成本上线。
+> 围绕“用户在微信说一句话完成预约”的场景，完成从意图识别、工具调用、业务落库到企业微信回复的 Agent 闭环。
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![CloudWeGo Eino](https://img.shields.io/badge/CloudWeGo-Eino-3B82F6)](https://github.com/cloudwego/eino)
-[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek-0066CC)](https://deepseek.com)
+[![LLM](https://img.shields.io/badge/LLM-DeepSeek%20%2F%20OpenAI%20%2F%20Ark-0066CC)](.)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/v4.17-Production_Ready-success)](.)
 
-</div>
+## 项目定位
 
----
+这是一个可运行的本地 Demo / MVP，不宣称生产就绪。它用美发预约验证 Agent 在真实业务中最容易出错的几个环节：相对日期理解、结构化工具调用、并发撞单、身份归属与失败兜底。
 
-## 一句话
+顾客无需安装企业微信，可使用普通微信通过两种入口完成查排班、预约、改约、取消、查询服务与转人工：
 
-> 1 个 AI Agent 替代 1 个 3500 元/月的前台。让中小美业门店用 49 元/月，享受原本要花 5 万/年的 AI 能力。
+1. 添加店主或理发师的企业微信为好友，在原微信聊天窗口直接咨询；
+2. 点击门店微信客服链接或扫描客服二维码，进入专用客服会话。
 
----
+两条通道分别接入企业微信“客户联系”和“微信客服”能力，后端统一进入同一套 Agent、身份校验与预约业务流程。
 
-## 真实对话
-
-```
-顾客：想约 Tony 老师明天下午 2 点剪头发
-
-  AI：帮你查了下，Tony 老师 14:00 已有预约
-      —— 改到 15:00，还是 Kevin 14:30？
-
-顾客：Tony 可以，2 号吧
-
-  AI：好的，已帮你约好 Tony 老师 2 号 14:00 剪发 ✅
-      前 2 小时我会发消息提醒你
+```text
+顾客：明天下午 2 点想约 Tony 剪发
+Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入 MySQL → 返回确认结果
 ```
 
----
+## 核心实现
 
-## 核心能力
+| 主题 | 实现 |
+|---|---|
+| Agent 调用层 | 基于 `adk.MessageType` 泛型封装，支持聊天与工具循环两类消息边界 |
+| 工具调用 | 白名单注册预约相关工具；工具层而非模型提示词负责业务校验 |
+| 身份与越权防护 | 查询/取消预约以服务端注入的门店、消息身份和顾客归属三重约束 |
+| 时间处理 | 运行时以 `Asia/Shanghai` 注入日期上下文，避免示例日期污染相对时间理解 |
+| 一致性 | MySQL 持久化；Redis 分布式锁防止同一时段撞单 |
+| 模型可靠性 | DeepSeek / OpenAI / Ark 客户端降级链；失败时退回不写库的 chat-only 响应 |
+| 输入保护 | 敏感内容预检查、意图分类、限流与工具错误兜底 |
+| 本地交付 | Docker Compose 一键启动应用、MySQL、Redis；默认 mock 回复，不向微信客服会话发送消息 |
 
-| 能力 | 落地方式 |
-|------|---------|
-| Function Calling | 10 个工具（查档期 / 预约 / 改时间 / 改师傅 / 转人工 / ...） |
-| RAG 知识库 | eino compose.Workflow，4 节点 pipeline（load → chunk → score → filter → answer） |
-| 敏感词审核 | **trie 字典树 + LLM 双保险**：Layer 1 前缀树（51,345 词 / 6 大类 / JSON 热加载 / **实测 0.4μs/op**）+ Layer 2 LLM 兜底（关键词未命中时调小模型判灰区语义违规） |
-| 可观测性 | in-process `atomic.Int64` 计数器 + 结构化日志 + `/metrics` 端点（Prometheus 格式，不引第三方库） |
-| LLM 降级链 | DeepSeek → OpenAI → Ark 顺序 fallback，5xx/网络瞬时自动重试；**全挂时降级到 chat-only stub**（不调 LLM / 不触发 tool / 不写库），服务继续启动 |
-| Token 监控 | eino callback handler 提取 `Message.ResponseMeta.Usage` 累加到 `/metrics` 端点（prompt / completion / total tokens + calls / errored） |
-| 防滥用限流 | per-customer token bucket（`golang.org/x/time/rate`），LRU cap 10K，burst 5 / sustained 1 msg/s；超限返回"请稍后再试"+ 0 LLM 调用 |
-| 意图识别 | 关键词白名单（position-based tie-break）+ LLM 分类兜底 |
-| 并发控制 | 手写 worker pool（bounded + backpressure + panic recovery） |
-| 状态一致性 | MySQL 持久化 + Redis 分布式锁（防撞单） |
-| 流式响应 | hertz-contrib/sse + 15s keepalive 心跳 |
+## 安全边界
 
----
+顾客消息不拥有文件系统、Shell、数据库管理或店员操作能力。Agent 仅注册预约业务所需工具；预约查询与取消均忽略模型传入的身份字段，只使用服务端从微信客服会话或本地会话写入的身份上下文。
 
-## 架构
-
-```
-顾客微信 → 企业微信客服 API → Pre-check（敏感词 + 意图,worker pool）
-                                    ↓
-                          eino ADK Agent
-                       (DeepSeek primary + 降级链)
-                                    ↓
-            ┌──────┬──────┬──────┬──────┬──────┐
-            │query │create│cancel│list  │handoff│
-            │_sched│_appt │_appt │...   │_human │
-            └──────┴──────┴──────┴──────┴──────┘
-                                    ↓
-                            MySQL + Redis
-```
-
----
+本地 Compose 默认仅监听 `127.0.0.1`，应用使用受限 MySQL 账号，不使用数据库 `root`。详细取舍与复盘见 [AI 工程复盘](docs/ai-engineering-notes.md)。
 
 ## 快速开始
 
+### Docker（推荐）
+
 ```bash
-git clone https://github.com/yuterigele/openbook.git
-cd openbook
-
-# 1. 配置 LLM（默认 DeepSeek，可在 .env 切 OpenAI / Ark）
 cp .env.example .env
-# 编辑 .env 填入 OPENAI_API_KEY / DEEPSEEK_API_KEY
-
-# 2. 跑测试（30+ 用例，覆盖 5 大核心包）
-go test ./sensitive/ ./chatmodel/ ./intent/ ./pool/ ./internal/agent/
-
-# 3. 启动服务
-go run .
-# → 监听 :38080，访问 http://localhost:38080 看管理后台
+# 可选：在 .env 填写 OPENAI_API_KEY；默认 AGENT_REPLY_MODE=mock
+docker compose up --build
 ```
 
-更多见 [docs/DEPLOY_DEMO.md](docs/DEPLOY_DEMO.md)。
+打开 `http://127.0.0.1:38080` 体验本地聊天页，商户后台为 `http://127.0.0.1:38080/admin`。
 
----
+容器说明与重置方式见 [容器 Demo](docs/CONTAINER_DEMO.md)。
 
-## 技术栈
+### 本地运行
 
-- **语言**：Go 1.25
-- **AI 框架**：CloudWeGo Eino（ADK + compose）
-- **LLM 主力**：DeepSeek（中文最优性价比）
-- **LLM 降级**：OpenAI / 字节 Ark
-- **后端**：CloudWeGo Hertz + SSE
-- **存储**：MySQL 8.0 + Redis 7.0
-- **规划**：PostgreSQL 17 + pgvector（v5.x 商家知识库 RAG）
-- **接入**：企业微信客服 API
-- **前端测试**：vitest（web/）
+```bash
+cp .env.example .env
+go test ./tools ./internal/agent ./server
+go run .
+```
 
----
+## 测试重点
 
-## 演进路线：RAG 与向量检索
+```bash
+# 预约归属与取消越权回归
+go test ./tools -run 'Test(GetAppointment|CancelAppointmentTool|E2E_S2_CancelAppointment)' -count=1
 
-### 现状（v4.17）
+# Agent 与服务端编译/单测
+go test ./internal/agent ./server -count=1
+```
 
-- **单文档 RAG**（`answer_from_document` 工具）：用户上传 PDF/文档问问题
-- 实现：eino compose.Workflow 4 节点，**LLM-as-judge 评分**（无向量库）
-  - `load` 读文件 → `chunk` 按段落切 ~800 char → `score` 每个 chunk 调 LLM 打 0-10 分（MaxConcurrency=5） → `filter` 取 top-3（score ≥ 3） → `answer` LLM 综合
-- **不直接上向量库的原因**：
-  1. **规模小**：单文档场景，< 1 MB LLM-scoring 完全够用（~35K token / 查询，~12s 延迟，~0.08 元）
-  2. **精度高**：LLM 全文理解 > embedding cosine similarity
-  3. **部署轻**：0 额外基础设施
+压测口径、样例请求和当前已知边界见 [benchmarks](docs/benchmarks.md)。
 
-### 演进路径（按规模）
+## 为什么暂不上向量库
 
-| 文档规模 | 方案 | 触发条件 |
-|---|---|---|
-| < 1 MB | LLM-scoring（现状） | 单文档场景，量小 |
-| 1-10 MB | **Hybrid 检索**：embedding 粗筛 top-20 + LLM 重排 top-3 | chunk 切分超过 100 |
-| > 10 MB / 商家知识库 | **纯向量库**：bge-m3 + pgvector | 累积到一定规模 |
+预约的核心数据（理发师、服务、档期、预约状态）是强结构化且实时变化的数据，直接通过受约束业务工具查询，比向量检索更准确、可审计。当前 MVP 中，非结构化知识库不是成交闭环的瓶颈，因此不为“看起来像 AI”额外引入 embedding、索引同步与多租户召回复杂度。
 
-### v5.x 规划：商家知识库 RAG
-
-**场景**：顾客问"有啥项目 / 染发有啥区别 / 现在有什么优惠"——这类非结构化查询，`list_services` 工具查不到。
-
-**方案**：
-- **embedding 模型**：bge-m3（本地部署，中文 SOTA，支持稠密+稀疏+多向量）
-- **向量库**：**pgvector**（复用现有 MySQL 集群，运维负担最小）
-- **Hybrid 检索**：向量召回 top-20 + Cross-Encoder（bge-reranker-large）精排 top-3
-- **多租户隔离**：`shop_id` 作为 metadata 过滤，每个商家知识库独立
-- **实时更新**：单条 upsert + 重建索引，商家改价目表秒级生效
-
-**为什么选 pgvector**：
-- 已有 MySQL，加 PG 实例 + pgvector 扩展，**0 新增组件类型**
-- 10M 向量内性能够用
-- 支持 metadata 过滤（`WHERE shop_id = ?`）
-- GIN 索引 / HNSW 索引都支持
-
----
+当商家沉淀出大量价目、活动、服务说明等非结构化资料，并出现召回质量或查询延迟瓶颈时，再评估混合检索和向量库。完整判断过程见 [AI 工程复盘](docs/ai-engineering-notes.md#为什么当前不先上向量库)。
 
 ## 文档
 
-- [痛点总结](docs/痛点总结.md) — 行业 3 极分化 + 8 大痛点 + 8 个技术踩坑
-- [技术实现方案](docs/技术实现方案.md) — 5 层防护 / LLM 降级 / Function Calling / 性能数据
-- [CHANGELOG](docs/CHANGELOG.md) — 20+ 版本迭代
-- [PRD](docs/hair-salon-agent-prd.md) — 完整产品需求
-- [部署 / 演示](docs/DEPLOY_DEMO.md) — 上线 + 演示
+- [AI 工程复盘](docs/ai-engineering-notes.md) — 相对时间、越权、提示注入、种子数据、容器化的复现与修复
+- [容器 Demo](docs/CONTAINER_DEMO.md) — 本地 Docker 启动与安全边界
+- [benchmarks](docs/benchmarks.md) — 压测方案与记录模板
+- [产品需求](docs/hair-salon-agent-prd.md) — 预约场景与业务规则
+- [CHANGELOG](docs/CHANGELOG.md) — 20+ 次版本迭代记录
 
----
+## 技术栈
 
-## 版本
+- Go、CloudWeGo Eino（ADK / compose）、CloudWeGo Hertz
+- DeepSeek、OpenAI、字节 Ark
+- MySQL 8、Redis 7、Docker Compose、企业微信客服 API
 
-- **当前**：v4.17（生产就绪）
-- **迭代**：20+ 版本（v4.10 → v4.17）
-- **代码**：~15K Go（不含 vendored）
+## 迭代
 
----
-
-## 反馈
-
-- 🐛 Bug：[Issue](https://github.com/yuterigele/openbook/issues)
-- 📧 联系：[特日格乐](https://github.com/yuterigele)
-
----
+- 20+ 版本迭代
+- 重点演进：工具调用闭环、业务规则、身份隔离、时间处理、容器化与回归测试
 
 ## License
 
-Apache 2.0 — 详见 [LICENSE](LICENSE)
+Apache 2.0，详见 [LICENSE](LICENSE)。

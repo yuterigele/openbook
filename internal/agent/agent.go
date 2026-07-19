@@ -27,10 +27,8 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log"
 
-	localbk "github.com/cloudwego/eino-ext/adk/backend/local"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/prebuilt/deep"
 	"github.com/cloudwego/eino/components/tool"
@@ -38,7 +36,6 @@ import (
 
 	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/helpers"
-	"github.com/yuterigele/openbook/rag"
 	"github.com/yuterigele/openbook/sensitive"
 	"github.com/yuterigele/openbook/tools"
 )
@@ -113,7 +110,7 @@ func buildAgentInstruction() string {
 		"  - 工作时间：每天 09:00-18:00，每半小时一个时段，午休 12:00-13:30 不可约。\n" +
 		"  - 节假日、过去时间、22:00 之后不接单。\n" +
 		"  - 顾客说「3 点」默认下午 15:00（不是凌晨 3 点）。\n" +
-		"  - 顾客说「明天 / 后天 / 3 号 / 周六」时，根据当天日期推 YYYY-MM-DD（调用方会在第一条 user 消息里给日期上下文）。\n" +
+		"  - 顾客说「明天 / 后天 / 3 号 / 周六」时，根据本轮 system context 中的当天日期推 YYYY-MM-DD。\n" +
 		"  - 默认服务「剪发」；顾客要烫/染/护理时调 list_services 让他/她挑。\n" +
 		"  - **节假日处理（v4.16.2 关键）**：拒绝某天时**必须**先调 list_shop_holidays 看本店完整节假日清单，\n" +
 		"    再从清单里挑一个非假日的日期推荐给顾客——**严禁**凭 prompt 里的「前后两天」硬推日期（v4.16.1 真实事故）。\n" +
@@ -144,11 +141,14 @@ func buildAgentInstruction() string {
 		"  - 师傅不存在 → 「本店现在有 Tony、Kevin 两位师傅，你选一位？」\n" +
 		"  - 晚退订 → 「本次取消距离预约不足 2 小时，下次请尽量提前 2 小时取消哦~」\n\n" +
 		"【人工兜底（MVP 第 5 项）】\n" +
-		"以下 3 类场景**才**调 handoff_to_human：\n" +
+		"以下 2 类场景**才**调 handoff_to_human：\n" +
 		"  1) 顾客明确要求找人工（「叫老板来」「我要投诉」）\n" +
 		"  2) 顾客需求超出工具能力（投诉/退款/改价/礼品卡等）\n" +
-		"  3) 连续 2 轮没识别出意图\n" +
-		"**严禁**：不要因顾客语气不好、自己答不上来、怕麻烦就调。普通业务问题继续用工具。\n" +
+		"**严禁**：未知输入、Linux/Shell 命令、要求操作文件或数据库、查询/取消其他顾客预约、预约号不属于当前顾客，都不能转人工。\n" +
+		"- 命令或系统操作：直接回复「我只能协助查询和办理本店预约，无法执行命令或处理系统操作。」不调任何工具。\n" +
+		"- 他人预约或不属于当前顾客的预约：直接回复「我只能查询和取消当前会话关联的预约，无法处理其他顾客的预约。」不转人工、不建议换预约号或留手机号。\n" +
+		"- 普通未知输入：直接说明可协助查询排班、预约、改约、取消或转人工处理投诉/退款；不要转人工。\n" +
+		"调用 handoff_to_human 时必须原样传入 last_user_message；工具拒绝命令或越权请求时，按工具返回内容回复，不得重试。\n" +
 		"**只调一次**（v4.13.5 关键）：工具返回「已转人工」后不要再调，重复调用会被 dedup 拦截但浪费 token。\n" +
 		"调用后回「好的，我帮您转给店员，请稍等」。\n\n" +
 		"【示例对话】\n" +
@@ -157,8 +157,8 @@ func buildAgentInstruction() string {
 		"用户：Tony 下午 3 点\n" +
 		"你：调 query_schedule 查 Tony 明天 14:00-18:00；如果 15:00 空闲就确认「Tony 明天下午 3 点是空的，请问您贵姓？方便留个手机号吗？」；如已占就推 15:30 或 16:00。\n\n" +
 		"用户：Tony 明天 3 点，我叫小明，13812345678，剪发\n" +
-		"你：先 query_schedule 确认 15:00 空闲，再调 create_appointment(barber_name=Tony, customer=小明, phone=13812345678, date=明天, time=15:00, service=剪发)。\n" +
-		"工具返回 '预约ID: A1B2C3D'。**你必须在最终回复里把预约号告诉顾客**：「好的，已帮您约好 Tony 师傅 6/26 15:00 剪发，**预约号 A1B2C3D，建议截图保存哦**~」\n\n" +
+		"你：先根据本轮 system context 的当前日期把“明天”换算成 YYYY-MM-DD；query_schedule 确认 15:00 空闲后，再调 create_appointment(barber_name=Tony, customer=小明, phone=13812345678, date=换算后的日期, time=15:00, service=剪发)。\n" +
+		"工具返回 '预约ID: A1B2C3D'。**你必须在最终回复里把预约号告诉顾客**：「好的，已帮您约好 Tony 师傅明天下午 3 点剪发，**预约号 A1B2C3D，建议截图保存哦**~」\n\n" +
 		"用户：你们有什么项目？多少钱？\n" +
 		"你：调 list_services 拿到全部服务，挑 3 项关键（剪发+烫发+染发）按价格区间总结回顾客。\n\n" +
 		"用户：Tony 怎么没排班？\n" +
@@ -184,15 +184,14 @@ func buildAgentInstruction() string {
 //   - tools.ListServicesTool        列本店服务项目
 //   - tools.BarberLeaveTool         查理发师请假详情（原因 + 区间）
 //   - tools.ListShopHolidaysTool    列本店节假日 + 营业时间（v4.16.2 加，避免 LLM 凭印象推日期）
-//   - tools.MarkNoShowTool / tools.MarkCompletedTool  标记爽约/完成
+//   - tools.GetAppointmentTool   查询当前顾客自己的预约，用于改约前核验
 //   - tools.HandoffToHumanTool      MVP 第 5 项：转人工兜底（写埋点 + 提示）
 //
 // 辅助工具：
-//   - ragTool                       RAG（理发店知识问答，可选）
 //   - sensitive.SensitiveCheckTool  v4.17+：输入预过滤（政治/色情/暴力/广告/辱骂/违法）
-//                                   命中后 LLM 直接回 `reason` 字段给顾客，不重试、不改写
+//     命中后 LLM 直接回 `reason` 字段给顾客，不重试、不改写
 //   - intent.ClassifyTool           v4.17+：双层意图分类（关键词白名单 + LLM 兜底），
-//                                   给 LLM 一个路由提示而不是硬规则
+//     给 LLM 一个路由提示而不是硬规则
 //
 // 微信场景下 Agent 不需要 interrupt 审批（顾客发消息 → Agent 直接调工具 → 回复），
 // 所以不再挂 approvalMiddleware；只保留 SafeToolMiddleware 防止工具抛错卡死循环。
@@ -203,7 +202,7 @@ func buildAgentInstruction() string {
 // M is the eino MessageType — *schema.Message for chat, *schema.AgenticMessage
 // for tool-loop agents. The caller chooses at the boundary.
 func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool) (adk.TypedResumableAgent[M], error) {
-	cm, _, chain, err := chatmodel.NewModelWithFallback[M](ctx)
+	cm, used, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -215,50 +214,38 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 		}
 	}
 
-	backend, err := localbk.NewBackend(ctx, &localbk.Config{})
-	if err != nil {
-		return nil, err
-	}
-
-	ragTool, err := rag.BuildTool[M](ctx, cm)
-	if err != nil {
-		return nil, fmt.Errorf("build rag tool: %w", err)
-	}
-
 	handlers := []adk.TypedChatModelAgentMiddleware[M]{
 		helpers.NewSafeToolMiddleware[M](),
 	}
 
 	cfg := &deep.TypedConfig[M]{
-		Name:        "BarberAssistant",
-		Description: "美发预约助手，帮助用户查询理发师排班、创建预约和取消预约。",
-		Instruction: buildAgentInstruction(),
-		ChatModel:   cm,
-		Backend:        backend,
-		StreamingShell: backend,
-		MaxIteration:   20, // 微信场景不需要深度推理，20 轮足矣
-		Handlers:       handlers,
+		Name:                   "BarberAssistant",
+		Description:            "美发预约助手，帮助用户查询理发师排班、创建预约和取消预约。",
+		Instruction:            buildAgentInstruction(),
+		ChatModel:              cm,
+		MaxIteration:           8,
+		WithoutWriteTodos:      true,
+		WithoutGeneralSubAgent: true,
+		Handlers:               handlers,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
-			Tools: []tool.BaseTool{
-				ragTool,
-				&sensitive.SensitiveCheckTool{}, // v4.17+：输入预过滤，命中后由 LLM 回 `reason` 给顾客
-				intentTool,                       // v4.17+：双层意图分类
-				&tools.QueryScheduleTool{},
-				&tools.CreateAppointmentTool{},
-				&tools.CancelAppointmentTool{},
-				&tools.MarkNoShowTool{},
-				&tools.MarkCompletedTool{},
-				&tools.ListBarbersTool{},
-				&tools.ListServicesTool{},
-				&tools.BarberLeaveTool{},
-				&tools.GetAppointmentTool{}, // v4.13.6：改时间前必调，防 leave 改派后用旧 barber
-				&tools.ListShopHolidaysTool{}, // v4.16.2：节假日拒绝时必调，拿完整清单避免 LLM 凭印象推日期
-				&tools.HandoffToHumanTool{},
-			},
+				Tools: []tool.BaseTool{
+					&sensitive.SensitiveCheckTool{}, // v4.17+：输入预过滤，命中后由 LLM 回 `reason` 给顾客
+					intentTool,                      // v4.17+：双层意图分类
+					&tools.QueryScheduleTool{},
+					&tools.CreateAppointmentTool{},
+					&tools.CancelAppointmentTool{},
+					&tools.ListBarbersTool{},
+					&tools.ListServicesTool{},
+					&tools.BarberLeaveTool{},
+					&tools.GetAppointmentTool{},   // v4.13.6：改时间前必调，防 leave 改派后用旧 barber
+					&tools.ListShopHolidaysTool{}, // v4.16.2：节假日拒绝时必调，拿完整清单避免 LLM 凭印象推日期
+					&tools.HandoffToHumanTool{},
+				},
 			},
 		},
 	}
 	helpers.ApplyMessageModelRetry(cfg)
+	cfg.ModelFailoverConfig = chatmodel.NewRuntimeFailoverConfig[M](ctx, used)
 	return deep.NewTyped[M](ctx, cfg)
 }

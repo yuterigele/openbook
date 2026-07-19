@@ -30,10 +30,10 @@ func TestGetAppointmentTool_InfoMentionsPreModify(t *testing.T) {
 	// 关键约束不能漏（去掉 markdown ** 噪声再断言）
 	desc := strings.ReplaceAll(info.Desc, "**", "")
 	mustHave := []string{
-		"改时间 / 取消前必调",           // 触发场景
+		"改时间 / 取消前必调",                  // 触发场景
 		"history 里的 barber_name 可能是旧的", // 为什么
-		"leave 改派后",                  // 真实场景
-		"不返回 phone",                  // 隐私
+		"leave 改派后",                    // 真实场景
+		"不返回 phone",                    // 隐私
 	}
 	for _, sub := range mustHave {
 		if !strings.Contains(desc, sub) {
@@ -49,8 +49,9 @@ func TestGetAppointment_HappyPath(t *testing.T) {
 	cust := storage.MakeCustomer(t, "Alice", 0, 0)
 	appt := storage.MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2026-06-26", "14:00")
 
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID)
 	out, err := (&GetAppointmentTool{}).InvokableRun(
-		context.Background(),
+		ctx,
 		`{"appointment_id":"`+appt.ID+`"}`,
 	)
 	if err != nil {
@@ -96,8 +97,9 @@ func TestGetAppointment_AfterLeaveReschedule_ReturnsNewBarber(t *testing.T) {
 		t.Fatalf("simulate leave reschedule: %v", err)
 	}
 
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID)
 	out, err := (&GetAppointmentTool{}).InvokableRun(
-		context.Background(),
+		ctx,
 		`{"appointment_id":"`+appt.ID+`"}`,
 	)
 	if err != nil {
@@ -115,8 +117,11 @@ func TestGetAppointment_AfterLeaveReschedule_ReturnsNewBarber(t *testing.T) {
 
 func TestGetAppointment_NotFound_ReturnsError(t *testing.T) {
 	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	cust := storage.MakeCustomer(t, "Alice", 0, 0)
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID)
 	_, err := (&GetAppointmentTool{}).InvokableRun(
-		context.Background(),
+		ctx,
 		`{"appointment_id":"nonexistent-id"}`,
 	)
 	if err == nil {
@@ -154,8 +159,9 @@ func TestGetAppointment_Cancelled_ShowsReason(t *testing.T) {
 		t.Fatalf("simulate cancel: %v", err)
 	}
 
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID)
 	out, err := (&GetAppointmentTool{}).InvokableRun(
-		context.Background(),
+		ctx,
 		`{"appointment_id":"`+appt.ID+`"}`,
 	)
 	if err != nil {
@@ -171,5 +177,19 @@ func TestGetAppointment_Cancelled_ShowsReason(t *testing.T) {
 	}
 	if !strings.Contains(out, "临时有事") {
 		t.Errorf("output should include cancel reason text, got %q", out)
+	}
+}
+
+func TestGetAppointment_RejectsOtherCustomer(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	owner := storage.MakeCustomer(t, "Alice", 0, 0)
+	attacker := storage.MakeCustomer(t, "Mallory", 0, 0)
+	appt := storage.MakeAppointment(t, shop.ID, owner.ID, "Alice", "Tony", "2026-06-26", "14:00")
+
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), attacker.WechatOpenID)
+	_, err := (&GetAppointmentTool{}).InvokableRun(ctx, `{"appointment_id":"`+appt.ID+`"}`)
+	if err == nil {
+		t.Fatal("other customer must not read the appointment")
 	}
 }

@@ -18,6 +18,7 @@ package chatmodel
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
@@ -97,5 +98,21 @@ func TestNewModelWithFallback_AllProvidersFail_ReturnsStub_Agentic(t *testing.T)
 	// produce a non-nil message.
 	if _, gErr := cm.Generate(context.Background(), nil); gErr != nil {
 		t.Errorf("stub Generate: %v", gErr)
+	}
+}
+
+func TestIsTransientProviderError(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("HTTP 503 Service Unavailable"), true},
+		{errors.New("connection reset by peer"), true},
+		{errors.New("invalid API key"), false},
+		{nil, false},
+	} {
+		if got := isTransientProviderError(tc.err); got != tc.want {
+			t.Errorf("isTransientProviderError(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

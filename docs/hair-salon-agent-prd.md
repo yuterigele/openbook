@@ -539,7 +539,7 @@ if onLeave && leave != nil {
 - cancelled leave → 允许
 - 其他理发师请假 → 允许（不误伤）
 
-放置位置说明：在 Redis 锁**之前**做这个检查是有意为之——
+放置位置说明： Redis 锁**之前**做在这个检查是有意为之——
 - 避免 lock TTL（10s）白白占用
 - 失败时 Agent 立即收到清晰错误，不需要等到锁释放再 reject
 

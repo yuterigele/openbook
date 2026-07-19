@@ -22,10 +22,12 @@ var DefaultSlots = []string{
 }
 
 var (
-	ErrSlotTaken   = errors.New("时段已被预约")
-	ErrBarberNotFound = errors.New("理发师不存在")
-	ErrAppointmentNotFound = errors.New("预约不存在")
-	ErrAlreadyCancelled = errors.New("预约已取消")
+	ErrSlotTaken                = errors.New("时段已被预约")
+	ErrBarberNotFound           = errors.New("理发师不存在")
+	ErrAppointmentNotFound      = errors.New("预约不存在")
+	ErrAlreadyCancelled         = errors.New("预约已取消")
+	ErrCustomerIdentityRequired = errors.New("顾客身份未验证")
+	ErrAppointmentForbidden     = errors.New("无权访问该预约")
 )
 
 func mustDB() *gorm.DB {
@@ -398,8 +400,9 @@ func CreateAppointmentFull(shopID, barberName, customer, phone, openID, external
 //
 // 重要：所有 SQL 在事务里（tx），并发安全。
 // 重要：phone 没在事务里做 unique 检查，靠 MySQL index 兜底；并发极端情况下
-//        可能出现两个顾客同 phone 的瞬间，第二个 INSERT 会失败（unique key 冲突），
-//        由 caller 决定是否重试。
+//
+//	可能出现两个顾客同 phone 的瞬间，第二个 INSERT 会失败（unique key 冲突），
+//	由 caller 决定是否重试。
 func upsertCustomerInTx(tx *gorm.DB, phone, openID, externalUserID, name string) (*Customer, error) {
 	if name == "" {
 		return nil, errors.New("顾客姓名不能为空")
@@ -553,6 +556,62 @@ func GetAppointment(appointmentID string) (*Appointment, error) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrAppointmentNotFound
 		}
+		return nil, err
+	}
+	return &appt, nil
+}
+
+// GetCustomerByMessagingIdentity returns the customer bound to the verified
+// messaging identity supplied by the transport layer, never by model input.
+func GetCustomerByMessagingIdentity(ctx context.Context, openID, externalUserID string) (*Customer, error) {
+	openID = strings.TrimSpace(openID)
+	externalUserID = strings.TrimSpace(externalUserID)
+	if openID == "" && externalUserID == "" {
+		return nil, ErrCustomerIdentityRequired
+	}
+
+	var byOpenID, byExternal Customer
+	var foundOpenID, foundExternal bool
+	if openID != "" {
+		if err := mustDB().WithContext(ctx).Where("wechat_open_id = ?", openID).First(&byOpenID).Error; err == nil {
+			foundOpenID = true
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if externalUserID != "" {
+		if err := mustDB().WithContext(ctx).Where("external_user_id = ?", externalUserID).First(&byExternal).Error; err == nil {
+			foundExternal = true
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if foundOpenID && foundExternal && byOpenID.ID != byExternal.ID {
+		return nil, ErrCustomerIdentityRequired
+	}
+	if foundExternal {
+		return &byExternal, nil
+	}
+	if foundOpenID {
+		return &byOpenID, nil
+	}
+	return nil, ErrAppointmentForbidden
+}
+
+// GetAppointmentForCustomer scopes an appointment lookup to the current shop
+// and the transport-verified customer identity.
+func GetAppointmentForCustomer(ctx context.Context, appointmentID, shopID, customerID string) (*Appointment, error) {
+	if appointmentID == "" || shopID == "" || customerID == "" {
+		return nil, ErrCustomerIdentityRequired
+	}
+	var appt Appointment
+	err := mustDB().WithContext(ctx).
+		Where("id = ? AND shop_id = ? AND customer_id = ?", appointmentID, shopID, customerID).
+		First(&appt).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrAppointmentForbidden
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &appt, nil
@@ -735,5 +794,5 @@ func ParseDate(d string) (time.Time, error) {
 }
 
 // GetToday / GetTomorrow 保留兼容
-func GetToday() string     { return time.Now().Format("2006-01-02") }
-func GetTomorrow() string  { return time.Now().AddDate(0, 0, 1).Format("2006-01-02") }
+func GetToday() string    { return time.Now().Format("2006-01-02") }
+func GetTomorrow() string { return time.Now().AddDate(0, 0, 1).Format("2006-01-02") }

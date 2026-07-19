@@ -245,20 +245,23 @@ func TestCreateAppointment_OtherBarberOnLeave_Allowed(t *testing.T) {
 // ===================== v4.13.6：跨日 leave → 错误消息裁到当天，不带"明天上午"尾巴 =====================
 //
 // 业务背景：prod 复现 — leave 跨日（如 10:15 今天 → 11:15 明天），
-//   v4.13.5 之前错误消息直接拼 "06-26 10:15 至 06-27 11:15"，LLM 口语化成"从今天上午一直
-//   到明天上午"。顾客只关心今天的 14:00，看到"明天上午"一脸懵。
-//   v4.13.6 裁到 params.Date 当天 [00:00, 23:59:59]；同日显示 HH:MM，跨日才带 MM-DD。
+//
+//	v4.13.5 之前错误消息直接拼 "06-26 10:15 至 06-27 11:15"，LLM 口语化成"从今天上午一直
+//	到明天上午"。顾客只关心今天的 14:00，看到"明天上午"一脸懵。
+//	v4.13.6 裁到 params.Date 当天 [00:00, 23:59:59]；同日显示 HH:MM，跨日才带 MM-DD。
 func TestCreateAppointment_LeaveCrossDay_ErrorClipsToDate(t *testing.T) {
 	setupToolsTestDB(t)
 	shop := storage.MakeShop(t, "shop-1", "")
 	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
 	_ = storage.MakeCustomer(t, "Alice", 0, 0)
 
-	// 顾客问今天 14:00
-	date, _, args := buildApptArgs("Alice", "Tony", 2)
+	// 固定选择明天 14:00，避免测试在晚间运行时被 snap 到次日 09:00，
+	// 从而不再落入 10:15 开始的请假区间。
+	date, _, args := buildApptArgsAt("Alice", "Tony", 1, "14:00", "13800000001")
 
 	// Tony 从今天 10:15 请假到明天 11:15（跨日，模拟 prod 那个 25h leave）
-	dayStart, _ := time.ParseInLocation("2006-01-02", date, time.Local)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
 	storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
 		dayStart.Add(10*time.Hour+15*time.Minute), dayStart.Add(33*time.Hour+15*time.Minute),
 		storage.LeaveActionCancel)
@@ -289,10 +292,11 @@ func TestCreateAppointment_LeaveSameDay_ErrorShowsHHMM(t *testing.T) {
 	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
 	_ = storage.MakeCustomer(t, "Alice", 0, 0)
 
-	date, _, args := buildApptArgs("Alice", "Tony", 2)
+	date, _, args := buildApptArgsAt("Alice", "Tony", 1, "14:00", "13800000002")
 
 	// 当天 10:00 → 18:00 请假，覆盖 14:00
-	dayStart, _ := time.ParseInLocation("2006-01-02", date, time.Local)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	dayStart, _ := time.ParseInLocation("2006-01-02", date, loc)
 	storage.MakeBarberLeave(t, shop.ID, "barber-Tony",
 		dayStart.Add(10*time.Hour), dayStart.Add(18*time.Hour), storage.LeaveActionCancel)
 
@@ -304,7 +308,7 @@ func TestCreateAppointment_LeaveSameDay_ErrorShowsHHMM(t *testing.T) {
 		t.Errorf("error should show '10:00 至 18:00' (no date prefix for same-day), got %q", err.Error())
 	}
 	// 不该出现日期前缀
-	if strings.Contains(err.Error(), "06-") {
+	if strings.Contains(err.Error(), dayStart.Format("01-02")) {
 		t.Errorf("error should NOT show date prefix for same-day, got %q", err.Error())
 	}
 }

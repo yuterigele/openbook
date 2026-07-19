@@ -153,6 +153,53 @@ func NewModelWithFallback[M adk.MessageType](ctx context.Context) (m einomodel.B
 	return newStubForType[M](), ProviderStub, chain, nil
 }
 
+// NewRuntimeFailoverConfig creates the per-request provider failover used by
+// the agent after retry attempts are exhausted. It deliberately excludes the
+// provider already selected at startup, then tries the remaining configured
+// providers in order. A later request starts from the primary again; a circuit
+// breaker can be layered on top when provider health is made shared state.
+func NewRuntimeFailoverConfig[M adk.MessageType](buildCtx context.Context, primary Provider) *adk.ModelFailoverConfig[M] {
+	providers := DefaultFallbackChain()
+	remaining := make([]Provider, 0, len(providers)-1)
+	for _, provider := range providers {
+		if provider != primary {
+			remaining = append(remaining, provider)
+		}
+	}
+	return &adk.ModelFailoverConfig[M]{
+		MaxRetries: uint(len(remaining)),
+		ShouldFailover: func(ctx context.Context, _ M, err error) bool {
+			return ctx.Err() == nil && isTransientProviderError(err)
+		},
+		GetFailoverModel: func(ctx context.Context, failoverCtx *adk.FailoverContext[M]) (einomodel.BaseModel[M], []M, error) {
+			index := int(failoverCtx.FailoverAttempt) - 1
+			if index < 0 || index >= len(remaining) {
+				return nil, nil, nil
+			}
+			provider := remaining[index]
+			model, err := buildProvider[M](buildCtx, provider)
+			if err != nil {
+				return nil, nil, fmt.Errorf("build runtime failover provider %s: %w", provider, err)
+			}
+			log.Printf("[chatmodel] runtime failover attempt=%d provider=%s", failoverCtx.FailoverAttempt, provider)
+			return model, nil, nil
+		},
+	}
+}
+
+func isTransientProviderError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{"429", "too many requests", "qpm limit", "500", "502", "503", "504", "bad gateway", "service unavailable", "connection reset", "connection refused", "i/o timeout", "tls handshake timeout", "eof"} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // newStubForType returns the stub model matching the M generic. The
 // two concrete types are necessary because einomodel.BaseModel[M]
 // has a fixed type-set constraint:
@@ -184,7 +231,7 @@ func buildProvider[M adk.MessageType](ctx context.Context, p Provider) (einomode
 	switch p {
 	case ProviderArk:
 		if isAgentic {
-			timeout := 3 * time.Minute
+			timeout := defaultAgenticModelTimeout
 			am, err := agenticark.New(ctx, &agenticark.Config{
 				APIKey:  os.Getenv("ARK_API_KEY"),
 				Model:   firstEnv("ARK_MODEL", "ARK_MODEL_ID"),
@@ -230,7 +277,7 @@ func buildProvider[M adk.MessageType](ctx context.Context, p Provider) (einomode
 			}
 		}
 		if isAgentic {
-			timeout := 3 * time.Minute
+			timeout := defaultAgenticModelTimeout
 			am, err := agenticopenai.New(ctx, &agenticopenai.Config{
 				APIKey:  apiKey,
 				Model:   model,

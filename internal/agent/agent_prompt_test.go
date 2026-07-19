@@ -35,17 +35,17 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 			desc: "【v4.13.4 核心】创建预约成功必须告诉预约号",
 			mustHave: []string{
 				"创建预约成功后，必须在回复里把'预约号'告诉顾客",
-				"A1B2C3D",        // 示例 ID
-				"建议截图保存",   // 提示顾客保存
+				"A1B2C3D", // 示例 ID
+				"建议截图保存",  // 提示顾客保存
 			},
 		},
 		{
 			desc: "【v4.13.4 核心】改/取消时优先从 history 找 ID",
 			mustHave: []string{
 				"优先从本会话 history 里找最近一次 create_appointment 的返回值",
-				"绝对不要",                       // 强约束语气
-				"请提供预约号",                    // 错的反例
-				"这是死循环，顾客根本不知道",         // 解释为什么不能这样
+				"绝对不要",          // 强约束语气
+				"请提供预约号",        // 错的反例
+				"这是死循环，顾客根本不知道", // 解释为什么不能这样
 			},
 		},
 		{
@@ -70,70 +70,79 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 		{
 			desc: "【改时间】正确流程：取消旧的 + 创建新的",
 			mustHave: []string{
-				"我想改到 4 点",     // 示例触发场景
-				"cancel_appointment 取消", // 取消旧的
+				"我想改到 4 点",                     // 示例触发场景
+				"cancel_appointment 取消",        // 取消旧的
 				"调 create_appointment 约 16:00", // 创建新的
-				"新预约号", // 告诉新 ID
+				"新预约号",                         // 告诉新 ID
 			},
 		},
 		{
 			desc: "【核心对话】问手机号（不是 ID）作为顾客身份识别",
 			mustHave: []string{
-				"13812345678",         // 示例手机号
-				"方便留个手机号吗",      // 创建前要手机号
+				"13812345678", // 示例手机号
+				"方便留个手机号吗",    // 创建前要手机号
 			},
 		},
 		{
 			desc: "【v4.13.6】师傅名必须用工具返回值，不凭印象",
 			mustHave: []string{
 				"师傅名必须用工具返回值",
-				"凭上下文印象",              // 反例触发词
+				"凭上下文印象", // 反例触发词
 				"create_appointment / cancel_appointment / list_barbers 工具返回里写的是哪个师傅", // 强约束
-				"leave 改派后",                // 反例
+				"leave 改派后", // 反例
 			},
 		},
 		{
 			desc: "【v4.13.6】get_appointment 改时间前必调",
 			mustHave: []string{
 				"get_appointment",
-				"改时间 / 取消前必调",          // 关键约束
+				"改时间 / 取消前必调",                  // 关键约束
 				"history 里的 barber_name 可能是旧的", // 为什么必调
 			},
 		},
 		{
 			desc: "【v4.16.2】list_shop_holidays 节假日拒绝时必调",
 			mustHave: []string{
-				"list_shop_holidays",            // 工具名
-				"必须",                          // 强约束
-				"前后两天",                       // 必须明确禁止凭印象推
-				"v4.16.1",                       // 真实事故背景
-				"顾客改日期时",                  // 改日期也要重查
+				"list_shop_holidays",    // 工具名
+				"必须",                    // 强约束
+				"前后两天",                  // 必须明确禁止凭印象推
+				"v4.16.1",               // 真实事故背景
+				"顾客改日期时",                // 改日期也要重查
 				"重新调 query_schedule 验证", // 不能凭上轮结果
 			},
 		},
 		{
 			desc: "【v4.16.3】师傅请假信息必须来自工具，禁止凭空生成（hallucination 防御）",
 			mustHave: []string{
-				"v4.16.3",                                    // 版本标注 + 真实事故
-				"绝对禁止",                                    // 强约束
-				"凭印象",                                     // 禁止理由
-				"幻觉",                                       // 明确 hallucination 字样
-				"barber_leave",                               // 必须调的工具
-				"没有请假",                                    // 工具返回"无请假"时不能画蛇添足
-				"list_barbers",                               // 昵称映射时必调
-				"老王",                                        // 反例必须出现
-				"昵称",                                        // 昵称映射约束
+				"v4.16.3",      // 版本标注 + 真实事故
+				"绝对禁止",         // 强约束
+				"凭印象",          // 禁止理由
+				"幻觉",           // 明确 hallucination 字样
+				"barber_leave", // 必须调的工具
+				"没有请假",         // 工具返回"无请假"时不能画蛇添足
+				"list_barbers", // 昵称映射时必调
+				"老王",           // 反例必须出现
+				"昵称",           // 昵称映射约束
 			},
 		},
 		{
 			desc: "【v4.16.4】history 里的具体陈述也不算事实（污染防御）",
 			mustHave: []string{
-				"v4.16.4",                       // 版本标注 + 真实事故
-				"历史消息",                       // 必须是 history 而不是新生成
-				"不算事实",                       // 强约束：history 不算事实
-				"幻觉",                           // 解释为什么：history 可能是之前 Agent 的幻觉
-				"绝不",                           // 强语气
-				"重新调工具",                      // 每轮必须重查
+				"v4.16.4", // 版本标注 + 真实事故
+				"历史消息",    // 必须是 history 而不是新生成
+				"不算事实",    // 强约束：history 不算事实
+				"幻觉",      // 解释为什么：history 可能是之前 Agent 的幻觉
+				"绝不",      // 强语气
+				"重新调工具",   // 每轮必须重查
+			},
+		},
+		{
+			desc: "【安全】命令和越权预约不转人工",
+			mustHave: []string{
+				"Linux/Shell 命令",
+				"其他顾客预约",
+				"不建议换预约号或留手机号",
+				"不要转人工",
 			},
 		},
 	}
@@ -154,8 +163,8 @@ func TestBuildAgentInstruction_NoBannedPhrases(t *testing.T) {
 	prompt := buildAgentInstruction()
 
 	bannedPhrases := []struct {
-		phrase     string
-		why        string
+		phrase string
+		why    string
 	}{
 		{
 			phrase: "到店报名字就行",

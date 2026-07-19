@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/coze-dev/cozeloop-go"
 	"log"
 	"os"
 	"path/filepath"
@@ -31,14 +32,12 @@ import (
 	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/coze-dev/cozeloop-go"
-
-	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
-	"github.com/yuterigele/openbook/internal/agent"
 	"github.com/yuterigele/openbook/api"
 	"github.com/yuterigele/openbook/chatmodel"
 	cronpkg "github.com/yuterigele/openbook/cron"
 	"github.com/yuterigele/openbook/intent"
+	"github.com/yuterigele/openbook/internal/agent"
+	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
 	lockpkg "github.com/yuterigele/openbook/lock"
 	"github.com/yuterigele/openbook/mem"
 	"github.com/yuterigele/openbook/msgops"
@@ -70,7 +69,7 @@ func main() {
 	// 想兜灰区语义违规时，设 SENSITIVE_LLM_FALLBACK=1 启用。
 	// 注入在 runTyped 内部按 M 类型分发（仅 *schema.Message 分支有效）。
 	if os.Getenv("SENSITIVE_LLM_FALLBACK") == "1" {
-		log.Printf("[sensitive] SENSITIVE_LLM_FALLBACK=1，将注入 LLM 兜底（按 M 分支）")
+		log.Printf("[sensitive] SENSITIVE_LLM_FALLBACK=1，正在初始化 LLM 兜底")
 	}
 
 	// 初始化 MySQL（PRD §11.1 P0：持久化 + MsgId 唯一索引做幂等去重）
@@ -219,55 +218,19 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	}
 	log.Printf("project root: %s", projectRoot)
 
-	// EXAMPLES_DIR points to the root of the eino-examples repository.
-	// Defaults to PROJECT_ROOT/examples if that directory exists, otherwise PROJECT_ROOT.
-	examplesDir := os.Getenv("EXAMPLES_DIR")
-	if examplesDir == "" {
-		candidate := filepath.Join(projectRoot, "examples")
-		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
-			examplesDir = candidate
-		} else {
-			examplesDir = projectRoot
-		}
-	}
-	if abs, err := filepath.Abs(examplesDir); err == nil {
-		examplesDir = abs
-	}
-	log.Printf("examples dir: %s", examplesDir)
-
-	// 加载企业微信配置（多店版）
-	// 优先级：1) shops 表里的 wecom_* 字段（每个店铺独立） 2) env 兜底（兼容旧版）
+	// 从 shops 表加载企业微信配置。一个企业微信主体可服务多个门店；
+	// 门店通过各自的 open_kf_id 区分，不能再把 CorpID 当作店铺 ID。
 	var wecomConfig *wecom.Config
-	var wecomClient *wecom.Client // 兜底 cron 用
+	var wecomClient *wecom.Client
 	wecomRouter := wecom.NewRouter()
-	corpID := os.Getenv("WECOM_CORP_ID")
-	if corpID != "" {
-		agentIDStr := os.Getenv("WECOM_AGENT_ID")
-		agentID, _ := strconv.Atoi(agentIDStr)
-		wecomConfig = wecom.LoadConfigFromValues(
-			corpID,
-			os.Getenv("WECOM_SECRET"),
-			os.Getenv("WECOM_TOKEN"),
-			os.Getenv("WECOM_ENCODING_AES_KEY"),
-			agentID,
-		)
-		wecomClient = wecom.NewClient(corpID, os.Getenv("WECOM_SECRET"), agentID)
-		// router 兜底（旧部署兼容：单 corpID 进 router 当 default 店）
-		_ = wecomRouter.SetFallback(wecom.Fallback{
-			CorpID:         corpID,
-			Token:          os.Getenv("WECOM_TOKEN"),
-			EncodingAESKey: os.Getenv("WECOM_ENCODING_AES_KEY"),
-			AgentID:        agentID,
-			Secret:         os.Getenv("WECOM_SECRET"),
-		})
-		log.Printf("企业微信配置已加载: corpID=%s agentID=%d (router 已就位)", corpID, agentID)
-	}
 
-	// 多店：从 shops 表加载所有有 wecom 凭据的店铺进 router
 	if err := wecomRouter.ReloadFromDB(); err != nil {
 		log.Printf("⚠️  从 DB 加载 shops 到 router 失败: %v", err)
 	} else {
-		log.Printf("[wecom] router 已加载 %d 个店铺", wecomRouter.Count())
+		log.Printf("[wecom] router 已加载 %d 个店铺、%d 个企业微信主体", wecomRouter.Count(), wecomRouter.CorpCount())
+		if client, ok := wecomRouter.SingleClient(); ok {
+			wecomClient = client
+		}
 	}
 
 	// 启动 cron（PRD §11.1 P0 预约前 2h 提醒 + §11.2 P1 爽约扫描 + 续费漏斗）
@@ -408,7 +371,6 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		Store:           store,
 		WorkspaceDir:    workspaceDir,
 		ProjectRoot:     projectRoot,
-		ExamplesDir:     examplesDir,
 		Port:            port,
 		WeComConfig:     wecomConfig,
 		WeComRouter:     wecomRouter,
@@ -449,6 +411,14 @@ func envInt(key string, fallback int) int {
 	return n
 }
 
+// sensitiveMessageChatModel is the *schema.Message Generate signature
+// accepted by sensitive.NewLLMClassifyFuncFromEino. It must be declared at
+// package scope: Go does not permit local type declarations in generic
+// functions.
+type sensitiveMessageChatModel interface {
+	Generate(ctx context.Context, msgs []*schema.Message, opts ...einomodel.Option) (*schema.Message, error)
+}
+
 // injectSensitiveLLMFallback wires the LLM fallback into the sensitive
 // package if (and only if) cm implements the *schema.Message Generate
 // signature.
@@ -470,14 +440,11 @@ func envInt(key string, fallback int) int {
 func injectSensitiveLLMFallback[M adk.MessageType](cm einomodel.BaseModel[M]) {
 	// any(cm) → interface{}; then assert to the *schema.Message
 	// Generate signature. Fails silently for *schema.AgenticMessage.
-	type msgCM interface {
-		Generate(ctx context.Context, msgs []*schema.Message, opts ...einomodel.Option) (*schema.Message, error)
-	}
-	if v, ok := any(cm).(msgCM); ok {
+	if v, ok := any(cm).(sensitiveMessageChatModel); ok {
 		sensitive.WithLLMClassify(sensitive.NewLLMClassifyFuncFromEino(v))
 		log.Printf("[sensitive] LLM 兜底已注入（Layer 2 启用）")
 	} else {
-		log.Printf("[sensitive] M 分支不支持 LLM 兜底（仅 *schema.Message 分支），保持纯关键词模式")
+		log.Printf("[sensitive] LLM 兜底未启用：当前消息类型 %T 不支持；仅 MESSAGE_KIND=message（*schema.Message）支持，现保持纯关键词模式", cm)
 	}
 }
 
@@ -582,9 +549,9 @@ func buildLeaveNotificationSender(router *wecom.Router, fallbackClient *wecom.Cl
 // resolveWecomForShop 按 shopID 找对应的 wecom client + openKfID（多店路由）
 //
 // 查找顺序：
-//   1. router.LookupByShopID(shopID) → 找到就用该 client
-//   2. 没找到 → fallback 到 fallbackClient（兼容单店 .env 部署）
-//   3. 都 nil → 返回 error
+//  1. router.LookupByShopID(shopID) → 找到就用该 client
+//  2. 没找到 → fallback 到 fallbackClient（兼容单店 .env 部署）
+//  3. 都 nil → 返回 error
 //
 // openKfID 从 storage.Shop.OpenKfID 字段查（多店场景下每个店铺独立配置）
 func resolveWecomForShop(ctx context.Context, router *wecom.Router, fallbackClient *wecom.Client, shopID, channel string) (*wecom.Client, string, error) {

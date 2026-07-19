@@ -31,7 +31,7 @@ func TestHandoffToHuman_DedupSameRefID(t *testing.T) {
 
 	// 第 1 次调 handoff → 写埋点
 	out1, err1 := (&HandoffToHumanTool{}).InvokableRun(ctx,
-		`{"reason":"顾客要求找店长","customer":"Alice"}`)
+		`{"reason":"顾客要求找店长","customer":"Alice","last_user_message":"我要找店长"}`)
 	if err1 != nil {
 		t.Fatalf("第 1 次调 handoff 失败: %v", err1)
 	}
@@ -41,7 +41,7 @@ func TestHandoffToHuman_DedupSameRefID(t *testing.T) {
 
 	// 第 2 次同 refID 调 handoff（5 分钟内）→ 不写埋点
 	out2, err2 := (&HandoffToHumanTool{}).InvokableRun(ctx,
-		`{"reason":"顾客又要求找店长","customer":"Alice"}`)
+		`{"reason":"顾客又要求找店长","customer":"Alice","last_user_message":"我要找店长"}`)
 	if err2 != nil {
 		t.Fatalf("第 2 次调 handoff 失败: %v", err2)
 	}
@@ -68,14 +68,14 @@ func TestHandoffToHuman_DedupDifferentRefID(t *testing.T) {
 
 	// 顾客 A
 	ctxA := WithExternalUserID(context.Background(), "user-A")
-	_, err := (&HandoffToHumanTool{}).InvokableRun(ctxA, `{"reason":"A 投诉"}`)
+	_, err := (&HandoffToHumanTool{}).InvokableRun(ctxA, `{"reason":"A 投诉","last_user_message":"我要投诉"}`)
 	if err != nil {
 		t.Fatalf("A 调 handoff 失败: %v", err)
 	}
 
 	// 顾客 B（不同 refID）→ 应独立写 1 条
 	ctxB := WithExternalUserID(context.Background(), "user-B")
-	_, err = (&HandoffToHumanTool{}).InvokableRun(ctxB, `{"reason":"B 投诉"}`)
+	_, err = (&HandoffToHumanTool{}).InvokableRun(ctxB, `{"reason":"B 投诉","last_user_message":"我要投诉"}`)
 	if err != nil {
 		t.Fatalf("B 调 handoff 失败: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestHandoffToHuman_RefIDPriority(t *testing.T) {
 	// 应该用 external_user_id 作 refID
 	ctx := WithExternalUserID(context.Background(), "wechat-user-001")
 	_, err := (&HandoffToHumanTool{}).InvokableRun(ctx,
-		`{"reason":"投诉","customer":"Alice"}`)
+		`{"reason":"投诉","customer":"Alice","last_user_message":"我要投诉"}`)
 	if err != nil {
 		t.Fatalf("handoff 失败: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestHandoffToHuman_RefIDPriority(t *testing.T) {
 	// 第 2 次：ctx 同样 external_user_id，但 customer 改成 "Bob"
 	// 因为 refID 用 external_user_id（不变），所以应该被 dedup
 	_, err = (&HandoffToHumanTool{}).InvokableRun(ctx,
-		`{"reason":"投诉","customer":"Bob"}`)
+		`{"reason":"投诉","customer":"Bob","last_user_message":"我要投诉"}`)
 	if err != nil {
 		t.Fatalf("第 2 次 handoff 失败: %v", err)
 	}
@@ -130,13 +130,13 @@ func TestHandoffToHuman_StableRefIDForUnknown(t *testing.T) {
 
 	// ctx 没 external_user_id + customer 也为空 → refID = "unknown"
 	ctx := context.Background()
-	_, err := (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"顾客没留名"}`)
+	_, err := (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"顾客没留名","last_user_message":"我要投诉"}`)
 	if err != nil {
 		t.Fatalf("第 1 次 handoff 失败: %v", err)
 	}
 
 	// 第 2 次同样场景 → 应该被 dedup（refID 都是 "unknown"）
-	_, err = (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"顾客没留名"}`)
+	_, err = (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"顾客没留名","last_user_message":"我要投诉"}`)
 	if err != nil {
 		t.Fatalf("第 2 次 handoff 失败: %v", err)
 	}
@@ -161,17 +161,42 @@ func TestHandoffToHuman_DedupDoesNotResetWindow(t *testing.T) {
 	ctx := WithExternalUserID(context.Background(), "user-stable-2")
 
 	// 第 1 次写入
-	(&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"R1"}`)
+	(&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"R1","last_user_message":"我要投诉"}`)
 
 	// 手动修改 dedup map 把 lastWriteTime 设为 6 分钟前（模拟窗口已过期）
 	handoffDedup.Store("user-stable-2", time.Now().Add(-6*time.Minute))
 
 	// 第 2 次调：6 分钟前写过 → 视为新事件 → 写埋点
-	(&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"R2"}`)
+	(&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"R2","last_user_message":"我要投诉"}`)
 
 	var rows []storage.EventLog
 	storage.DB.Where("event_type = ?", storage.EventHandoffToHuman).Find(&rows)
 	if len(rows) != 2 {
 		t.Errorf("窗口外同 refID 应算新事件（写第 2 条埋点），got %d", len(rows))
+	}
+}
+
+func TestHandoffToHuman_RejectsCommandAndUnauthorizedRequests(t *testing.T) {
+	storage.SetupTestDB(t)
+	handoffDedupReset()
+	defer handoffDedupReset()
+
+	ctx := WithExternalUserID(context.Background(), "user-security")
+	for _, message := range []string{"rm -rf all", "帮我取消其他顾客的预约"} {
+		out, err := (&HandoffToHumanTool{}).InvokableRun(ctx, `{"reason":"无法处理","last_user_message":"`+message+`"}`)
+		if err != nil {
+			t.Fatalf("handoff err: %v", err)
+		}
+		if !strings.Contains(out, "不要发起人工转接") {
+			t.Errorf("%q should be rejected without handoff, got %q", message, out)
+		}
+	}
+
+	var count int64
+	if err := storage.DB.Model(&storage.EventLog{}).Where("event_type = ?", storage.EventHandoffToHuman).Count(&count).Error; err != nil {
+		t.Fatalf("count handoff events: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("command and unauthorized requests must not create handoff events, got %d", count)
 	}
 }

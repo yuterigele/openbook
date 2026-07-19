@@ -18,6 +18,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,23 @@ func buildApptTimeStr(t *testing.T, hoursFromNow float64) (string, string) {
 // runCancel runs the cancel tool with the given JSON arguments.
 func runCancel(t *testing.T, c *CancelAppointmentTool, argsJSON string) (string, error) {
 	t.Helper()
-	return c.InvokableRun(context.Background(), argsJSON)
+	var args struct {
+		AppointmentID string `json:"appointment_id"`
+	}
+	_ = json.Unmarshal([]byte(argsJSON), &args)
+	if args.AppointmentID == "" || storage.DB == nil {
+		return c.InvokableRun(context.Background(), argsJSON)
+	}
+	var appt storage.Appointment
+	if err := storage.DB.First(&appt, "id = ?", args.AppointmentID).Error; err != nil {
+		return c.InvokableRun(context.Background(), argsJSON)
+	}
+	var customer storage.Customer
+	if err := storage.DB.First(&customer, "id = ?", appt.CustomerID).Error; err != nil {
+		return c.InvokableRun(context.Background(), argsJSON)
+	}
+	ctx := WithOpenID(WithShopID(context.Background(), appt.ShopID), customer.WechatOpenID)
+	return c.InvokableRun(ctx, argsJSON)
 }
 
 // ===================== Info =====================
@@ -220,5 +237,25 @@ func TestCancelAppointmentTool_WithReason(t *testing.T) {
 	storage.DB.First(&got, "id = ?", appt.ID)
 	if !strings.Contains(got.CancelReason, "kids sick") {
 		t.Errorf("CancelReason = %q, want to contain 'kids sick'", got.CancelReason)
+	}
+}
+
+func TestCancelAppointmentTool_RejectsOtherCustomer(t *testing.T) {
+	setupToolsTestDB(t)
+	owner := makeToolsCustomer(t, "Alice", 0)
+	attacker := makeToolsCustomer(t, "Mallory", 0)
+	date, tm := buildApptTimeStr(t, 4)
+	appt := makeToolsAppointment(t, "shop-1", owner.ID, "Alice", "Tony", date, tm)
+
+	ctx := WithOpenID(WithShopID(context.Background(), "shop-1"), attacker.WechatOpenID)
+	_, err := (&CancelAppointmentTool{}).InvokableRun(ctx, `{"appointment_id":"`+appt.ID+`"}`)
+	if err == nil {
+		t.Fatal("other customer must not cancel the appointment")
+	}
+
+	var got storage.Appointment
+	storage.DB.First(&got, "id = ?", appt.ID)
+	if got.Status != "active" {
+		t.Fatalf("appointment status = %q, want active", got.Status)
 	}
 }

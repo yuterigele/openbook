@@ -85,12 +85,12 @@ func TestE2E_S2_CancelAppointment(t *testing.T) {
 	setupToolsTestDB(t)
 	shop := storage.MakeShop(t, "e2e-s2", "")
 	storage.MakeBarber(t, "b-tony", shop.ID, "Tony")
-	_ = storage.MakeCustomer(t, "Bob", 0, 0)
+	cust := storage.MakeCustomer(t, "Bob", 0, 0)
 
 	// 1) 建一条预约（明天的，避免过去时间）
 	date := time.Now().In(shanghaiLoc()).AddDate(0, 0, 1).Format("2006-01-02")
 	_, err := (&CreateAppointmentTool{}).InvokableRun(
-		WithShopID(context.Background(), shop.ID),
+		WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID),
 		`{"barber_name":"Tony","customer":"Bob","phone":"13800000002","date":"`+date+`","time":"14:00","service":"剪发"}`)
 	if err != nil {
 		t.Fatalf("创建失败: %v", err)
@@ -105,7 +105,7 @@ func TestE2E_S2_CancelAppointment(t *testing.T) {
 
 	// 2) 取消（提前 24h + 算 early_cancel）
 	cancelOut, err := (&CancelAppointmentTool{}).InvokableRun(
-		WithShopID(context.Background(), shop.ID),
+		WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID),
 		`{"appointment_id":"`+appt.ID+`","reason":"临时有事"}`)
 	if err != nil || !strings.Contains(cancelOut, "已成功取消") {
 		t.Fatalf("取消失败: %v / %s", err, cancelOut)

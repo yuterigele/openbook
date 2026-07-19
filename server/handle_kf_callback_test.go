@@ -41,7 +41,6 @@ func newTestSrvWithAgent(t *testing.T) *Server[*schema.Message] {
 		Store:        store,
 		WorkspaceDir: t.TempDir(),
 		ProjectRoot:  t.TempDir(),
-		ExamplesDir:  t.TempDir(),
 	})
 }
 
@@ -57,7 +56,7 @@ type fakeFetcher struct {
 	errs    []error
 
 	// SyncMsg 调用记录
-	syncCalls int32
+	syncCalls  int32
 	lastCursor string
 
 	// SendKfTextMessage 配置 + 调用记录
@@ -127,12 +126,12 @@ func TestFilterKfMsgsByWindow_KeepsRecentCustomerText(t *testing.T) {
 	}
 
 	in := []wecom.KfMsgItem{
-		mkMsg(3, "text", now.Unix()-3600, "1h ago text"),          // ✅ 客户 + text + 48h 内
-		mkMsg(3, "text", now.Unix()-47*3600, "47h ago text"),       // ✅ 边界内
-		mkMsg(3, "image", now.Unix()-3600, "1h ago image"),         // ❌ 非 text
-		mkMsg(4, "text", now.Unix()-3600, "agent text"),            // ❌ origin=4（客服发的）
-		mkMsg(3, "text", now.Unix()-49*3600, "49h ago text"),       // ❌ 超过 48h
-		mkMsg(3, "text", now.Unix()-3600, ""),                       // ❌ text 为空
+		mkMsg(3, "text", now.Unix()-3600, "1h ago text"),     // ✅ 客户 + text + 48h 内
+		mkMsg(3, "text", now.Unix()-47*3600, "47h ago text"), // ✅ 边界内
+		mkMsg(3, "image", now.Unix()-3600, "1h ago image"),   // ❌ 非 text
+		mkMsg(4, "text", now.Unix()-3600, "agent text"),      // ❌ origin=4（客服发的）
+		mkMsg(3, "text", now.Unix()-49*3600, "49h ago text"), // ❌ 超过 48h
+		mkMsg(3, "text", now.Unix()-3600, ""),                // ❌ text 为空
 	}
 
 	kept, skipped := filterKfMsgsByWindow(in, now)
@@ -231,9 +230,9 @@ func TestHandleKfCallback_FirstPull_WritesCursorAndSeen(t *testing.T) {
 // TestHandleKfCallback_CursorSurvivesRestart 核心场景：模拟进程重启后 cursor 还在
 //
 // 流程：
-//   1) 第一次"启动"：cursor="" 拉消息，写 cursor="v1"
-//   2) 模拟"进程重启"——DB 状态保留（SQLite 等价于 MySQL 持久化）
-//   3) 第二次"启动"：cursor 应该是 "v1" 而不是 ""，sync_msg 用 v1 续拉（不会重拉历史）
+//  1. 第一次"启动"：cursor="" 拉消息，写 cursor="v1"
+//  2. 模拟"进程重启"——DB 状态保留（SQLite 等价于 MySQL 持久化）
+//  3. 第二次"启动"：cursor 应该是 "v1" 而不是 ""，sync_msg 用 v1 续拉（不会重拉历史）
 func TestHandleKfCallback_CursorSurvivesRestart(t *testing.T) {
 	storage.SetupTestDB(t)
 
