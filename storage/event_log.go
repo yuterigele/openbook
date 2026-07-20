@@ -11,23 +11,23 @@ import (
 
 // EventType 枚举（与 EventLog.EventType 字段约定）
 const (
-	EventFirstAppointment    = "first_appointment"
-	EventD3Active            = "d3_active"
-	EventD15Active           = "d15_active"
-	EventD25RenewReminder    = "d25_renew_reminder"
-	EventD7ExpiredWarning    = "d7_expired_warning"
-	EventRenewed             = "renewed"
-	EventExpired             = "expired"
-	EventCancelled           = "cancelled"
-	EventAppointmentCreated  = "appointment_created"
+	EventFirstAppointment     = "first_appointment"
+	EventD3Active             = "d3_active"
+	EventD15Active            = "d15_active"
+	EventD25RenewReminder     = "d25_renew_reminder"
+	EventD7ExpiredWarning     = "d7_expired_warning"
+	EventRenewed              = "renewed"
+	EventExpired              = "expired"
+	EventCancelled            = "cancelled"
+	EventAppointmentCreated   = "appointment_created"
 	EventAppointmentCancelled = "appointment_cancelled"
-	EventAppointmentNoShow   = "appointment_noshow"
+	EventAppointmentNoShow    = "appointment_noshow"
 	EventAppointmentCompleted = "appointment_completed"
-	EventBlacklisted           = "customer_blacklisted" // P3 自动黑名单
+	EventBlacklisted          = "customer_blacklisted" // P3 自动黑名单
 	// P4 理发师请假
-	EventBarberLeaveCreated    = "barber_leave_created"
-	EventBarberLeaveCancelled  = "barber_leave_cancelled" // 商户撤销
-	EventBarberLeaveExpired    = "barber_leave_expired"   // cron 自然过期（end_at < now）
+	EventBarberLeaveCreated     = "barber_leave_created"
+	EventBarberLeaveCancelled   = "barber_leave_cancelled"  // 商户撤销
+	EventBarberLeaveExpired     = "barber_leave_expired"    // cron 自然过期（end_at < now）
 	EventAppointmentRescheduled = "appointment_rescheduled" // P4 改派
 	// EventIdleSlotPush 是前缀（拼 date+customerID），便于幂等
 	EventIdleSlotPush = "idle_slot_push"
@@ -105,6 +105,7 @@ func HasShopEvent(ctx context.Context, shopID, eventType string) (bool, error) {
 // 关于时间字段：
 //   - MySQL (go-sql-driver): driver 把 DATETIME 直接转 time.Time
 //   - SQLite (modernc.org): driver 返回 string（RFC3339Nano 或 SQLite 默认格式）
+//
 // 用 map[string]any 中转 + parseAnyTime 灵活解析，跨 driver 兼容。
 func FindShopsForLifecycle(ctx context.Context, days int, eventType string) []string {
 	if DB == nil {
@@ -235,8 +236,9 @@ func MarkAppointmentCompleted(ctx context.Context, apptID string) error {
 		res := tx.Model(&Appointment{}).
 			Where("id = ? AND status = ?", apptID, "active").
 			Updates(map[string]interface{}{
-				"status":     "completed",
-				"updated_at": now,
+				"status":          "completed",
+				"active_slot_key": nil,
+				"updated_at":      now,
 			})
 		if res.Error != nil {
 			return res.Error
@@ -304,11 +306,13 @@ func UncompleteAppointment(ctx context.Context, apptID string) error {
 			return fmt.Errorf("完成已超过 5 分钟，无法撤销（请在顾客详情手动改状态）")
 		}
 		now := time.Now()
+		activeSlotKey := AppointmentActiveSlotKey(appt.ShopID, appt.BarberID, appt.Date, appt.Time)
 		res := tx.Model(&Appointment{}).
 			Where("id = ? AND status = ?", apptID, "completed").
 			Updates(map[string]interface{}{
-				"status":     "active",
-				"updated_at": now,
+				"status":          "active",
+				"active_slot_key": activeSlotKey,
+				"updated_at":      now,
 			})
 		if res.Error != nil {
 			return res.Error
@@ -351,14 +355,16 @@ func UncancelAppointment(ctx context.Context, apptID string) error {
 			return fmt.Errorf("取消已超过 5 分钟，无法撤销")
 		}
 		now := time.Now()
+		activeSlotKey := AppointmentActiveSlotKey(appt.ShopID, appt.BarberID, appt.Date, appt.Time)
 		res := tx.Model(&Appointment{}).
 			Where("id = ? AND status = ?", apptID, "cancelled").
 			Updates(map[string]interface{}{
-				"status":         "active",
-				"cancel_type":    "",
-				"cancel_reason":  "",
-				"cancelled_at":   nil,
-				"updated_at":     now,
+				"status":          "active",
+				"active_slot_key": activeSlotKey,
+				"cancel_type":     "",
+				"cancel_reason":   "",
+				"cancelled_at":    nil,
+				"updated_at":      now,
 			})
 		if res.Error != nil {
 			return res.Error

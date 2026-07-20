@@ -439,7 +439,7 @@ func TestWeeklyReport_HappyPath(t *testing.T) {
 	c := storage.MakeCustomer(t, "Alice", 0, 0)
 	storage.MakeAppointment(t, shop.ID, c.ID, "Alice", "Tony", "2026-06-21", "10:00")
 
-	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report",
+	ctx := newAPIContext(t, "GET", "/api/admin/weekly-report?as_of=2026-06-22",
 		nil, withClaims(adminClaims(shop.ID)))
 	status, body := runHandler(t, getWeeklyReportHandler, ctx)
 	if status != 200 {

@@ -64,8 +64,9 @@ func (t *MarkNoShowTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Model(&storage.Appointment{}).
 		Where("id = ?", params.AppointmentID).
 		Updates(map[string]interface{}{
-			"status":     "noshow",
-			"updated_at": now,
+			"status":          "noshow",
+			"active_slot_key": nil,
+			"updated_at":      now,
 		}).Error; err != nil {
 		return "", FriendlyError(ctx, err, "标记爽约失败，请稍后再试", "mark_no_show.update")
 	}

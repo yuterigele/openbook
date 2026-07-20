@@ -210,10 +210,11 @@ func cancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason, sh
 		// 状态更新（带 WHERE status='active' 兜底）
 		now2 := time.Now()
 		updates := map[string]interface{}{
-			"status":       "cancelled",
-			"cancel_type":  cancelType,
-			"cancelled_at": now2,
-			"updated_at":   now2,
+			"status":          "cancelled",
+			"active_slot_key": nil,
+			"cancel_type":     cancelType,
+			"cancelled_at":    now2,
+			"updated_at":      now2,
 		}
 		if reason != "" {
 			updates["cancel_reason"] = reason

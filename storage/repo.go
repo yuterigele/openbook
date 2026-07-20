@@ -301,13 +301,19 @@ func CreateAppointmentWithShop(shopID, barberName, customer, date, timeStr, serv
 //   - v4.9.3: phone 没收集，老顾客档案无法补全
 //     → 修法：工具必填 phone + ValidatePhone 严格校验
 func CreateAppointmentFull(shopID, barberName, customer, phone, openID, externalUserID, date, timeStr, service string) (*Appointment, error) {
+	return CreateAppointmentFullContext(context.Background(), shopID, barberName, customer, phone, openID, externalUserID, date, timeStr, service)
+}
+
+// CreateAppointmentFullContext 与 CreateAppointmentFull 等价，但将调用方的
+// 超时和锁丢失取消信号贯穿整个数据库事务。
+func CreateAppointmentFullContext(ctx context.Context, shopID, barberName, customer, phone, openID, externalUserID, date, timeStr, service string) (*Appointment, error) {
 	if service == "" {
 		service = "剪发"
 	}
 
 	db := mustDB()
 	var appt Appointment
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var barber Barber
 		if err := tx.Where("name = ? AND active = ?", barberName, true).First(&barber).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -359,12 +365,28 @@ func CreateAppointmentFull(shopID, barberName, customer, phone, openID, external
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
-		return tx.Create(&appt).Error
+		if err := tx.Create(&appt).Error; err != nil {
+			if isActiveSlotConflict(err) {
+				return ErrSlotTaken
+			}
+			return err
+		}
+		// 看门狗发现锁丢失或业务超时后，必须在提交前回滚。
+		return ctx.Err()
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &appt, nil
+}
+
+func isActiveSlotConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "idx_appointment_active_slot") ||
+		strings.Contains(msg, "appointments.active_slot_key")
 }
 
 // upsertCustomerInTx 在事务里查找/创建顾客档案
@@ -551,8 +573,13 @@ func CancelAppointment(appointmentID string) error {
 
 // GetAppointment 获取预约
 func GetAppointment(appointmentID string) (*Appointment, error) {
+	return GetAppointmentContext(context.Background(), appointmentID)
+}
+
+// GetAppointmentContext 查询预约并遵循调用方超时/取消。
+func GetAppointmentContext(ctx context.Context, appointmentID string) (*Appointment, error) {
 	var appt Appointment
-	if err := mustDB().Where("id = ?", appointmentID).First(&appt).Error; err != nil {
+	if err := mustDB().WithContext(ctx).Where("id = ?", appointmentID).First(&appt).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrAppointmentNotFound
 		}

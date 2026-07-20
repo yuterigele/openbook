@@ -33,6 +33,10 @@ import (
 	arkModel "github.com/volcengine/volcengine-go-sdk/service/arkruntime/model"
 )
 
+// defaultAgenticModelTimeout bounds one provider request. The server applies a
+// separate, longer deadline to the complete Agent tool-call loop.
+const defaultAgenticModelTimeout = 30 * time.Second
+
 // NewModel creates a model matching M. The caller chooses the concrete message
 // type at the boundary; MODEL_TYPE still selects the provider (OpenAI by
 // default, Ark when MODEL_TYPE=ark).
@@ -81,7 +85,7 @@ func newChatModel(ctx context.Context) (einomodel.ToolCallingChatModel, error) {
 
 func newAgenticModel(ctx context.Context) (einomodel.AgenticModel, error) {
 	modelType := strings.ToLower(os.Getenv("MODEL_TYPE"))
-	timeout := 3 * time.Minute
+	timeout := defaultAgenticModelTimeout
 	if modelType == "ark" {
 		return agenticark.New(ctx, &agenticark.Config{
 			APIKey:  os.Getenv("ARK_API_KEY"),

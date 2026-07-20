@@ -69,7 +69,7 @@ func customerRateLimitKey(scope, customerID string) string {
 //
 // 构造示例：
 //
-//	rl := NewRateLimiter(rate.Every(time.Second), 5, 10_000)
+//	rl, err := NewRateLimiter(rate.Every(time.Second), 5, 10_000)
 //
 // rate.Every(time.Second) 表示持续速率为每秒 1 条，5 表示瞬间最多允许
 // 5 条突发消息，10_000 表示 LRU 容量上限。超过上限后会淘汰最久未使用
@@ -109,8 +109,7 @@ type entry struct {
 }
 
 // NewRateLimiter 根据持续速率、突发容量和 LRU 容量创建限流器。
-// cap == 0 表示不限制 LRU 容量，不建议用于长期运行的进程，因为不同键会使
-// 内存持续增长。
+// 为避免不同键导致内存无限增长，cap 必须大于 0；配置非法时返回错误。
 func NewRateLimiter(r rate.Limit, burst, cap int) (*RateLimiter, error) {
 	return newRateLimiter(r, burst, cap, 0, 0)
 }
@@ -130,6 +129,9 @@ func newRateLimiter(r rate.Limit, burst, cap int, globalRate rate.Limit, globalB
 	}
 	if cap <= 0 {
 		return nil, errors.New("LRU 最大容量配置错误")
+	}
+	if globalRate < 0 || globalBurst < 0 {
+		return nil, errors.New("全局持续速率和突发容量不能为负数")
 	}
 	if (globalRate <= 0) != (globalBurst <= 0) {
 		return nil, errors.New("全局持续速率和突发容量必须同时配置")
@@ -234,7 +236,8 @@ func (rl *RateLimiter) Size() int {
 // ----- 包级默认实例与指标 -----
 
 // DefaultRateLimiter 是企业微信回调等入口默认使用的包级限流器。参数面向普通
-// 单店流量设置：持续速率每秒 1 条，突发容量 5 条。
+// 单店流量设置：每顾客持续速率每秒 1 条、突发容量 5 条；全局持续速率
+// 每秒 100 条、突发容量 200 条。
 //
 // 生产调优参考：繁忙门店每天约有 50～200 位顾客，每位顾客每次通常发送
 // 1～3 条消息。每位顾客每秒 1 条已经远高于正常真人频率，因此该限流器通常

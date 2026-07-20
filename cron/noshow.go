@@ -122,8 +122,9 @@ func (n *NoShowScanner) markNoShow(ctx context.Context, appt *storage.Appointmen
 		Model(&storage.Appointment{}).
 		Where("id = ? AND status = ?", appt.ID, "active").
 		Updates(map[string]interface{}{
-			"status":     "noshow",
-			"updated_at": now,
+			"status":          "noshow",
+			"active_slot_key": nil,
+			"updated_at":      now,
 		}).Error; err != nil {
 		return err
 	}

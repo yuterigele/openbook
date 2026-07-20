@@ -1,26 +1,30 @@
 package storage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // 所有模型显式声明表名，避免 GORM 默认复数化规则（EventLog → event_log vs event_logs）的歧义。
 
-func (Shop) TableName() string         { return "shops" }
-func (Barber) TableName() string       { return "barbers" }
-func (Customer) TableName() string     { return "customers" }
-func (Appointment) TableName() string  { return "appointments" }
-func (Subscription) TableName() string { return "subscriptions" }
-func (WecomMessageLog) TableName() string { return "wecom_message_logs" }
-func (ReminderLog) TableName() string  { return "reminder_logs" }
-func (EventLog) TableName() string     { return "event_logs" }
-func (BarberLeave) TableName() string  { return "barber_leaves" }
-func (Service) TableName() string      { return "services" }
+func (Shop) TableName() string                 { return "shops" }
+func (Barber) TableName() string               { return "barbers" }
+func (Customer) TableName() string             { return "customers" }
+func (Appointment) TableName() string          { return "appointments" }
+func (Subscription) TableName() string         { return "subscriptions" }
+func (WecomMessageLog) TableName() string      { return "wecom_message_logs" }
+func (ReminderLog) TableName() string          { return "reminder_logs" }
+func (EventLog) TableName() string             { return "event_logs" }
+func (BarberLeave) TableName() string          { return "barber_leaves" }
+func (Service) TableName() string              { return "services" }
 func (CustomerNotification) TableName() string { return "customer_notifications" }
-func (APIKey) TableName() string              { return "api_keys" } // v4.12.1 api_access
-func (Card) TableName() string               { return "cards" }              // v4.15 储值/次卡产品
-func (CustomerCard) TableName() string       { return "customer_cards" }     // v4.15 顾客持有的卡实例
-func (CardTransaction) TableName() string    { return "card_transactions" }  // v4.15 卡流水
+func (APIKey) TableName() string               { return "api_keys" }          // v4.12.1 api_access
+func (Card) TableName() string                 { return "cards" }             // v4.15 储值/次卡产品
+func (CustomerCard) TableName() string         { return "customer_cards" }    // v4.15 顾客持有的卡实例
+func (CardTransaction) TableName() string      { return "card_transactions" } // v4.15 卡流水
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
@@ -32,25 +36,25 @@ func (CardTransaction) TableName() string    { return "card_transactions" }  // 
 //   - 同一主店 + 其分店 = 一个 "shop group"
 //   - 店主 plan 限额按 group 内 shop 数（plan_gate.go CountShopsInGroup）
 type Shop struct {
-	ID            string    `gorm:"primaryKey;size:64" json:"id"`
-	Name          string    `gorm:"size:128;not null" json:"name"`
+	ID   string `gorm:"primaryKey;size:64" json:"id"`
+	Name string `gorm:"size:128;not null" json:"name"`
 	// ParentShopID 分店关联的主店 ID（v4.12.1 multi_store）
 	//   - 主店 = 自己 → ParentShopID = ""
 	//   - 分店 = 隶属某主店 → ParentShopID = 主店 ID
 	//   - 索引：让 ListShopsInGroup(parentID) 走索引
-	ParentShopID  string    `gorm:"size:64;index" json:"parent_shop_id,omitempty"`
-	Address       string    `gorm:"size:256" json:"address"`
-	Timezone      string    `gorm:"size:64;default:Asia/Shanghai" json:"timezone"`
-	OpenHour      int       `gorm:"default:9" json:"open_hour"`   // 09:00
-	CloseHour     int       `gorm:"default:18" json:"close_hour"` // 18:00
-	LunchStart    int       `gorm:"default:12" json:"lunch_start"`
-	LunchEnd      int       `gorm:"default:13" json:"lunch_end"`
-	LunchEndMin   int       `gorm:"default:30" json:"lunch_end_min"`
-	Plan          string    `gorm:"size:32;default:basic" json:"plan"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	AutoRenew     bool      `gorm:"default:false" json:"auto_renew"`
+	ParentShopID string    `gorm:"size:64;index" json:"parent_shop_id,omitempty"`
+	Address      string    `gorm:"size:256" json:"address"`
+	Timezone     string    `gorm:"size:64;default:Asia/Shanghai" json:"timezone"`
+	OpenHour     int       `gorm:"default:9" json:"open_hour"`   // 09:00
+	CloseHour    int       `gorm:"default:18" json:"close_hour"` // 18:00
+	LunchStart   int       `gorm:"default:12" json:"lunch_start"`
+	LunchEnd     int       `gorm:"default:13" json:"lunch_end"`
+	LunchEndMin  int       `gorm:"default:30" json:"lunch_end_min"`
+	Plan         string    `gorm:"size:32;default:basic" json:"plan"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	AutoRenew    bool      `gorm:"default:false" json:"auto_renew"`
 	// Holidays 节假日日期列表（逗号分隔 YYYY-MM-DD）。节假日不排班、不算爽约。
-	Holidays      string    `gorm:"size:512;default:" json:"holidays,omitempty"`
+	Holidays string `gorm:"size:512;default:" json:"holidays,omitempty"`
 	// 企业微信对接字段
 	WecomCorpID         string `gorm:"size:64;index" json:"wecom_corp_id"`
 	WecomAgentID        int    `json:"wecom_agent_id"`
@@ -61,9 +65,9 @@ type Shop struct {
 	// OpenKfID 微信客服 open_kfid（每个店铺独立；leave notify 等多店路由靠这个字段选 client）
 	// 取值来源：企业微信管理后台"客服账号"页；多店场景下不同 corpID 对应不同 openKfID。
 	// 留空时 fallback 到 wecom.DefaultOpenKfID（MVP 兼容）。
-	OpenKfID            string `gorm:"size:64;index" json:"open_kf_id"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	OpenKfID  string    `gorm:"size:64;index" json:"open_kf_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ShopAdmin 商户后台账号（PRD §11.2 多店隔离）
@@ -76,7 +80,7 @@ type ShopAdmin struct {
 	ShopID       string     `gorm:"size:64;index;not null" json:"shop_id"`
 	Username     string     `gorm:"size:64;uniqueIndex;not null" json:"username"`
 	PasswordHash string     `gorm:"size:128;not null" json:"-"`
-	Role         string     `gorm:"size:16;default:owner" json:"role"` // owner / staff
+	Role         string     `gorm:"size:16;default:owner" json:"role"`    // owner / staff
 	Status       string     `gorm:"size:16;default:active" json:"status"` // active / disabled（v4.7）
 	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -88,7 +92,7 @@ type Barber struct {
 	ID        string    `gorm:"primaryKey;size:64" json:"id"`
 	ShopID    string    `gorm:"size:64;index" json:"shop_id"`
 	Name      string    `gorm:"size:64;uniqueIndex;not null" json:"name"`
-	Skills    string    `gorm:"size:256" json:"skills"`         // 逗号分隔
+	Skills    string    `gorm:"size:256" json:"skills"` // 逗号分隔
 	Active    bool      `gorm:"default:true" json:"active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -96,35 +100,38 @@ type Barber struct {
 
 // Customer 顾客（对应 PRD §11.4 Customer）
 type Customer struct {
-	ID             string    `gorm:"primaryKey;size:64" json:"id"`
-	WechatOpenID   string    `gorm:"size:128;uniqueIndex" json:"wechat_open_id"` // KF external_userid
-	ExternalUserID string    `gorm:"size:128;index" json:"external_user_id"`      // 外部联系人 external_userid
-	Phone          string    `gorm:"size:32;index" json:"phone"`
-	Name           string    `gorm:"size:64" json:"name"`
-	Tags           string    `gorm:"size:256" json:"tags"` // VIP / 黑名单 等
-	TotalVisits    int       `gorm:"default:0" json:"total_visits"`
-	NoShowCount    int       `gorm:"default:0" json:"no_show_count"`     // 爽约累计（用于黑名单判断）
-	LateCancelCount int      `gorm:"default:0" json:"late_cancel_count"` // 晚退订累计（提前不足 free_window 取消；用于黑名单判断）
-	LastVisitAt    *time.Time `json:"last_visit_at,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              string     `gorm:"primaryKey;size:64" json:"id"`
+	WechatOpenID    string     `gorm:"size:128;uniqueIndex" json:"wechat_open_id"` // KF external_userid
+	ExternalUserID  string     `gorm:"size:128;index" json:"external_user_id"`     // 外部联系人 external_userid
+	Phone           string     `gorm:"size:32;index" json:"phone"`
+	Name            string     `gorm:"size:64" json:"name"`
+	Tags            string     `gorm:"size:256" json:"tags"` // VIP / 黑名单 等
+	TotalVisits     int        `gorm:"default:0" json:"total_visits"`
+	NoShowCount     int        `gorm:"default:0" json:"no_show_count"`     // 爽约累计（用于黑名单判断）
+	LateCancelCount int        `gorm:"default:0" json:"late_cancel_count"` // 晚退订累计（提前不足 free_window 取消；用于黑名单判断）
+	LastVisitAt     *time.Time `json:"last_visit_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // Appointment 预约（对应 PRD §11.4 Appointment）
 //   - 唯一索引 (barber_id, date, time, status) 在 active 状态下保证同一时段不重复
 //   - 实际并发控制靠 Redis 锁，DB 唯一索引是兜底
 type Appointment struct {
-	ID         string    `gorm:"primaryKey;size:64" json:"id"`
-	ShopID     string    `gorm:"size:64;index" json:"shop_id"`
-	BarberID   string    `gorm:"size:64;index;not null" json:"barber_id"`
-	BarberName string    `gorm:"size:64;index" json:"barber_name"`
-	CustomerID string    `gorm:"size:64;index" json:"customer_id"`
-	Customer   string    `gorm:"size:64" json:"customer"` // 冗余顾客姓名，避免 join
-	Date       string    `gorm:"size:10;index;not null" json:"date"`
-	Time       string    `gorm:"size:5;index;not null" json:"time"`  // HH:MM
-	Service    string    `gorm:"size:64;default:剪发" json:"service"`
-	Status     string    `gorm:"size:16;default:active;index" json:"status"` // active / cancelled / completed / noshow
-	Source     string    `gorm:"size:16;default:wecom" json:"source"`       // wecom / web / manual
+	ID         string `gorm:"primaryKey;size:64" json:"id"`
+	ShopID     string `gorm:"size:64;index" json:"shop_id"`
+	BarberID   string `gorm:"size:64;index;not null" json:"barber_id"`
+	BarberName string `gorm:"size:64;index" json:"barber_name"`
+	CustomerID string `gorm:"size:64;index" json:"customer_id"`
+	Customer   string `gorm:"size:64" json:"customer"` // 冗余顾客姓名，避免 join
+	Date       string `gorm:"size:10;index;not null" json:"date"`
+	Time       string `gorm:"size:5;index;not null" json:"time"` // HH:MM
+	Service    string `gorm:"size:64;default:剪发" json:"service"`
+	Status     string `gorm:"size:16;default:active;index" json:"status"` // active / cancelled / completed / noshow
+	// ActiveSlotKey 仅在 status=active 时非空。唯一索引保证同一理发师、日期、
+	// 时段最多存在一条 active 预约；其他状态为 NULL，可保留任意数量历史记录。
+	ActiveSlotKey *string `gorm:"size:64;uniqueIndex:idx_appointment_active_slot" json:"-"`
+	Source        string  `gorm:"size:16;default:wecom" json:"source"` // wecom / web / manual
 	// P3 取消策略联动（2026-06-21）
 	//   - CancelType 记录本次取消的类型：early_cancel / late_cancel / after_due / admin / system / ""
 	//   - CancelledAt 记录取消时间（独立字段便于查询/分析，updated_at 也包含但语义不清晰）
@@ -136,33 +143,54 @@ type Appointment struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+// AppointmentActiveSlotKey 返回 active 预约使用的稳定槽位键。
+func AppointmentActiveSlotKey(shopID, barberID, date, timeStr string) string {
+	sum := sha256.Sum256([]byte(shopID + "\x00" + barberID + "\x00" + date + "\x00" + timeStr))
+	return hex.EncodeToString(sum[:])
+}
+
+// BeforeCreate 确保包括测试辅助和后台导入在内的所有 GORM 创建路径都写入
+// active 槽位键，不能绕过数据库唯一约束。
+func (a *Appointment) BeforeCreate(_ *gorm.DB) error {
+	if a.Status == "" {
+		a.Status = "active"
+	}
+	if a.Status == "active" {
+		key := AppointmentActiveSlotKey(a.ShopID, a.BarberID, a.Date, a.Time)
+		a.ActiveSlotKey = &key
+	} else {
+		a.ActiveSlotKey = nil
+	}
+	return nil
+}
+
 // Subscription 订阅（对应 PRD §11.4 Subscription）
 type Subscription struct {
-	ID         string     `gorm:"primaryKey;size:64" json:"id"`
-	ShopID     string     `gorm:"size:64;index;not null" json:"shop_id"`
-	Plan       string     `gorm:"size:32;not null" json:"plan"` // basic / pro / flagship
-	StartedAt  time.Time  `json:"started_at"`
-	ExpiresAt  time.Time  `gorm:"index" json:"expires_at"`
-	AutoRenew  bool       `gorm:"default:false" json:"auto_renew"`
+	ID          string     `gorm:"primaryKey;size:64" json:"id"`
+	ShopID      string     `gorm:"size:64;index;not null" json:"shop_id"`
+	Plan        string     `gorm:"size:32;not null" json:"plan"` // basic / pro / flagship
+	StartedAt   time.Time  `json:"started_at"`
+	ExpiresAt   time.Time  `gorm:"index" json:"expires_at"`
+	AutoRenew   bool       `gorm:"default:false" json:"auto_renew"`
 	CancelledAt *time.Time `json:"cancelled_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // WecomMessageLog 企业微信消息回调去重表（PRD §11.1 MsgId 幂等去重）
 //   - 用 MsgId 唯一索引做持久化去重，重启不丢
 //   - 同时记录 OpenKfID / FromUserName 便于排错
 type WecomMessageLog struct {
-	ID            uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	MsgID         int64     `gorm:"uniqueIndex;not null" json:"msg_id"`
-	MsgType       string    `gorm:"size:16" json:"msg_type"`
-	Event         string    `gorm:"size:32" json:"event"`
-	OpenKfID      string    `gorm:"size:64;index" json:"open_kf_id"`
-	FromUserName  string    `gorm:"size:128;index" json:"from_user_name"`
-	ToUserName    string    `gorm:"size:128" json:"to_user_name"`
-	Processed     bool      `gorm:"default:true" json:"processed"`
-	ReceivedAt    time.Time `gorm:"index" json:"received_at"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	MsgID        int64     `gorm:"uniqueIndex;not null" json:"msg_id"`
+	MsgType      string    `gorm:"size:16" json:"msg_type"`
+	Event        string    `gorm:"size:32" json:"event"`
+	OpenKfID     string    `gorm:"size:64;index" json:"open_kf_id"`
+	FromUserName string    `gorm:"size:128;index" json:"from_user_name"`
+	ToUserName   string    `gorm:"size:128" json:"to_user_name"`
+	Processed    bool      `gorm:"default:true" json:"processed"`
+	ReceivedAt   time.Time `gorm:"index" json:"received_at"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // APIKey 商户 API key（v4.12.1 api_access feature 实战）
@@ -175,12 +203,12 @@ type WecomMessageLog struct {
 type APIKey struct {
 	ID          uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
 	ShopID      string    `gorm:"size:64;index;not null" json:"shop_id"`
-	Name        string    `gorm:"size:64;not null" json:"name"`         // 用户起的标识名（"POS 系统"）
+	Name        string    `gorm:"size:64;not null" json:"name"`           // 用户起的标识名（"POS 系统"）
 	TokenHash   string    `gorm:"size:128;uniqueIndex;not null" json:"-"` // SHA256(token)
-	TokenPrefix string    `gorm:"size:16;index" json:"token_prefix"`    // 前 8 字符（apikey_），用于列表展示，不暴露全 token
-	Scopes      string    `gorm:"size:512;default:'[]'" json:"scopes"`  // JSON 数组字符串
+	TokenPrefix string    `gorm:"size:16;index" json:"token_prefix"`      // 前 8 字符（apikey_），用于列表展示，不暴露全 token
+	Scopes      string    `gorm:"size:512;default:'[]'" json:"scopes"`    // JSON 数组字符串
 	Status      string    `gorm:"size:16;default:active;index" json:"status"`
-	ExpiresAt   time.Time `json:"expires_at"`                           // 默认 +1 年
+	ExpiresAt   time.Time `json:"expires_at"` // 默认 +1 年
 	LastUsedAt  time.Time `json:"last_used_at"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -191,15 +219,15 @@ type APIKey struct {
 // ReminderLog 提醒发送日志（对应 PRD §11.4 ReminderLog）
 //   - 唯一索引 (appointment_id, reminder_type) 防重复发
 type ReminderLog struct {
-	ID            uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	AppointmentID string    `gorm:"size:64;uniqueIndex:idx_appt_reminder;not null" json:"appointment_id"`
-	ReminderType  string    `gorm:"size:32;uniqueIndex:idx_appt_reminder" json:"reminder_type"` // pre_2h / noshow_followup / noshow_auto_remark
-	Channel       string    `gorm:"size:16;default:wecom" json:"channel"`
-	Status        string    `gorm:"size:16;default:pending" json:"status"` // pending / sent / failed
-	Error         string    `gorm:"size:512" json:"error"`
+	ID            uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	AppointmentID string     `gorm:"size:64;uniqueIndex:idx_appt_reminder;not null" json:"appointment_id"`
+	ReminderType  string     `gorm:"size:32;uniqueIndex:idx_appt_reminder" json:"reminder_type"` // pre_2h / noshow_followup / noshow_auto_remark
+	Channel       string     `gorm:"size:16;default:wecom" json:"channel"`
+	Status        string     `gorm:"size:16;default:pending" json:"status"` // pending / sent / failed
+	Error         string     `gorm:"size:512" json:"error"`
 	SentAt        *time.Time `json:"sent_at,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // KfSyncState 微信客服消息同步状态（v4.13.1 修 cursor 重启丢失）
@@ -243,7 +271,7 @@ type EventLog struct {
 	CustomerID string    `gorm:"size:64;index" json:"customer_id"`
 	EventType  string    `gorm:"size:32;index;not null" json:"event_type"`
 	RefID      string    `gorm:"size:64" json:"ref_id"` // 关联 ID
-	Meta       string    `gorm:"size:2048" json:"meta"`  // JSON 备注
+	Meta       string    `gorm:"size:2048" json:"meta"` // JSON 备注
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
 }
 
@@ -261,27 +289,27 @@ type EventLog struct {
 //
 // Penalty 联动（P3）：取消走 source="admin"，不计入顾客 late_cancel / no_show。
 type BarberLeave struct {
-	ID         string     `gorm:"primaryKey;size:64" json:"id"`
-	ShopID     string     `gorm:"size:64;index;not null" json:"shop_id"`
-	BarberID   string     `gorm:"size:64;index;not null" json:"barber_id"`
-	BarberName string     `gorm:"size:64" json:"barber_name"` // 冗余，便于审计
-	StartAt    time.Time  `gorm:"index;not null" json:"start_at"`
-	EndAt      time.Time  `gorm:"index;not null" json:"end_at"`
-	Reason     string     `gorm:"size:256" json:"reason"`           // 内部原因（病假/家中有事/紧急出差，**仅商户后台可见**；绝不返给顾客）
+	ID         string    `gorm:"primaryKey;size:64" json:"id"`
+	ShopID     string    `gorm:"size:64;index;not null" json:"shop_id"`
+	BarberID   string    `gorm:"size:64;index;not null" json:"barber_id"`
+	BarberName string    `gorm:"size:64" json:"barber_name"` // 冗余，便于审计
+	StartAt    time.Time `gorm:"index;not null" json:"start_at"`
+	EndAt      time.Time `gorm:"index;not null" json:"end_at"`
+	Reason     string    `gorm:"size:256" json:"reason"` // 内部原因（病假/家中有事/紧急出差，**仅商户后台可见**；绝不返给顾客）
 	// v4.13.0 移除 CustomerFacingReason 字段：
 	//   - 设计意图：商户填一个脱敏版本（"师傅家中有事"）给顾客
 	//   - 实际问题：商户经常不填或填得也很具体，"陪老婆产检"仍会泄漏
 	//   - 简化：顾客通知一律 hardcode "师傅临时有事"（见 buildLeaveNotification）
 	//   - DB 列 customer_facing_reason 保留在 prod（不破坏老数据），但 Go 不再读写
 	//   - 未来可加 migration: ALTER TABLE barber_leaves DROP COLUMN customer_facing_reason
-	Action     string     `gorm:"size:16;not null" json:"action"`   // cancel / reschedule
-	Status     string     `gorm:"size:16;default:active;index" json:"status"`
-	AffectedCount int      `gorm:"default:0" json:"affected_count"` // 影响的预约数（cancel 或 reschedule 总和）
-	RescheduledCount int  `gorm:"default:0" json:"rescheduled_count"`
-	CancelledCount int    `gorm:"default:0" json:"cancelled_count"`
-	CreatedBy  string     `gorm:"size:64" json:"created_by"`         // 商户后台用户名
-	CreatedAt  time.Time  `gorm:"index" json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	Action           string    `gorm:"size:16;not null" json:"action"` // cancel / reschedule
+	Status           string    `gorm:"size:16;default:active;index" json:"status"`
+	AffectedCount    int       `gorm:"default:0" json:"affected_count"` // 影响的预约数（cancel 或 reschedule 总和）
+	RescheduledCount int       `gorm:"default:0" json:"rescheduled_count"`
+	CancelledCount   int       `gorm:"default:0" json:"cancelled_count"`
+	CreatedBy        string    `gorm:"size:64" json:"created_by"` // 商户后台用户名
+	CreatedAt        time.Time `gorm:"index" json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Service 服务项目（PRD §11.4 v4.4 服务目录）
@@ -291,23 +319,23 @@ type BarberLeave struct {
 //
 // 多店隔离：每个 Service 绑定一个 ShopID。
 type Service struct {
-	ID            string    `gorm:"primaryKey;size:64" json:"id"`
-	ShopID        string    `gorm:"size:64;index;not null" json:"shop_id"`
-	Name          string    `gorm:"size:64;not null" json:"name"`            // 剪发/烫发/染发/洗吹/护理/造型/其他
-	EstimatedMin  int       `gorm:"default:30" json:"estimated_min"`          // 预估时长(分钟)
-	PriceRange    string    `gorm:"size:64" json:"price_range"`              // 价格区间描述，如 "80-120"
-	IsActive      bool      `gorm:"default:true;index" json:"is_active"`     // false = 已下架（保留历史）
-	SortOrder     int       `gorm:"default:0" json:"sort_order"`             // 列表展示顺序，asc
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID           string    `gorm:"primaryKey;size:64" json:"id"`
+	ShopID       string    `gorm:"size:64;index;not null" json:"shop_id"`
+	Name         string    `gorm:"size:64;not null" json:"name"`        // 剪发/烫发/染发/洗吹/护理/造型/其他
+	EstimatedMin int       `gorm:"default:30" json:"estimated_min"`     // 预估时长(分钟)
+	PriceRange   string    `gorm:"size:64" json:"price_range"`          // 价格区间描述，如 "80-120"
+	IsActive     bool      `gorm:"default:true;index" json:"is_active"` // false = 已下架（保留历史）
+	SortOrder    int       `gorm:"default:0" json:"sort_order"`         // 列表展示顺序，asc
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // NotificationChannel 通知渠道
 const (
-	NotifChannelWeComKF    = "wecom_kf"    // 微信客服（external_userid + open_kfid）
-	NotifChannelWeComApp   = "wecom_app"   // 企业应用消息（wechat_open_id）
-	NotifChannelSMS        = "sms"         // 短信降级（暂未实现，留位）
-	NotifChannelPending    = "pending"     // 尚未尝试发送（多通道 fallback 中）
+	NotifChannelWeComKF  = "wecom_kf"  // 微信客服（external_userid + open_kfid）
+	NotifChannelWeComApp = "wecom_app" // 企业应用消息（wechat_open_id）
+	NotifChannelSMS      = "sms"       // 短信降级（暂未实现，留位）
+	NotifChannelPending  = "pending"   // 尚未尝试发送（多通道 fallback 中）
 )
 
 // NotificationStatus 通知发送状态
@@ -343,22 +371,22 @@ const (
 //   - (LeaveID, CustomerID)：admin 后台"查看本次请假的通知结果"
 //   - (ShopID, Status, CreatedAt)：商户看板"未发送列表"
 type CustomerNotification struct {
-	ID            uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	LeaveID       string    `gorm:"size:64;index:idx_notif_leave_cust,priority:1" json:"leave_id"`
-	AppointmentID string    `gorm:"size:64;index" json:"appointment_id"`
-	ShopID        string    `gorm:"size:64;index:idx_notif_shop_status_time,priority:1" json:"shop_id"`
-	CustomerID    string    `gorm:"size:64;index:idx_notif_leave_cust,priority:2" json:"customer_id"`
-	Type          string    `gorm:"size:32;index" json:"type"`           // leave_cancel / leave_reschedule / ...
-	Channel       string    `gorm:"size:16;index" json:"channel"`       // wecom_kf / wecom_app / sms / pending
-	Status        string    `gorm:"size:16;index:idx_notif_shop_status_time,priority:2" json:"status"` // pending/sent/failed/skipped
-	Target        string    `gorm:"size:128" json:"target"`             // external_userid / wechat_open_id / phone
-	TextPreview   string    `gorm:"size:256" json:"text_preview"`       // 文案前 256 字符
-	ErrorMessage  string    `gorm:"size:512;column:error_message" json:"error,omitempty"`
-	AttemptCount  int       `gorm:"default:0" json:"attempt_count"`
+	ID            uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	LeaveID       string     `gorm:"size:64;index:idx_notif_leave_cust,priority:1" json:"leave_id"`
+	AppointmentID string     `gorm:"size:64;index" json:"appointment_id"`
+	ShopID        string     `gorm:"size:64;index:idx_notif_shop_status_time,priority:1" json:"shop_id"`
+	CustomerID    string     `gorm:"size:64;index:idx_notif_leave_cust,priority:2" json:"customer_id"`
+	Type          string     `gorm:"size:32;index" json:"type"`                                         // leave_cancel / leave_reschedule / ...
+	Channel       string     `gorm:"size:16;index" json:"channel"`                                      // wecom_kf / wecom_app / sms / pending
+	Status        string     `gorm:"size:16;index:idx_notif_shop_status_time,priority:2" json:"status"` // pending/sent/failed/skipped
+	Target        string     `gorm:"size:128" json:"target"`                                            // external_userid / wechat_open_id / phone
+	TextPreview   string     `gorm:"size:256" json:"text_preview"`                                      // 文案前 256 字符
+	ErrorMessage  string     `gorm:"size:512;column:error_message" json:"error,omitempty"`
+	AttemptCount  int        `gorm:"default:0" json:"attempt_count"`
 	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
 	SentAt        *time.Time `json:"sent_at,omitempty"`
-	CreatedAt     time.Time `gorm:"index:idx_notif_shop_status_time,priority:3" json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	CreatedAt     time.Time  `gorm:"index:idx_notif_shop_status_time,priority:3" json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // CardType 卡类型（v4.15 储值 / 次卡模块）
@@ -388,10 +416,10 @@ const (
 
 // CardTransactionType 流水类型
 const (
-	CardTxRecharge   = "recharge"   // 售卡（首次充值 / 购入次卡）—— 余额正向增加
-	CardTxConsume    = "consume"    // 消费扣减 —— 余额负向减少
-	CardTxAdjustUp   = "adjust_up"  // 手动调增（退款场景的逆向补偿 / 赠送给顾客）
-	CardTxAdjustDown = "adjust_down"// 手动调减（数据修正 / 退卡冲账）
+	CardTxRecharge   = "recharge"    // 售卡（首次充值 / 购入次卡）—— 余额正向增加
+	CardTxConsume    = "consume"     // 消费扣减 —— 余额负向减少
+	CardTxAdjustUp   = "adjust_up"   // 手动调增（退款场景的逆向补偿 / 赠送给顾客）
+	CardTxAdjustDown = "adjust_down" // 手动调减（数据修正 / 退卡冲账）
 )
 
 // Card 卡产品（v4.15 储值 / 次卡模块）
@@ -405,22 +433,22 @@ const (
 //
 // 多店隔离：每张卡绑定一个 ShopID（v4.15 跨店先不共用，但 ShopID 已经是天然隔离单位）
 type Card struct {
-	ID          string    `gorm:"primaryKey;size:64" json:"id"`
-	ShopID      string    `gorm:"size:64;index;not null" json:"shop_id"`
-	Name        string    `gorm:"size:64;not null" json:"name"`            // "2000送200 储值卡" / "10次剪发卡"
-	Type        string    `gorm:"size:16;index;not null" json:"type"`      // stored_value / count
-	Status      string    `gorm:"size:16;default:active;index" json:"status"`
-	Note        string    `gorm:"size:256" json:"note,omitempty"`           // 描述（"充值 2000 送 200"）
+	ID     string `gorm:"primaryKey;size:64" json:"id"`
+	ShopID string `gorm:"size:64;index;not null" json:"shop_id"`
+	Name   string `gorm:"size:64;not null" json:"name"`       // "2000送200 储值卡" / "10次剪发卡"
+	Type   string `gorm:"size:16;index;not null" json:"type"` // stored_value / count
+	Status string `gorm:"size:16;default:active;index" json:"status"`
+	Note   string `gorm:"size:256" json:"note,omitempty"` // 描述（"充值 2000 送 200"）
 
 	// 储值卡专用（type=stored_value）
-	PriceCents     int `gorm:"default:0" json:"price_cents"`     // 顾客实付（分）
-	FaceValueCents int `gorm:"default:0" json:"face_value_cents"`// 本金（分）
-	BonusCents     int `gorm:"default:0" json:"bonus_cents"`     // 赠送（分）
+	PriceCents     int `gorm:"default:0" json:"price_cents"`      // 顾客实付（分）
+	FaceValueCents int `gorm:"default:0" json:"face_value_cents"` // 本金（分）
+	BonusCents     int `gorm:"default:0" json:"bonus_cents"`      // 赠送（分）
 
 	// 次卡专用（type=count）
-	ServiceID    string `gorm:"size:64;index" json:"service_id,omitempty"`     // 关联服务 ID
-	ServiceName  string `gorm:"size:64" json:"service_name,omitempty"`         // 冗余（service 下架时仍可见）
-	TotalCount   int    `gorm:"default:0" json:"total_count"`                  // 总次数
+	ServiceID   string `gorm:"size:64;index" json:"service_id,omitempty"` // 关联服务 ID
+	ServiceName string `gorm:"size:64" json:"service_name,omitempty"`     // 冗余（service 下架时仍可见）
+	TotalCount  int    `gorm:"default:0" json:"total_count"`              // 总次数
 
 	// 通用
 	ValidDays int `gorm:"default:0" json:"valid_days"` // 0 = 永久；>0 = 购入后 N 天到期
@@ -437,28 +465,28 @@ type Card struct {
 //   - 过期判定：expires_at 非空 且 now > expires_at → expired（不真删，状态标记）
 //   - 多店隔离：shop_id 卡死，跨店不共用（v4.15 设计；将来要做连锁共用需新增 chain_pool_id）
 type CustomerCard struct {
-	ID         string  `gorm:"primaryKey;size:64" json:"id"`
-	ShopID     string  `gorm:"size:64;index;not null" json:"shop_id"`
-	CustomerID string  `gorm:"size:64;index:idx_cc_shop_cust,priority:2;not null" json:"customer_id"`
-	CardID     string  `gorm:"size:64;index;not null" json:"card_id"`     // 关联 Card.ID
-	CardName   string  `gorm:"size:64" json:"card_name"`                  // 冗余，Card 归档后仍可见
-	Type       string  `gorm:"size:16;index" json:"type"`                // 冗余 Card.Type
-	PriceCents int     `gorm:"default:0" json:"price_cents"`              // 顾客实付（冗余）
+	ID         string `gorm:"primaryKey;size:64" json:"id"`
+	ShopID     string `gorm:"size:64;index;not null" json:"shop_id"`
+	CustomerID string `gorm:"size:64;index:idx_cc_shop_cust,priority:2;not null" json:"customer_id"`
+	CardID     string `gorm:"size:64;index;not null" json:"card_id"` // 关联 Card.ID
+	CardName   string `gorm:"size:64" json:"card_name"`              // 冗余，Card 归档后仍可见
+	Type       string `gorm:"size:16;index" json:"type"`             // 冗余 Card.Type
+	PriceCents int    `gorm:"default:0" json:"price_cents"`          // 顾客实付（冗余）
 
 	// 储值卡专用
-	BalanceCents       int `gorm:"default:0" json:"balance_cents"`        // 当前余额
+	BalanceCents        int `gorm:"default:0" json:"balance_cents"`         // 当前余额
 	InitialBalanceCents int `gorm:"default:0" json:"initial_balance_cents"` // 初始余额（face + bonus）
 
 	// 次卡专用
-	ServiceID        string `gorm:"size:64" json:"service_id,omitempty"`
-	ServiceName      string `gorm:"size:64" json:"service_name,omitempty"`
-	RemainingCount   int    `gorm:"default:0" json:"remaining_count"`
-	InitialCount     int    `gorm:"default:0" json:"initial_count"`
+	ServiceID      string `gorm:"size:64" json:"service_id,omitempty"`
+	ServiceName    string `gorm:"size:64" json:"service_name,omitempty"`
+	RemainingCount int    `gorm:"default:0" json:"remaining_count"`
+	InitialCount   int    `gorm:"default:0" json:"initial_count"`
 
 	// 通用
-	Status     string     `gorm:"size:16;default:active;index:idx_cc_shop_cust,priority:1" json:"status"`
-	Note       string     `gorm:"size:256" json:"note,omitempty"` // 备注（"生日礼物" / "VIP 赠卡"）
-	PurchasedAt time.Time `gorm:"index" json:"purchased_at"`
+	Status      string     `gorm:"size:16;default:active;index:idx_cc_shop_cust,priority:1" json:"status"`
+	Note        string     `gorm:"size:256" json:"note,omitempty"` // 备注（"生日礼物" / "VIP 赠卡"）
+	PurchasedAt time.Time  `gorm:"index" json:"purchased_at"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"` // nil = 永久
 
 	CreatedAt time.Time `json:"created_at"`
@@ -477,14 +505,14 @@ type CardTransaction struct {
 	CustomerID     string `gorm:"size:64;index:idx_ct_shop_cust_time,priority:2" json:"customer_id"`
 	CustomerCardID string `gorm:"size:64;index:idx_ct_card_time,priority:1" json:"customer_card_id"`
 
-	Type         string `gorm:"size:16;index" json:"type"`         // recharge / consume / adjust_up / adjust_down
-	Delta        int    `gorm:"default:0" json:"delta"`           // 正负（SV=分，count=次）
-	BalanceAfter int    `gorm:"default:0" json:"balance_after"`   // 当前卡余额 / 剩余次数（与 Type 含义一致）
+	Type         string `gorm:"size:16;index" json:"type"`      // recharge / consume / adjust_up / adjust_down
+	Delta        int    `gorm:"default:0" json:"delta"`         // 正负（SV=分，count=次）
+	BalanceAfter int    `gorm:"default:0" json:"balance_after"` // 当前卡余额 / 剩余次数（与 Type 含义一致）
 
-	Reason         string `gorm:"size:256" json:"reason,omitempty"`     // 商户填写："剪发 by 张师傅" / "顾客要求调账"
-	AppointmentID  string `gorm:"size:64;index" json:"appointment_id,omitempty"` // 关联预约（如有）
-	OperatorID     uint64 `gorm:"index" json:"operator_id"`
-	OperatorName   string `gorm:"size:64" json:"operator_name"`           // 商户后台用户名（冗余，删 admin 不影响流水）
+	Reason        string `gorm:"size:256" json:"reason,omitempty"`              // 商户填写："剪发 by 张师傅" / "顾客要求调账"
+	AppointmentID string `gorm:"size:64;index" json:"appointment_id,omitempty"` // 关联预约（如有）
+	OperatorID    uint64 `gorm:"index" json:"operator_id"`
+	OperatorName  string `gorm:"size:64" json:"operator_name"` // 商户后台用户名（冗余，删 admin 不影响流水）
 
 	CreatedAt time.Time `gorm:"index:idx_ct_shop_cust_time,priority:3;index:idx_ct_card_time,priority:2" json:"created_at"`
 }

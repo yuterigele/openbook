@@ -218,13 +218,15 @@ func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender interface{
 				}
 				if found {
 					newBarberName := getBarberName(tx, newBarberID)
+					activeSlotKey := AppointmentActiveSlotKey(appt.ShopID, newBarberID, appt.Date, appt.Time)
 					// 改派：更新 barber_id / barber_name + 写 reschedule 事件
 					if err := tx.Model(&Appointment{}).
 						Where("id = ? AND status = ?", appt.ID, "active").
 						Updates(map[string]interface{}{
-							"barber_id":   newBarberID,
-							"barber_name": newBarberName,
-							"updated_at":  now,
+							"barber_id":       newBarberID,
+							"barber_name":     newBarberName,
+							"active_slot_key": activeSlotKey,
+							"updated_at":      now,
 						}).Error; err != nil {
 						return err
 					}
@@ -256,10 +258,10 @@ func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender interface{
 		if err := tx.Model(&BarberLeave{}).
 			Where("id = ?", leave.ID).
 			Updates(map[string]interface{}{
-				"affected_count":     result.AffectedCount,
-				"rescheduled_count":  result.RescheduledCount,
-				"cancelled_count":    result.CancelledCount,
-				"updated_at":         now,
+				"affected_count":    result.AffectedCount,
+				"rescheduled_count": result.RescheduledCount,
+				"cancelled_count":   result.CancelledCount,
+				"updated_at":        now,
 			}).Error; err != nil {
 			return err
 		}
@@ -343,12 +345,12 @@ func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender interface{
 // sendLeaveNotificationsV2 v4.10 新签名路径：持久化 + 串行 + 重试 + skipped
 //
 // 流程：
-//   1) 对每个 appt 写一条 pending customer_notification row（事务外、立即可见）
-//   2) 构造 text（buildLeaveNotification，内部反查 customer.Name + 隐私脱敏 reason）
-//   3) 写 text_preview 到 row
-//   4) 调 sender 闭包发送（sender 内部已含 ChannelSelector + SendWithRetry）
-//   5) 成功 → MarkNotificationSent；失败 → MarkNotificationFailed；顾客无联系方式 → MarkNotificationSkipped
-//   6) 收集结果到 LeaveResult.NotifiedCustomers / SkippedCustomers / FailedCustomers
+//  1. 对每个 appt 写一条 pending customer_notification row（事务外、立即可见）
+//  2. 构造 text（buildLeaveNotification，内部反查 customer.Name + 隐私脱敏 reason）
+//  3. 写 text_preview 到 row
+//  4. 调 sender 闭包发送（sender 内部已含 ChannelSelector + SendWithRetry）
+//  5. 成功 → MarkNotificationSent；失败 → MarkNotificationFailed；顾客无联系方式 → MarkNotificationSkipped
+//  6. 收集结果到 LeaveResult.NotifiedCustomers / SkippedCustomers / FailedCustomers
 //
 // 注意事项：
 //   - 这里用串行是因为 sender 闭包内已含 SendWithRetry（3 次退避），并发 N 倍会让总时长爆炸
@@ -650,11 +652,12 @@ func cancelApptInTx(tx *gorm.DB, apptID, source, reason string) (*CancelResult, 
 	res := tx.Model(&Appointment{}).
 		Where("id = ? AND status = ?", apptID, "active").
 		Updates(map[string]interface{}{
-			"status":        "cancelled",
-			"cancel_type":   "admin_cancel",
-			"cancel_reason": reason,
-			"cancelled_at":  now,
-			"updated_at":    now,
+			"status":          "cancelled",
+			"active_slot_key": nil,
+			"cancel_type":     "admin_cancel",
+			"cancel_reason":   reason,
+			"cancelled_at":    now,
+			"updated_at":      now,
 		})
 	if res.Error != nil {
 		return nil, res.Error
@@ -669,9 +672,9 @@ func cancelApptInTx(tx *gorm.DB, apptID, source, reason string) (*CancelResult, 
 		RefID:      apptID,
 		CreatedAt:  now,
 		Meta: mustJSON(map[string]any{
-			"cancel_type": "admin_cancel",
-			"source":      source,
-			"reason":      reason,
+			"cancel_type":     "admin_cancel",
+			"source":          source,
+			"reason":          reason,
 			"penalty_applied": false,
 		}),
 	}
@@ -687,11 +690,11 @@ func cancelApptInTx(tx *gorm.DB, apptID, source, reason string) (*CancelResult, 
 // findAlternateBarber 在事务内找一个"同档期 active 状态"的其他理发师
 //
 // 改派策略（PRD §11.7.11 v3.7 升级）：
-//   1. 第一档（Skills 匹配）：候选理发师 Skills 包含 appt.Service 且时段空闲
-//   2. 第二档（Skills 为空兜底）：候选理发师 Skills 为空（未填写）且时段空闲 —
-//      把"未标记技能"和"标记了技能但不匹配"区分开，标记了的不能假装能染发
-//   3. 兜底（不匹配 Skills）：以上都没有时回退到"任何 active 且时段空闲" —
-//      保底可用性，避免出现"全部匹配不上就一个都改派不出去"
+//  1. 第一档（Skills 匹配）：候选理发师 Skills 包含 appt.Service 且时段空闲
+//  2. 第二档（Skills 为空兜底）：候选理发师 Skills 为空（未填写）且时段空闲 —
+//     把"未标记技能"和"标记了技能但不匹配"区分开，标记了的不能假装能染发
+//  3. 兜底（不匹配 Skills）：以上都没有时回退到"任何 active 且时段空闲" —
+//     保底可用性，避免出现"全部匹配不上就一个都改派不出去"
 //
 // 同档内按 name ASC 排序（稳定、可预测）。
 // 匹配是包含关系：Skills="剪发,染发" 同时匹配 Service="染发" 和 "剪发"。
@@ -765,9 +768,9 @@ func findAlternateBarber(ctx context.Context, tx *gorm.DB, appt *Appointment) (s
 
 // skillContains 检查逗号分隔的 skills 字符串是否包含 needle（精确匹配单项）
 //
-//  - 匹配是精确匹配单项：Skills="剪发,染发" 包含 "染发" 和 "剪发"，但不含 "染"
-//  - 自动 TrimSpace 容忍 "剪发, 染发" 这种带空格的写法
-//  - needle 为空时返回 false（避免空匹配全 true）
+//   - 匹配是精确匹配单项：Skills="剪发,染发" 包含 "染发" 和 "剪发"，但不含 "染"
+//   - 自动 TrimSpace 容忍 "剪发, 染发" 这种带空格的写法
+//   - needle 为空时返回 false（避免空匹配全 true）
 func skillContains(skills, needle string) bool {
 	if needle == "" {
 		return false

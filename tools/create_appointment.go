@@ -249,13 +249,25 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	defer cancel()
 	l, err := lock.AcquireAppointmentLock(lockCtx, barber.ID, params.Date, params.Time)
 	if err != nil {
+		if errors.Is(err, lock.ErrRedisUnavailable) {
+			return "", fmt.Errorf("预约保护服务暂不可用，请稍后再试")
+		}
 		return "", fmt.Errorf("时段 %s %s 刚被别人抢了，我帮你看下一个空档", params.Date, params.Time)
 	}
 	if l != nil {
-		defer func() { _ = l.Unlock(context.Background()) }()
+		defer func() {
+			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer unlockCancel()
+			_ = l.Unlock(unlockCtx)
+		}()
 	}
+	guardCtx, guardCancel := l.GuardContext(ctx)
+	defer guardCancel()
+	operationCtx, operationCancel := context.WithTimeout(guardCtx, 8*time.Second)
+	defer operationCancel()
 
-	appointment, err := storage.CreateAppointmentFull(
+	appointment, err := storage.CreateAppointmentFullContext(
+		operationCtx,
 		ShopIDFromCtx(ctx),
 		params.BarberName,
 		params.Customer,
@@ -267,6 +279,12 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		params.Service,
 	)
 	if err != nil {
+		if lockErr := l.Err(); lockErr != nil {
+			return "", fmt.Errorf("预约锁已失效，操作已安全回滚，请重试")
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", fmt.Errorf("预约处理超时，操作未确认成功，请重试")
+		}
 		if errors.Is(err, storage.ErrSlotTaken) {
 			return "", fmt.Errorf("时段 %s %s 刚被别的顾客抢了，要不要换个时间？", params.Date, params.Time)
 		}
@@ -278,7 +296,7 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	// 写入成功不等于可以向顾客宣称成功。重新读取最终记录，确保事务提交后的
 	// 门店归属、状态和关键字段都与本次请求一致；校验失败时让 Agent 安全降级，
 	// 而不是生成“已预约”的幻觉回复。
-	persisted, err := storage.GetAppointment(appointment.ID)
+	persisted, err := storage.GetAppointmentContext(operationCtx, appointment.ID)
 	if err != nil || persisted.ShopID != appointment.ShopID || persisted.Status != "active" ||
 		persisted.BarberName != params.BarberName || persisted.Date != params.Date || persisted.Time != params.Time {
 		return "", fmt.Errorf("预约结果校验失败，请勿向顾客确认成功；请稍后查询预约状态")

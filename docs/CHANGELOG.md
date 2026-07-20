@@ -7,6 +7,18 @@
 
 ---
 
+## 预约锁超时安全加固
+
+- Redis 预约锁增加 token 校验续租看门狗，默认 TTL 10 秒、约每 TTL/3 续租。
+- 看门狗续租失败或发现锁所有权变化时取消数据库事务 context。
+- `appointments.active_slot_key` 使用可空唯一索引作为最终并发防线：仅 active
+  预约占用槽位，取消、完成和爽约后释放，历史记录可以重复保留。
+- 启动时回填历史 active 槽位键；发现历史重复预约时拒绝带病启动。
+- `APP_ENV=production` 或 `REDIS_REQUIRED=1` 时，Redis 不可用会拒绝预约写入；
+  开发环境仍可依靠数据库唯一约束运行。
+
+---
+
 ## [v4.19] - 2026-07-13
 
 ### Added
@@ -39,15 +51,15 @@
   - 关键 promQL 告警：`rate(openbook_llm_total_tokens_total[5m]) > 1e6`
     （5 分钟 100 万 tokens = 异常，触发排查）
 
-- **第 2 层：per-customer 限流（`server/ratelimit.go`）**
+- **第 2 层：全局 + per-customer 两级限流（`server/ratelimit.go`）**
   - `golang.org/x/time/rate.Limiter` token bucket（go.mod 已
     upgraded 0.0.0-20210723 → 0.15.0）
   - LRU cap 10K（`container/list` + map），避免百万 OpenID OOM
-  - 默认参数：1 msg/s sustained + 5 burst（一个真人用户
-    几秒发 1 条远超不触发；bot/攻击者秒级 50+ 条秒挂）
-  - 包级 `DefaultRateLimitMetrics` counter：`Allowed` / `Throttled`
-  - `/metrics` 端点加 2 个新 series：
-    `openbook_ratelimit_allowed_total` / `throttled_total`
+  - 顾客默认参数：1 msg/s sustained + 5 burst；全局默认参数：
+    100 msg/s sustained + 200 burst
+  - 每个 `RateLimiter` 独立持有指标，测试/自定义实例不污染默认实例
+  - 指标覆盖：通过、总拒绝、顾客层拒绝、全局层拒绝、LRU 淘汰数、
+    当前活跃 key 数
   - 关键 promQL 告警：
     `rate(openbook_ratelimit_throttled_total[1m]) > 5`（每分钟超过
     5 个顾客被限流 = 有攻击）
@@ -55,7 +67,7 @@
 - **设计取舍**：
   - **限流层 reject 不 queue** —— 不缓冲 LLM 请求，恢复时容易
     thundering-herd 一起涌入打爆
-  - **DefaultLimiter 用 wecom OpenID 作 key**（不是 IP）—— 因为
+  - **DefaultLimiter 用 shopID + wecom OpenID 作顾客 key**（不是 IP）—— 因为
     攻击者用 NAT 后 IP 一样；OpenID 是业务唯一标识
   - **不抢用户主流程** —— Allow 是 in-memory atomic 操作，
     <1μs；hot path 几乎无感

@@ -93,6 +93,9 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 
 	// 后续 seed 与自愈逻辑通过包级 DB 访问数据库，必须在首次调用前完成绑定。
 	DB = db
+	if err := BackfillAppointmentActiveSlotKeys(ctx, db); err != nil {
+		return nil, fmt.Errorf("预约 active 槽位唯一键回填失败: %w", err)
+	}
 
 	// 跑完后列出所有已建的表，便于排查"表不存在"问题
 	if tables, listErr := db.WithContext(ctx).Migrator().GetTables(); listErr == nil {

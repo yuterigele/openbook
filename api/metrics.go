@@ -63,7 +63,20 @@ func rateLimitPromText() string {
 			"openbook_ratelimit_allowed_total %d\n"+
 			"# HELP openbook_ratelimit_throttled_total Total customer requests rejected by the per-customer token-bucket rate limiter (suspected abuse / bot).\n"+
 			"# TYPE openbook_ratelimit_throttled_total counter\n"+
-			"openbook_ratelimit_throttled_total %d\n",
-		snap.Allowed, snap.Throttled,
+			"openbook_ratelimit_throttled_total %d\n"+
+			"# HELP openbook_ratelimit_customer_throttled_total Requests rejected by the per-customer limit.\n"+
+			"# TYPE openbook_ratelimit_customer_throttled_total counter\n"+
+			"openbook_ratelimit_customer_throttled_total %d\n"+
+			"# HELP openbook_ratelimit_global_throttled_total Requests rejected by the process-wide global limit.\n"+
+			"# TYPE openbook_ratelimit_global_throttled_total counter\n"+
+			"openbook_ratelimit_global_throttled_total %d\n"+
+			"# HELP openbook_ratelimit_evicted_total Customer limiter entries evicted from the LRU cache.\n"+
+			"# TYPE openbook_ratelimit_evicted_total counter\n"+
+			"openbook_ratelimit_evicted_total %d\n"+
+			"# HELP openbook_ratelimit_active_keys Current customer keys tracked by the local limiter.\n"+
+			"# TYPE openbook_ratelimit_active_keys gauge\n"+
+			"openbook_ratelimit_active_keys %d\n",
+		snap.Allowed, snap.Throttled, snap.CustomerThrottled,
+		snap.GlobalThrottled, snap.Evicted, snap.ActiveKeys,
 	)
 }

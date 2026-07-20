@@ -72,8 +72,8 @@ func TestGetCustomerDetail_HappyPath(t *testing.T) {
 	storage.AddCustomerTag(storage.WithCtx(), cust.ID, "VIP")
 
 	// 建 5 条预约（3 completed + 1 cancelled + 1 active future）
-	for i := 0; i < 3; i++ {
-		storage.MakeAppointment(t, shop.ID, cust.ID, "Bob", "Tony", "2026-06-15", "10:00")
+	for _, timeStr := range []string{"10:00", "10:30", "11:00"} {
+		storage.MakeAppointment(t, shop.ID, cust.ID, "Bob", "Tony", "2026-06-15", timeStr)
 	}
 	storage.MakeAppointment(t, shop.ID, cust.ID, "Bob", "Tony", "2026-06-16", "11:00")
 	// 未来 active
@@ -84,7 +84,7 @@ func TestGetCustomerDetail_HappyPath(t *testing.T) {
 	storage.DB.Where("shop_id = ? AND customer_id = ? AND date = ?", shop.ID, cust.ID, "2026-06-15").
 		Find(&appts)
 	for _, a := range appts {
-		storage.DB.Model(&a).Update("status", "completed")
+		storage.DB.Model(&a).Updates(map[string]any{"status": "completed", "active_slot_key": nil})
 	}
 	// mark 1 cancelled
 	storage.DB.Model(&storage.Appointment{}).
@@ -383,4 +383,3 @@ func itoa(n uint64) string {
 	}
 	return string(buf[i:])
 }
-
