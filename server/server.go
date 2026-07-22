@@ -336,6 +336,11 @@ func (s *Server[M]) handleChat(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusTooManyRequests, map[string]string{"error": rateLimitReply})
 		return
 	}
+	if decision := assessUserInputTrust(req.Message); !decision.Allowed {
+		log.Printf("[input_trust] rejected source=web session=%s score=%d reason=%s", id, decision.Score, decision.Reason)
+		c.JSON(consts.StatusUnprocessableEntity, map[string]string{"error": untrustedInputReply})
+		return
+	}
 
 	log.Printf("[chat] session=%s msg=%q", id, req.Message)
 
@@ -1547,6 +1552,12 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M], userContent, shopID string) string {
+	if decision := assessUserInputTrust(userContent); !decision.Allowed {
+		log.Printf("[input_trust] rejected source=message shop=%s score=%d reason=%s", shopID, decision.Score, decision.Reason)
+		_ = sess.Append(msgops.NewUser[M](userContent))
+		_ = sess.Append(msgops.NewAssistant[M](untrustedInputReply, nil))
+		return untrustedInputReply
+	}
 	DefaultAgentMetrics.RecordTaskStarted()
 	ctx, cancel := context.WithTimeout(ctx, agentExecutionTimeout())
 	defer cancel()
