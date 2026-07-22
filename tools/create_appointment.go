@@ -191,7 +191,7 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	now := time.Now().In(loc)
 	// 过去时间拒绝（5 分钟容差，避免边界抖动）
 	if appointmentAt.Before(now.Add(-5 * time.Minute)) {
-		return "", fmt.Errorf("时段 %s 已经过去了，麻烦换个未来的时间", params.Date+" "+params.Time)
+		return "", fmt.Errorf("时段 %s 已经过期；当前北京时间为 %s，请重新查询今天或未来日期的可约时段", params.Date+" "+params.Time, now.Format("2006-01-02 15:04"))
 	}
 	// 22:00 之后、6:00 之前 不接（早 6 点也可视为异常，防御性兜底）
 	if params.Time >= "22:00" || params.Time < "06:00" {

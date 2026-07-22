@@ -175,6 +175,19 @@ func TestUsageSnapshot_AvgTokensPerCall(t *testing.T) {
 	}
 }
 
+func TestUsageSnapshot_TokenAlertWindow(t *testing.T) {
+	t.Setenv("LLM_TOKEN_ALERT_5M", "100")
+	tracker := &UsageTracker{}
+	tracker.addUsage(&schema.TokenUsage{TotalTokens: 100})
+	snap := tracker.Snapshot()
+	if snap.TokensLast5m != 100 {
+		t.Fatalf("TokensLast5m = %d, want 100", snap.TokensLast5m)
+	}
+	if !snap.TokenAlert5m {
+		t.Fatal("token alert should trigger at the configured 5-minute threshold")
+	}
+}
+
 func TestUsageTracker_PrometheusText_AllSeriesPresent(t *testing.T) {
 	DefaultUsageTracker.Reset()
 	DefaultUsageTracker.Calls.Store(7)

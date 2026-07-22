@@ -49,6 +49,7 @@ services:
       - |
         mysql -hmysql -uroot -p"$$MYSQL_ROOT_PASSWORD" <<SQL
         CREATE USER IF NOT EXISTS 'openbook'@'%' IDENTIFIED BY '$$MYSQL_APP_PASSWORD';
+        ALTER USER 'openbook'@'%' IDENTIFIED BY '$$MYSQL_APP_PASSWORD';
         GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON chatwitheino.* TO 'openbook'@'%';
         FLUSH PRIVILEGES;
         SQL

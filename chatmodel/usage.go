@@ -19,7 +19,12 @@ package chatmodel
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -57,9 +62,22 @@ type UsageTracker struct {
 
 	// Streaming vs non-streaming split (informational; helps capacity
 	// planning).
-	StreamingCalls     atomic.Int64
-	NonStreamingCalls  atomic.Int64
+	StreamingCalls    atomic.Int64
+	NonStreamingCalls atomic.Int64
+
+	recentMu    sync.Mutex
+	recentUsage []usagePoint
 }
+
+type usagePoint struct {
+	at     time.Time
+	tokens int64
+}
+
+const (
+	tokenAlertWindow    = 5 * time.Minute
+	defaultTokenAlert5m = int64(1_000_000)
+)
 
 // DefaultUsageTracker is the package-level singleton. It is wired
 // into the eino global callback chain by main.go and exposed at
@@ -75,6 +93,9 @@ func (t *UsageTracker) Reset() {
 	t.ErroredCalls.Store(0)
 	t.StreamingCalls.Store(0)
 	t.NonStreamingCalls.Store(0)
+	t.recentMu.Lock()
+	t.recentUsage = nil
+	t.recentMu.Unlock()
 }
 
 // UsageSnapshot is a per-field-consistent view of the counters.
@@ -87,7 +108,10 @@ type UsageSnapshot struct {
 	StreamingCalls    int64
 	NonStreamingCalls int64
 	// AvgTokensPerCall is a derived value: TotalTokens / max(Calls, 1).
-	AvgTokensPerCall int64
+	AvgTokensPerCall  int64
+	TokensLast5m      int64
+	TokenAlert5m      bool
+	TokenAlertLimit5m int64
 }
 
 func (t *UsageTracker) Snapshot() UsageSnapshot {
@@ -104,7 +128,56 @@ func (t *UsageTracker) Snapshot() UsageSnapshot {
 	if calls > 0 {
 		s.AvgTokensPerCall = s.TotalTokens / calls
 	}
+	s.TokensLast5m = t.tokensSince(time.Now().Add(-tokenAlertWindow))
+	s.TokenAlertLimit5m = tokenAlertLimit5m()
+	s.TokenAlert5m = s.TokensLast5m >= s.TokenAlertLimit5m
 	return s
+}
+
+func (t *UsageTracker) addUsage(usage *schema.TokenUsage) {
+	if usage == nil {
+		return
+	}
+	t.PromptTokens.Add(int64(usage.PromptTokens))
+	t.CompletionTokens.Add(int64(usage.CompletionTokens))
+	total := int64(usage.TotalTokens)
+	t.TotalTokens.Add(total)
+	if total <= 0 {
+		return
+	}
+	now := time.Now()
+	t.recentMu.Lock()
+	cutoff := now.Add(-tokenAlertWindow)
+	first := 0
+	for first < len(t.recentUsage) && t.recentUsage[first].at.Before(cutoff) {
+		first++
+	}
+	if first > 0 {
+		t.recentUsage = append([]usagePoint(nil), t.recentUsage[first:]...)
+	}
+	t.recentUsage = append(t.recentUsage, usagePoint{at: now, tokens: total})
+	t.recentMu.Unlock()
+}
+
+func (t *UsageTracker) tokensSince(cutoff time.Time) int64 {
+	t.recentMu.Lock()
+	defer t.recentMu.Unlock()
+	var total int64
+	for _, point := range t.recentUsage {
+		if !point.at.Before(cutoff) {
+			total += point.tokens
+		}
+	}
+	return total
+}
+
+func tokenAlertLimit5m() int64 {
+	if value := strings.TrimSpace(os.Getenv("LLM_TOKEN_ALERT_5M")); value != "" {
+		if limit, err := strconv.ParseInt(value, 10, 64); err == nil && limit > 0 {
+			return limit
+		}
+	}
+	return defaultTokenAlert5m
 }
 
 // PrometheusText renders the usage counters in Prometheus text
@@ -169,12 +242,7 @@ func (s *stringBuilder) String() string { return string(s.b) }
 // message types have a ResponseMeta.Usage *TokenUsage field, so
 // the same accumulator works for both.
 func addUsageFromMessage(t *UsageTracker, usage *schema.TokenUsage) {
-	if usage == nil {
-		return
-	}
-	t.PromptTokens.Add(int64(usage.PromptTokens))
-	t.CompletionTokens.Add(int64(usage.CompletionTokens))
-	t.TotalTokens.Add(int64(usage.TotalTokens))
+	t.addUsage(usage)
 }
 
 // NewUsageHandler returns an eino callbacks.Handler that, on every

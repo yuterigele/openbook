@@ -38,6 +38,7 @@ func (t *QueryScheduleTool) Info(ctx context.Context) (*schema.ToolInfo, error) 
 			"\n" +
 			"【业务规则】\n" +
 			"  - 输出三段：「可约」「师傅请假占用」「已约满」—— Agent 可据此判断是「换时间」还是「换师傅」；\n" +
+			"  - 不查询过去日期；相对日期必须按本轮系统时间锚点换算为准确 YYYY-MM-DD；\n" +
 			"  - 节假日会直接告知「休息日」；\n" +
 			"  - 整天请假会输出「师傅请假占用」段，让 Agent 推荐换时间/换师傅。\n" +
 			"\n" +
@@ -53,7 +54,7 @@ func (t *QueryScheduleTool) Info(ctx context.Context) (*schema.ToolInfo, error) 
 			},
 			"date": {
 				Type:     "string",
-				Desc:     "查询日期，格式：YYYY-MM-DD，例如：2026-06-20",
+				Desc:     "查询日期，格式：YYYY-MM-DD，例如：2026-06-20；必须是今天或未来日期。",
 				Required: true,
 			},
 		}),
@@ -79,6 +80,19 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 	if params.Date == "" {
 		return "", fmt.Errorf("date 参数不能为空")
 	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil || loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	queryDate, err := time.ParseInLocation("2006-01-02", params.Date, loc)
+	if err != nil {
+		return "", fmt.Errorf("date 格式错误，应为 YYYY-MM-DD: %s", params.Date)
+	}
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	if queryDate.Before(todayStart) {
+		return "", fmt.Errorf("%s 已经是过去日期；当前北京时间为 %s，请查询今天或未来日期的可约时段", params.Date, now.Format("2006-01-02 15:04"))
+	}
 
 	if err := EnsureDB("query_schedule"); err != nil {
 		return "", err
@@ -101,9 +115,6 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 
 	// 一次 SQL 拿全 available / leave blocks / booked count（v3.6 新 helper）
 	breakdown := storage.QueryScheduleBreakdown(params.BarberName, params.Date)
-	loc, _ := time.LoadLocation("Asia/Shanghai")
-	dayStart, _ := time.ParseInLocation("2006-01-02", params.Date, loc)
-	_ = dayStart // 保留供未来 isFullDayLeave 复用
 
 	// 统一走"可约 / 师傅请假 / 已约满"三段（v3.6 设计），整天请假也走同一路径：
 	//   - Available 空 → "当天没有可预约的时段"
@@ -196,4 +207,3 @@ func formatLeaveRange(lb storage.LeaveBlock, paramsDate string, loc *time.Locati
 	}
 	return fmt.Sprintf("%s 至 %s", startStr, endStr)
 }
-

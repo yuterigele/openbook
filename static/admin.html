@@ -1454,6 +1454,12 @@
         </svg>
         <span>套餐审计</span>
       </a>
+      <a class="nav-item" data-view="platform-agent" data-perm="manage:platform" href="#platform-agent">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 2 4-6"/>
+        </svg>
+        <span>Agent 运行监控</span>
+      </a>
     </nav>
 
     <div class="sidebar-foot">
@@ -1565,6 +1571,7 @@ const App = (() => {
     platformShops: null,     // /api/admin/platform/shops
     platformShopDetail: null, // /api/admin/platform/shops/:id
     platformAudit: null,     // /api/admin/platform/audit
+    platformAgent: null,     // /api/admin/platform/agent-observability
 
     // Filters
     apptDate: todayStr(),
@@ -1658,7 +1665,8 @@ const App = (() => {
       notifications: '通知中心',
       'platform-overview': '平台总览',
       'platform-shops': '店铺管理',
-      'platform-audit': '套餐审计'
+      'platform-audit': '套餐审计',
+      'platform-agent': 'Agent 运行监控'
     };
     $('#crumbView').textContent = labels[v] || v;
     render();
@@ -1687,6 +1695,7 @@ const App = (() => {
     else if (state.view === 'platform-overview') c.innerHTML = renderPlatformOverview();
     else if (state.view === 'platform-shops') c.innerHTML = renderPlatformShops();
     else if (state.view === 'platform-audit') c.innerHTML = renderPlatformAudit();
+    else if (state.view === 'platform-agent') c.innerHTML = renderPlatformAgent();
   }
 
   function renderEmpty(title, hint, iconName = 'inbox') {
@@ -3326,6 +3335,55 @@ return `<table class="table">
         </div>
       </div>
     `;
+  }
+
+  // ---------- Platform Agent observability (platform_admin only) ----------
+  function renderPlatformAgent() {
+    return `<div class="view-head">
+      <h1>Agent 运行监控</h1>
+      <p>全平台实时进程指标；重启服务后计数会重新开始。</p>
+    </div>
+    <div id="platformAgentBody"><div class="kpi-grid">${renderSkeleton(4)}</div></div>`;
+  }
+
+  async function loadPlatformAgent() {
+    const el = $('#platformAgentBody');
+    if (!el) return;
+    try {
+      const data = await api('/api/admin/platform/agent-observability');
+      state.platformAgent = data;
+      el.innerHTML = renderPlatformAgentBody(data);
+    } catch (e) {
+      el.innerHTML = '<div class="card card-pad">' + renderEmpty('加载失败：' + e.message, null, 'x') + '</div>';
+    }
+  }
+
+  function renderPlatformAgentBody(data) {
+    const agent = data.agent || {};
+    const llm = data.llm || {};
+    const fmtRate = n => fmtPct(Number(n || 0));
+    const tools = agent.tools || [];
+    const alertClass = llm.token_alert_5m ? 'alert' : 'success';
+    const alertHint = llm.token_alert_5m
+      ? `已超过 5 分钟阈值 ${(llm.token_alert_limit_5m || 0).toLocaleString('zh-CN')} Token，请排查异常流量。`
+      : `近 5 分钟 ${(llm.tokens_last_5m || 0).toLocaleString('zh-CN')} Token；阈值 ${(llm.token_alert_limit_5m || 0).toLocaleString('zh-CN')}。`;
+    const rows = tools.map(t => `<tr>
+      <td><code>${esc(t.name)}</code></td>
+      <td class="num">${Number(t.calls || 0).toLocaleString('zh-CN')}</td>
+      <td class="num">${Number(t.succeeded || 0).toLocaleString('zh-CN')}</td>
+      <td class="num">${Number(t.failed || 0).toLocaleString('zh-CN')}</td>
+      <td class="num">${fmtRate(t.success_rate)}</td>
+    </tr>`).join('');
+    return `<div class="kpi-grid stagger">
+      ${kpiCard('Agent 任务成功率', fmtRate(agent.task_success_rate), agent.tasks_failed > 0 ? 'normal' : 'success', `成功 ${agent.tasks_succeeded || 0} / 失败 ${agent.tasks_failed || 0}`)}
+      ${kpiCard('LLM 调用错误', Number(llm.errored_calls || 0).toLocaleString('zh-CN'), llm.errored_calls > 0 ? 'alert' : 'success', `总调用 ${Number(llm.calls || 0).toLocaleString('zh-CN')}`)}
+      ${kpiCard('累计 Token', Number(llm.total_tokens || 0).toLocaleString('zh-CN'), 'normal', `平均每次 ${Number(llm.avg_tokens_per_call || 0).toLocaleString('zh-CN')} Token`)}
+      ${kpiCard('Token 异常检测', llm.token_alert_5m ? '告警' : '正常', alertClass, alertHint)}
+    </div>
+    <div class="section"><div class="card card-pad">
+      <div class="section-head"><h2>工具调用成功率</h2><span class="sub">工具原始执行错误会计为失败；业务拒绝但正常返回不计为执行失败</span></div>
+      ${tools.length ? `<table class="table"><thead><tr><th>工具</th><th class="num">调用</th><th class="num">成功</th><th class="num">失败</th><th class="num">成功率</th></tr></thead><tbody>${rows}</tbody></table>` : renderEmpty('当前进程尚未产生工具调用', '发起一轮需要查询或预约的对话后会显示。', 'activity')}
+    </div></div>`;
   }
 
   // ---------- Platform Shops ----------
@@ -6057,6 +6115,7 @@ return `<table class="table">
         else if (view === 'platform-overview') loadPlatformOverview();
         else if (view === 'platform-shops') loadPlatformShops();
         else if (view === 'platform-audit') loadPlatformAudit();
+        else if (view === 'platform-agent') loadPlatformAgent();
       }, 50);
     }
   }
@@ -7029,6 +7088,7 @@ return `<table class="table">
     else if (state.view === 'platform-overview') loadPlatformOverview();
     else if (state.view === 'platform-shops') loadPlatformShops();
     else if (state.view === 'platform-audit') loadPlatformAudit();
+    else if (state.view === 'platform-agent') loadPlatformAgent();
   }
 
   // ---------- Init ----------
@@ -7058,6 +7118,7 @@ return `<table class="table">
       else if (v === 'platform-overview') loadPlatformOverview();
       else if (v === 'platform-shops') loadPlatformShops();
       else if (v === 'platform-audit') loadPlatformAudit();
+      else if (v === 'platform-agent') loadPlatformAgent();
     }));
     // v4.12: nav click 也刷一下 plan（拿最新 grace_days）— loadPlans 内有 cache 兜底
     // 顾客搜索回车支持（v4.4 轻打磨）

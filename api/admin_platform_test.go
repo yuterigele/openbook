@@ -33,6 +33,8 @@ func runPlatformWithRole(t *testing.T, role string, method, path string, body []
 	}
 	// 根据 path 调对应 handler
 	switch {
+	case strings.HasSuffix(path, "/agent-observability"):
+		platformAgentObservabilityHandler(context.Background(), reqCtx)
 	case strings.HasSuffix(path, "/stats"):
 		platformStatsHandler(context.Background(), reqCtx)
 	case strings.HasSuffix(path, "/audit"):
@@ -66,11 +68,24 @@ func TestPlatform_OwnerForbidden(t *testing.T) {
 		"/api/admin/platform/stats",
 		"/api/admin/platform/shops",
 		"/api/admin/platform/audit",
+		"/api/admin/platform/agent-observability",
 	} {
 		status, body := runPlatformWithRole(t, "owner", "GET", path, nil, nil)
 		if status != 403 {
 			t.Errorf("owner 调 %s 应 403, got %d body=%s", path, status, body)
 		}
+	}
+}
+
+func TestPlatform_AgentObservability_PlatformOnly(t *testing.T) {
+	setupAPITestDB(t)
+	status, body := runPlatformWithRole(t, storage.RolePlatformAdmin, "GET", "/api/admin/platform/agent-observability", nil, nil)
+	if status != 200 {
+		t.Fatalf("platform_admin should receive observability, got %d body=%s", status, body)
+	}
+	var response PlatformAgentObservability
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		t.Fatalf("unmarshal response: %v body=%s", err, body)
 	}
 }
 

@@ -32,6 +32,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/yuterigele/openbook/auth"
+	"github.com/yuterigele/openbook/chatmodel"
+	"github.com/yuterigele/openbook/server"
 	"github.com/yuterigele/openbook/storage"
 )
 
@@ -41,6 +43,25 @@ func planNameByID(id string) string {
 		return m.Name
 	}
 	return id
+}
+
+// PlatformAgentObservability is intentionally platform-wide and process-local.
+// It must only be returned through the platform_admin route because token usage
+// and cross-tenant Agent health are operational data, not shop data.
+type PlatformAgentObservability struct {
+	Agent       server.AgentMetricsSnapshot `json:"agent"`
+	LLM         chatmodel.UsageSnapshot     `json:"llm"`
+	GeneratedAt time.Time                   `json:"generated_at"`
+}
+
+// platformAgentObservabilityHandler GET /api/admin/platform/agent-observability
+// Route-level RequireRole(RolePlatformAdmin) is the access-control boundary.
+func platformAgentObservabilityHandler(_ context.Context, c *app.RequestContext) {
+	c.JSON(http.StatusOK, PlatformAgentObservability{
+		Agent:       server.DefaultAgentMetrics.Snapshot(),
+		LLM:         chatmodel.DefaultUsageTracker.Snapshot(),
+		GeneratedAt: time.Now(),
+	})
 }
 
 // ============================================================
@@ -578,17 +599,17 @@ func auditAdminInfo(ctx context.Context, c *app.RequestContext) (uint64, string)
 
 // PlatformAuditItem 一条 audit
 type PlatformAuditItem struct {
-	ID         uint64    `json:"id"`
-	CreatedAt  time.Time `json:"created_at"`
-	ShopID     string    `json:"shop_id"`
-	ShopName   string    `json:"shop_name"`
-	OldPlan    string    `json:"old_plan"`
-	NewPlan    string    `json:"new_plan"`
-	Months     int       `json:"months"`
-	AdminID    uint64    `json:"admin_id"`
-	AdminUser  string    `json:"admin_user"`
-	Note       string    `json:"note"`
-	ExpiresAt  string    `json:"expires_at"`
+	ID        uint64    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	ShopID    string    `json:"shop_id"`
+	ShopName  string    `json:"shop_name"`
+	OldPlan   string    `json:"old_plan"`
+	NewPlan   string    `json:"new_plan"`
+	Months    int       `json:"months"`
+	AdminID   uint64    `json:"admin_id"`
+	AdminUser string    `json:"admin_user"`
+	Note      string    `json:"note"`
+	ExpiresAt string    `json:"expires_at"`
 }
 
 // planChangeMeta event_log meta 的 schema（写 audit 时用）

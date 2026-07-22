@@ -676,6 +676,7 @@ func (s *Server[M]) makeGenInput(sess *mem.Session[M], sessionID string) func(ct
 		runMessages := s.buildRunMessages(sessionID, history)
 
 		log.Printf("[genInput] session=%s query=%q messages=%d", sessionID, queryItem.Query, len(runMessages))
+		DefaultAgentMetrics.RecordTaskStarted()
 
 		return &adk.GenInputResult[*ChatItem, M]{
 			Input: &adk.TypedAgentInput[M]{
@@ -792,10 +793,14 @@ func (s *Server[M]) makeOnAgentEvents(sess *mem.Session[M], sessionID string) fu
 			}
 		}
 		if result.interruptID != "" {
+			RecordToolResultMessages(result.intermediates)
+			DefaultAgentMetrics.RecordTaskFinished(result.err == nil)
 			sess.SetPendingInterruptID(result.interruptID)
 			sess.SetMsgIdx(result.msgIdx)
 			return errInterrupted
 		}
+		RecordToolResultMessages(result.intermediates)
+		DefaultAgentMetrics.RecordTaskFinished(result.err == nil && result.lastContent != "")
 		return result.err
 	}
 }
@@ -832,6 +837,8 @@ func (s *Server[M]) buildRunMessages(_ string, history []M) []M {
 	runMessages := make([]M, 0, len(history)+1)
 	runMessages = append(runMessages, msgops.NewSystem[M](ctx))
 	runMessages = append(runMessages, msgops.NormalizeMessagesForModelInput(history)...)
+	// 将日期锚点放在最新用户消息之前，避免长历史或示例日期干扰相对日期解析。
+	runMessages = append(runMessages, msgops.NewSystem[M](buildTodayContext()))
 	return runMessages
 }
 
@@ -1371,15 +1378,22 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 	log.Printf("[wecom] 发送回复成功: to=%s shop=%s", fromUser, shopID)
 }
 
-// buildTodayContext 返回动态日期上下文（用作 Agent Run 的 system message，
-// 让模型知道"今天/明天"对应到具体日期）。
+// buildTodayContext 返回按北京时间生成的动态日期上下文。
 func buildTodayContext() string {
-	now := time.Now()
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil || loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	return buildTodayContextAt(time.Now().In(loc))
+}
+
+// buildTodayContextAt 让日期换算能够被确定性地单测。
+func buildTodayContextAt(now time.Time) string {
 	today := now.Format("2006-01-02")
 	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
-	weekday := now.Weekday().String()
-	return fmt.Sprintf("[系统上下文]\n当前日期：%s（%s）\n明天日期：%s\n用户说\"今天/明天/后天\"时请按上面的日期计算。\n",
-		today, weekday, tomorrow)
+	afterTomorrow := now.AddDate(0, 0, 2).Format("2006-01-02")
+	return fmt.Sprintf("[系统时间锚点（最高优先级）]\n当前北京时间：%s\n今天=%s，明天=%s，后天=%s。\n用户提到今天/明天/后天时，调用任何工具必须使用上述对应的 YYYY-MM-DD；不得使用历史记录、示例或猜测的日期。\n",
+		now.Format("2006-01-02 15:04 MST"), today, tomorrow, afterTomorrow)
 }
 
 // processAgentMessage 统一消息处理适配层
@@ -1533,6 +1547,7 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M], userContent, shopID string) string {
+	DefaultAgentMetrics.RecordTaskStarted()
 	ctx, cancel := context.WithTimeout(ctx, agentExecutionTimeout())
 	defer cancel()
 
@@ -1555,6 +1570,8 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 
 	// 历史消息（已精简）
 	messages = append(messages, history...)
+	// 保证最新时间锚点紧邻本轮用户消息，降低模型被历史日期带偏的概率。
+	messages = append(messages, msgops.NewSystem[M](buildTodayContext()))
 
 	// 当前用户消息
 	messages = append(messages, msgops.NewUser[M](userContent))
@@ -1567,10 +1584,11 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 	events := s.cfg.Agent.Run(ctx, input)
 
 	// Drain events，提取最后的 assistant 文本回复
-	reply := s.drainAgentEvents(events)
+	reply, completedWithoutError := s.drainAgentEvents(events)
 	if reply == "" {
 		reply = "抱歉，我暂时无法处理您的请求，请稍后再试。"
 	}
+	DefaultAgentMetrics.RecordTaskFinished(completedWithoutError && reply != "")
 
 	// 保存消息到会话
 	sess.Append(msgops.NewUser[M](userContent))
@@ -1583,29 +1601,40 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 //
 // DeepAgent 的事件里既有最终 assistant 消息（Output.MessageOutput 非空），也有中间过程；
 // 我们取最后一个含非空文本的 assistant 消息作为回复。
-func (s *Server[M]) drainAgentEvents(events *adk.AsyncIterator[*adk.TypedAgentEvent[M]]) string {
+func (s *Server[M]) drainAgentEvents(events *adk.AsyncIterator[*adk.TypedAgentEvent[M]]) (string, bool) {
 	var lastText string
 	if events == nil {
-		return ""
+		return "", false
 	}
+	hadError := false
 	for {
 		event, ok := events.Next()
 		if !ok {
 			break
 		}
-		if event == nil || event.Output == nil || event.Output.MessageOutput == nil {
+		if event == nil {
+			continue
+		}
+		if event.Err != nil {
+			hadError = true
+		}
+		if event.Output == nil || event.Output.MessageOutput == nil {
 			continue
 		}
 		msg, err := event.Output.MessageOutput.GetMessage()
 		if err != nil || msg == nil {
+			if err != nil {
+				hadError = true
+			}
 			continue
 		}
+		RecordToolResultMessages([]M{msg})
 		text := msgops.AssistantText(msg)
 		if text != "" {
 			lastText = text
 		}
 	}
-	return strings.TrimSpace(lastText)
+	return strings.TrimSpace(lastText), !hadError
 }
 
 // handleWeComMessageWithOpenKfID 旧版已迁移到带 shopID 版本（见上）

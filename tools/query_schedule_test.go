@@ -74,7 +74,7 @@ func TestQuerySchedule_PartialLeave_SlotsFilteredAndLeaveNoteShown(t *testing.T)
 		leaveStart, leaveEnd, storage.LeaveActionCancel)
 	storage.DB.Model(&storage.BarberLeave{}).
 		Where("barber_id = ?", "barber-Tony").
-		Update("reason", "陪老婆产检")  // v4.13.0 隐私测试
+		Update("reason", "陪老婆产检") // v4.13.0 隐私测试
 
 	out, err := runQuerySchedule(t, shop.ID, "Tony", dateStr)
 	if err != nil {
@@ -302,5 +302,18 @@ func TestQuerySchedule_HolidayOverridesLeave(t *testing.T) {
 	}
 	if strings.Contains(out, "师傅请假占用") {
 		t.Errorf("holiday path should not show leave note, got %q", out)
+	}
+}
+
+func TestQuerySchedule_RejectsPastDate(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-past", "")
+	storage.MakeBarber(t, "barber-past", shop.ID, "Tony")
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	pastDate := time.Now().In(loc).AddDate(0, 0, -1).Format("2006-01-02")
+
+	_, err := runQuerySchedule(t, shop.ID, "Tony", pastDate)
+	if err == nil || !strings.Contains(err.Error(), "过去日期") {
+		t.Fatalf("past date should be rejected before returning slots, err=%v", err)
 	}
 }

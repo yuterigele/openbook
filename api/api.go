@@ -126,13 +126,13 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/leave/list", auth.RequirePerm(storage.PermViewBarbers), listLeavesHandler)
 
 	// 店铺设置
-	protected.GET("/shop", auth.RequirePerm(storage.PermEditShop), getShopHandler) // 设为 owner-only 防止 staff 误读敏感字段
-	protected.GET("/plans", auth.RequirePerm(storage.PermViewPlan), plansHandler) // v4.12: owner 看自己 plan + 4 档对比
-	protected.GET("/data/export", auth.RequirePerm(storage.PermViewPlan), dataExportHandler) // v4.12.1: CSV 导出，需 data_export feature
-	protected.GET("/shops", auth.RequirePerm(storage.PermViewPlan), listShopsHandler)       // v4.12.1: 列当前 shop group
-	protected.POST("/shops", auth.RequirePerm(storage.PermViewPlan), createShopHandler)     // v4.12.1: 建分店，需 multi_store feature
-	protected.GET("/api-keys", auth.RequirePerm(storage.PermViewPlan), listAPIKeysHandler)  // v4.12.1: 列 API keys
-	protected.POST("/api-keys", auth.RequirePerm(storage.PermViewPlan), createAPIKeyHandler) // v4.12.1: 生成 API key，需 api_access feature
+	protected.GET("/shop", auth.RequirePerm(storage.PermEditShop), getShopHandler)                      // 设为 owner-only 防止 staff 误读敏感字段
+	protected.GET("/plans", auth.RequirePerm(storage.PermViewPlan), plansHandler)                       // v4.12: owner 看自己 plan + 4 档对比
+	protected.GET("/data/export", auth.RequirePerm(storage.PermViewPlan), dataExportHandler)            // v4.12.1: CSV 导出，需 data_export feature
+	protected.GET("/shops", auth.RequirePerm(storage.PermViewPlan), listShopsHandler)                   // v4.12.1: 列当前 shop group
+	protected.POST("/shops", auth.RequirePerm(storage.PermViewPlan), createShopHandler)                 // v4.12.1: 建分店，需 multi_store feature
+	protected.GET("/api-keys", auth.RequirePerm(storage.PermViewPlan), listAPIKeysHandler)              // v4.12.1: 列 API keys
+	protected.POST("/api-keys", auth.RequirePerm(storage.PermViewPlan), createAPIKeyHandler)            // v4.12.1: 生成 API key，需 api_access feature
 	protected.POST("/api-keys/:id/revoke", auth.RequirePerm(storage.PermViewPlan), revokeAPIKeyHandler) // v4.12.1: 吊销
 	protected.PUT("/shop", auth.RequirePerm(storage.PermEditShop), updateShopHandler)
 
@@ -182,6 +182,7 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/platform/shops/:id", auth.RequireRole(storage.RolePlatformAdmin), platformShopDetailHandler)
 	protected.PUT("/platform/shops/:id/plan", auth.RequireRole(storage.RolePlatformAdmin), platformSetShopPlanHandler)
 	protected.GET("/platform/audit", auth.RequireRole(storage.RolePlatformAdmin), platformAuditHandler)
+	protected.GET("/platform/agent-observability", auth.RequireRole(storage.RolePlatformAdmin), platformAgentObservabilityHandler)
 
 	// 服务目录
 	protected.GET("/services", auth.RequirePerm(storage.PermViewServices), listServicesHandler)
@@ -314,9 +315,9 @@ func loginHandler(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(http.StatusOK, map[string]any{
-		"token":   tok,
-		"shop_id": admin.ShopID,
-		"role":    admin.Role,
+		"token":      tok,
+		"shop_id":    admin.ShopID,
+		"role":       admin.Role,
 		"expires_in": 7 * 24 * 3600,
 	})
 }
@@ -394,26 +395,26 @@ func logoutHandler(ctx context.Context, c *app.RequestContext) {
 
 // DashboardSummary 单个时间窗口的汇总
 type DashboardSummary struct {
-	Total     int     `json:"total"`
-	Completed int     `json:"completed"`
-	NoShow    int     `json:"noshow"`
-	Cancelled int     `json:"cancelled"`
-	Active    int     `json:"active"`    // 还没到时间的
-	Upcoming  int     `json:"upcoming"`  // 接下来 2 小时的
-	NoShowRate   float64 `json:"no_show_rate"`   // noshow / (noshow+completed)
+	Total        int     `json:"total"`
+	Completed    int     `json:"completed"`
+	NoShow       int     `json:"noshow"`
+	Cancelled    int     `json:"cancelled"`
+	Active       int     `json:"active"`        // 还没到时间的
+	Upcoming     int     `json:"upcoming"`      // 接下来 2 小时的
+	NoShowRate   float64 `json:"no_show_rate"`  // noshow / (noshow+completed)
 	CompleteRate float64 `json:"complete_rate"` // completed / (noshow+completed)
 }
 
 // DashboardResponse 看板响应
 type DashboardResponse struct {
-	ShopID         string                       `json:"shop_id"`
-	GeneratedAt    time.Time                    `json:"generated_at"`
-	Today          DashboardSummary             `json:"today"`
-	Week           DashboardSummary             `json:"week"`
-	Month          DashboardSummary             `json:"month"`
-	TopHours       []HourStat                   `json:"top_hours"`        // 热门时段 TOP 5
-	TopBarbers     []BarberStat                 `json:"top_barbers"`      // 热门理发师
-	LifecycleCount int64                        `json:"lifecycle_count"`  // 总事件数（埋点用）
+	ShopID         string           `json:"shop_id"`
+	GeneratedAt    time.Time        `json:"generated_at"`
+	Today          DashboardSummary `json:"today"`
+	Week           DashboardSummary `json:"week"`
+	Month          DashboardSummary `json:"month"`
+	TopHours       []HourStat       `json:"top_hours"`       // 热门时段 TOP 5
+	TopBarbers     []BarberStat     `json:"top_barbers"`     // 热门理发师
+	LifecycleCount int64            `json:"lifecycle_count"` // 总事件数（埋点用）
 	// v3.8 P2 dashboard 补全：事件漏斗
 	//   - EventFunnelToday / Week / Month：按 event_type 聚合的事件数（month 范围，desc by count）
 	//   - 包含 PRD §11.2 续费转化漏斗 + P3 黑名单 / P4 请假 / idle_push 等所有埋点
@@ -704,8 +705,8 @@ func listAppointmentsHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	shopID := c.Param("id")
-	date := c.Query("date")        // 可选，YYYY-MM-DD
-	status := c.Query("status")    // 可选
+	date := c.Query("date")     // 可选，YYYY-MM-DD
+	status := c.Query("status") // 可选
 
 	q := storage.DB.WithContext(ctx).Where("shop_id = ?", shopID)
 	if date != "" {
@@ -858,8 +859,8 @@ func adminCancelHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{
-		"status":       "cancelled",
-		"cancel_type":  res.CancelType,
+		"status":      "cancelled",
+		"cancel_type": res.CancelType,
 	})
 }
 
@@ -875,7 +876,7 @@ func getSubscriptionHandler(ctx context.Context, c *app.RequestContext) {
 	err := storage.DB.WithContext(ctx).Where("shop_id = ?", shopID).Order("expires_at DESC").First(&sub).Error
 	if err != nil {
 		c.JSON(http.StatusOK, map[string]any{
-			"shop_id":   shopID,
+			"shop_id":          shopID,
 			"has_subscription": false,
 		})
 		return
@@ -883,15 +884,15 @@ func getSubscriptionHandler(ctx context.Context, c *app.RequestContext) {
 	// 计算剩余天数
 	daysLeft := int(time.Until(sub.ExpiresAt).Hours() / 24)
 	c.JSON(http.StatusOK, map[string]any{
-		"shop_id":           shopID,
-		"has_subscription":  true,
-		"plan":              sub.Plan,
-		"started_at":        sub.StartedAt,
-		"expires_at":        sub.ExpiresAt,
-		"days_left":         daysLeft,
-		"auto_renew":        sub.AutoRenew,
-		"is_expired":        daysLeft < 0,
-		"is_expiring_soon":  daysLeft >= 0 && daysLeft <= 7,
+		"shop_id":          shopID,
+		"has_subscription": true,
+		"plan":             sub.Plan,
+		"started_at":       sub.StartedAt,
+		"expires_at":       sub.ExpiresAt,
+		"days_left":        daysLeft,
+		"auto_renew":       sub.AutoRenew,
+		"is_expired":       daysLeft < 0,
+		"is_expiring_soon": daysLeft >= 0 && daysLeft <= 7,
 	})
 }
 
@@ -1083,11 +1084,11 @@ func createBarberLeaveHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{
-		"leave_id":           res.LeaveID,
-		"affected_count":     res.AffectedCount,
-		"rescheduled_count":  res.RescheduledCount,
-		"cancelled_count":    res.CancelledCount,
-		"notified_count":     len(res.NotifiedCustomers),
+		"leave_id":          res.LeaveID,
+		"affected_count":    res.AffectedCount,
+		"rescheduled_count": res.RescheduledCount,
+		"cancelled_count":   res.CancelledCount,
+		"notified_count":    len(res.NotifiedCustomers),
 	})
 }
 

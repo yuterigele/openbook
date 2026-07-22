@@ -168,17 +168,33 @@ func TestBuildRunMessagesUsesFreshSystemDateContext(t *testing.T) {
 	defer cleanup()
 
 	messages := srv.buildRunMessages("session", []*schema.Message{schema.UserMessage("明天上午十点")})
-	if len(messages) != 2 {
-		t.Fatalf("messages = %d, want 2", len(messages))
+	if len(messages) != 3 {
+		t.Fatalf("messages = %d, want 3", len(messages))
 	}
 	if messages[0].Role != schema.System {
 		t.Fatalf("first message role = %q, want system", messages[0].Role)
 	}
-	if !strings.Contains(messages[0].Content, "当前日期："+time.Now().Format("2006-01-02")) {
+	if !strings.Contains(messages[0].Content, "今天="+time.Now().Format("2006-01-02")) {
 		t.Fatalf("fresh date context missing: %q", messages[0].Content)
 	}
 	if strings.Contains(messages[0].Content, "filesystem tools") {
 		t.Fatalf("booking context must not include stale code-assistant instructions: %q", messages[0].Content)
+	}
+	if messages[2].Role != schema.System || !strings.Contains(messages[2].Content, "系统时间锚点") {
+		t.Fatalf("latest message before user context must be a time anchor: %+v", messages[2])
+	}
+}
+
+func TestBuildTodayContextAt_UsesShanghaiCalendar(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buildTodayContextAt(time.Date(2026, 7, 22, 13, 38, 0, 0, loc))
+	for _, want := range []string{"今天=2026-07-22", "明天=2026-07-23", "后天=2026-07-24"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("time context missing %q: %s", want, got)
+		}
 	}
 }
 
