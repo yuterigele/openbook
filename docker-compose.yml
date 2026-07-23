@@ -77,12 +77,19 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       REDIS_DB: "0"
-      # LLM 配置（从宿主 .env 注入或在这里填）
-      MESSAGE_KIND: message
-      MODEL_TYPE: ""
-      OPENAI_BASE_URL: https://api.deepseek.com/v1
+      # LLM 配置：按 .env 中的 provider 专属变量注入。
+      MESSAGE_KIND: ${MESSAGE_KIND:-message}
+      MODEL_TYPE: ${MODEL_TYPE:-}
+      OPENBOOK_LLM_CHAIN: ${OPENBOOK_LLM_CHAIN:-deepseek,openai,ark}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-chat}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ARK_API_KEY: ${ARK_API_KEY:-}
+      ARK_MODEL: ${ARK_MODEL:-}
+      ARK_BASE_URL: ${ARK_BASE_URL:-}
       # 企业微信
       WECOM_CORP_ID: ${WECOM_CORP_ID:-}
       WECOM_AGENT_ID: ${WECOM_AGENT_ID:-}

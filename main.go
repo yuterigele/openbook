@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/coze-dev/cozeloop-go"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,6 +48,7 @@ import (
 	"github.com/yuterigele/openbook/server"
 	"github.com/yuterigele/openbook/storage"
 	"github.com/yuterigele/openbook/wecom"
+	_ "net/http/pprof"
 )
 
 func main() {
@@ -166,9 +168,17 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	// LLM 层在 generic M 上接 BaseModel[M] 有点麻烦（不同 M 的 Generate
 	// 签名不一样），所以这里只装"可装"的占位实现：见 intent.NewLLMClassifyFuncFromEino
 	// 的注释，调用方如果 M = *schema.Message 可以用 type switch 装上。
-	// 实际跑起来时，关键词层够用，LLM 层是加分项。
+	// 启用 SMALL_MODEL_ENABLED 后，关键词未命中时由独立小模型完成
+	// 意图分类；输入风险评分也复用该模型。小模型永远没有工具权限。
 	_ = cm // mark used for clarity; the intent tool is keyword-only at runtime.
 	intentClf := intent.NewClassifier()
+	if small, smallErr := chatmodel.NewSmallClassifierModel(ctx); smallErr != nil {
+		log.Printf("[small-model] disabled: %v; using deterministic classifiers", smallErr)
+	} else if small != nil {
+		intentClf.WithLLMClassify(intent.NewLLMClassifyFuncFromEino(small))
+		server.SetInputTrustLLMClassifier(server.NewInputTrustLLMClassifier(small))
+		log.Printf("[small-model] Qwen classifier routing enabled")
+	}
 	intentTool := intent.NewClassifyTool(intentClf)
 
 	// v4.18+：敏感词 LLM 兜底层（关键词 + LLM 双保险）。
@@ -204,6 +214,7 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	if port == "" {
 		port = "38080"
 	}
+	startPprofServer()
 
 	projectRoot := os.Getenv("PROJECT_ROOT")
 	if projectRoot == "" {
@@ -395,6 +406,19 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	log.Printf("starting server on http://localhost:%s", port)
 	log.Printf("商户后台: http://localhost:%s/admin (默认 admin/admin123，首次登录后请改密码)", port)
 	srv.Spin()
+}
+
+func startPprofServer() {
+	addr := os.Getenv("PPROF_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:6060"
+	}
+	go func() {
+		log.Printf("pprof: http://%s/debug/pprof/ (trace: /debug/pprof/trace)", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			log.Printf("pprof server stopped: %v", err)
+		}
+	}()
 }
 
 // envInt returns os.Getenv(key) parsed as int, or fallback if unset / invalid.

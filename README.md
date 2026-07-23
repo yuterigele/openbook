@@ -54,6 +54,7 @@ docker compose up --build
 ```
 
 打开 `http://127.0.0.1:38080` 体验本地聊天页，商户后台为 `http://127.0.0.1:38080/admin`。
+性能分析仅监听本机：`http://127.0.0.1:6060/debug/pprof/`；下载 `/debug/pprof/trace?seconds=5` 后用 `go tool trace trace.out` 查看。
 
 容器说明与重置方式见 [容器 Demo](docs/CONTAINER_DEMO.md)。
 

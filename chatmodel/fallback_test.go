@@ -101,6 +101,14 @@ func TestNewModelWithFallback_AllProvidersFail_ReturnsStub_Agentic(t *testing.T)
 	}
 }
 
+func TestNewRuntimeFailoverConfig_Stub(t *testing.T) {
+	t.Setenv("OPENBOOK_LLM_CHAIN", "stub")
+
+	if cfg := NewRuntimeFailoverConfig[*schema.Message](context.Background(), ProviderStub); cfg != nil {
+		t.Fatal("stub must not configure provider failover")
+	}
+}
+
 func TestIsTransientProviderError(t *testing.T) {
 	for _, tc := range []struct {
 		err  error

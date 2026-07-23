@@ -159,6 +159,9 @@ func NewModelWithFallback[M adk.MessageType](ctx context.Context) (m einomodel.B
 // providers in order. A later request starts from the primary again; a circuit
 // breaker can be layered on top when provider health is made shared state.
 func NewRuntimeFailoverConfig[M adk.MessageType](buildCtx context.Context, primary Provider) *adk.ModelFailoverConfig[M] {
+	if primary == ProviderStub {
+		return nil
+	}
 	providers := DefaultFallbackChain()
 	remaining := make([]Provider, 0, len(providers)-1)
 	for _, provider := range providers {
@@ -256,19 +259,15 @@ func buildProvider[M adk.MessageType](ctx context.Context, p Provider) (einomode
 		}
 		return any(cm).(einomodel.BaseModel[M]), nil
 	case ProviderOpenAI, ProviderDeepSeek:
-		// DeepSeek is OpenAI-compatible (api.deepseek.com/v1). We just point
-		// the OpenAI client at it via OPENAI_BASE_URL.
-		// No separate code path needed; the env decides.
 		apiKey := os.Getenv("OPENAI_API_KEY")
-		if p == ProviderDeepSeek {
-			// Allow OPENAI_* env vars to default to DeepSeek if not set.
-			if apiKey == "" {
-				apiKey = os.Getenv("DEEPSEEK_API_KEY")
-			}
-		}
 		baseURL := os.Getenv("OPENAI_BASE_URL")
 		model := firstEnv("OPENAI_MODEL", "OPENAI_MODEL_ID")
 		if p == ProviderDeepSeek {
+			// DEEPSEEK_* is the primary configuration. OPENAI_* remains a
+			// compatibility fallback for existing single-provider deployments.
+			apiKey = firstEnv("DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+			baseURL = firstEnv("DEEPSEEK_BASE_URL", "OPENAI_BASE_URL")
+			model = firstEnv("DEEPSEEK_MODEL", "OPENAI_MODEL", "OPENAI_MODEL_ID")
 			if baseURL == "" {
 				baseURL = "https://api.deepseek.com/v1"
 			}
