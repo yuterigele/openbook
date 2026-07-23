@@ -23,25 +23,31 @@
 Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入 MySQL → 返回确认结果
 ```
 
+## 项目结构
+
+- `main.go`、`server/`：应用启动、HTTP 接口、会话处理、限流与回复流程。
+- `internal/agent/`、`tools/`：Agent 编排及受限的预约业务工具。
+- `storage/`、`lock/`：MySQL 持久化、Redis 锁、事务与租户/归属校验。
+- `chatmodel/`、`intent/`、`sensitive/`：模型适配与降级、意图识别、输入保护。
+- `wecom/`、`cron/`、`notify/`：企业微信、定时任务与通知。
+- `api/`、`auth/`、`static/`、`web/`：商户后台、认证与前端页面。
+- `docs/`：产品、容器、部署、基准和工程复盘。
+
 ## 核心实现
 
-| 主题 | 实现 |
-|---|---|
-| Agent 调用层 | 基于 `adk.MessageType` 泛型封装，支持聊天与工具循环两类消息边界 |
-| 工具调用 | 白名单注册预约相关工具；工具层而非模型提示词负责业务校验 |
-| 身份与越权防护 | 查询/取消预约以服务端注入的门店、消息身份和顾客归属三重约束 |
-| 时间处理 | 运行时以 `Asia/Shanghai` 注入日期上下文，避免示例日期污染相对时间理解 |
-| 一致性 | MySQL 持久化；Redis 分布式锁防止同一时段撞单 |
-| 模型可靠性 | DeepSeek / OpenAI / Ark 客户端降级链；失败时退回不写库的 chat-only 响应 |
-| 输入保护 | 敏感内容预检查、输入相关性/风险阈值、限流与工具错误兜底 |
-| 平台可观测性 | 仅平台超管可查看 Agent 任务/工具成功率、LLM Token 用量及 5 分钟阈值告警 |
-| 本地交付 | Docker Compose 一键启动应用、MySQL、Redis；默认 mock 回复，不向微信客服会话发送消息 |
+- Agent 仅可调用白名单预约工具；身份、门店和顾客归属由服务端上下文注入。
+- MySQL 保存业务数据，Redis 锁防止同一时段并发撞单。
+- 默认模型链为 DeepSeek → OpenAI → Ark；不可用时进入不调用工具、不写库的 Stub 模式。
+- 运行时使用 `Asia/Shanghai` 日期上下文，并做敏感内容、输入信任、限流与工具错误保护。
+- 平台超管可查看 Agent/工具成功率、Token 用量与阈值告警。
 
 ## 安全边界
 
-顾客消息不拥有文件系统、Shell、数据库管理或店员操作能力。Agent 仅注册预约业务所需工具；预约查询与取消均忽略模型传入的身份字段，只使用服务端从微信客服会话或本地会话写入的身份上下文。
+顾客消息不拥有文件系统、Shell、任意 SQL 或商户后台能力。Agent 仅注册预约业务所需工具；查询、取消和改约均忽略模型传入的身份字段，只使用服务端从微信客服会话或本地会话写入的可信上下文，并校验门店隔离、资源归属和调用者权限。
 
-本地 Compose 默认仅监听 `127.0.0.1`，应用使用受限 MySQL 账号，不使用数据库 `root`。详细取舍与复盘见 [AI 工程复盘](docs/ai-engineering-notes.md)。
+模型失败或结果不可信时不得写库或宣称操作成功。真实密钥、企业微信凭据、数据库口令和 `JWT_SECRET` 只放本机 `.env` 或密钥管理系统，不得提交。
+
+本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。这仍是本地 Demo，不是公网生产部署方案。详细取舍见 [AI 工程复盘](docs/ai-engineering-notes.md)。
 
 ## 快速开始
 
@@ -49,22 +55,44 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 ```bash
 cp .env.example .env
-# 可选：在 .env 填写 OPENAI_API_KEY；默认 AGENT_REPLY_MODE=mock
+# 至少填写一个模型提供商的凭据；默认优先 DeepSeek
+# DEEPSEEK_API_KEY=...
+# 修改 MYSQL_APP_PASSWORD 和 DEFAULT_*_PASSWORD
 docker compose up --build
 ```
 
-打开 `http://127.0.0.1:38080` 体验本地聊天页，商户后台为 `http://127.0.0.1:38080/admin`。
-性能分析仅监听本机：`http://127.0.0.1:6060/debug/pprof/`；下载 `/debug/pprof/trace?seconds=5` 后用 `go tool trace trace.out` 查看。
+打开 `http://127.0.0.1:38080` 体验聊天页，商户后台为 `http://127.0.0.1:38080/admin`。Compose 默认 `AGENT_REPLY_MODE=mock`，回复只写入事件记录，不会发送到企业微信。
 
-容器说明与重置方式见 [容器 Demo](docs/CONTAINER_DEMO.md)。
+Compose 从宿主 `.env` 注入其 `environment:` 明确列出的变量；修改 `.env` 后执行 `docker compose up -d --force-recreate app`。容器说明、停止与重置方式见 [容器 Demo](docs/CONTAINER_DEMO.md)。
 
-### 本地运行
+### 本地开发
 
 ```bash
+# 先启动 MySQL、Redis 与专用业务账号
+docker compose up -d mysql redis db-bootstrap
 cp .env.example .env
-go test ./tools ./internal/agent ./server
+# 按实际数据库更新 MYSQL_DSN 或 MYSQL_HOST/PORT/USER/PASS/DB
+# 本地演示建议显式设置 AGENT_REPLY_MODE=mock
 go run .
 ```
+
+本地进程会直接读取 `.env`；必须确保数据库可连接。若复用 Compose 的数据库，业务账号为 `openbook`，密码取 `MYSQL_APP_PASSWORD`。
+
+## 配置
+
+完整配置项见 [`.env.example`](.env.example)。常用项如下：
+
+- 模型：`OPENBOOK_LLM_CHAIN=deepseek,openai,ark` 控制顺序；分别配置 `DEEPSEEK_*`、`OPENAI_*`、`ARK_*`。设置 `OPENBOOK_LLM_CHAIN=stub` 可验证安全降级，不会调用模型、工具或写库。
+- 数据：本地进程使用 `MYSQL_DSN` 或 `MYSQL_*`、`REDIS_*`；Compose 会覆盖应用的数据库地址并使用 `MYSQL_APP_PASSWORD` 创建受限账号。
+- Agent：`AGENT_REPLY_MODE=mock` 禁止真实企微发送；`AGENT_MAX_EXECUTION_SECONDS`、`USER_INPUT_TRUST_THRESHOLD` 控制执行和输入保护。
+- 管理端：修改 `DEFAULT_ADMIN_*`、`DEFAULT_PLATFORM_ADMIN_*` 和 `JWT_SECRET` 后再暴露服务。
+- 企业微信：主要由 `shops` 表和商户后台管理；不要在 README、日志或仓库中记录真实凭据。
+
+### 性能分析
+
+本地 `go run .` 会在 `127.0.0.1:6060` 开启 pprof：`http://127.0.0.1:6060/debug/pprof/`。下载 `/debug/pprof/trace?seconds=5` 后可用 `go tool trace trace.out` 查看。不要将该端口暴露到公网。
+
+Compose 将容器内 pprof 映射到宿主机 `127.0.0.1:6060`，可直接访问上述地址；端口不会暴露到公网。
 
 ## 测试重点
 
@@ -88,6 +116,7 @@ go test ./internal/agent ./server -count=1
 
 - [AI 工程复盘](docs/ai-engineering-notes.md) — 相对时间、越权、提示注入、种子数据、容器化的复现与修复
 - [容器 Demo](docs/CONTAINER_DEMO.md) — 本地 Docker 启动与安全边界
+- [部署 Demo](docs/DEPLOY_DEMO.md) — systemd 裸机部署流程
 - [benchmarks](docs/benchmarks.md) — 压测方案与记录模板
 - [产品需求](docs/hair-salon-agent-prd.md) — 预约场景与业务规则
 - [CHANGELOG](docs/CHANGELOG.md) — 20+ 次版本迭代记录

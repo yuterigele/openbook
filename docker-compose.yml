@@ -105,9 +105,11 @@ services:
       DEFAULT_PLATFORM_ADMIN_USERNAME: ${DEFAULT_PLATFORM_ADMIN_USERNAME:-platform}
       DEFAULT_PLATFORM_ADMIN_PASSWORD: ${DEFAULT_PLATFORM_ADMIN_PASSWORD:-change-me-before-exposing}
       PORT: "38080"
+      PPROF_ADDR: 0.0.0.0:6060
       TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:38080:38080"
+      - "127.0.0.1:6060:6060"
     volumes:
       - app_data:/app/data
 
