@@ -512,7 +512,7 @@ data_export（CSV 导出）/ multi_store（建分店）/ api_access（API key）
   - `auth.APIKeyAuth` + `auth.RequireAPIKeyScope(want)` 中间件
   - demo：`GET /api/external/appointments`（走 API key 鉴权 + `appointments:read` scope gate）
   - admin.html 套餐与升级 view 加 "API 访问" 卡片（basic 显示"仅旗舰版可用"，旗舰 [管理 API Key] 按钮 → 创建 / 列表 / 吊销）
-- **W2 pilot 文档**（`PILOT-v4.12.md`）—— S9-S14 共 6 个新场景
+- **W2 人工验收**：S9-S14 共 6 个新场景
   - S9 plan UI + 升级流程
   - S10 plan 过期冻结（关键路径，DB 改时间模拟）
   - S11 多店管理（basic 403 / flagship 建店 / 跨店隔离）

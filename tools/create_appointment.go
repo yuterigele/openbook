@@ -152,6 +152,9 @@ func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 
 // InvokableRun 执行创建预约
 func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if lock.IsReadOnly() {
+		return "", fmt.Errorf("预约服务暂时只读，暂不能创建预约，请稍后再试")
+	}
 	var params struct {
 		BarberName string `json:"barber_name"`
 		Customer   string `json:"customer"`

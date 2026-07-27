@@ -8,8 +8,7 @@ node_modules
 web/node_modules
 web/coverage
 data
-docs/notes
-docs/business
+docs/career
 *.exe
 *.test
 *.out

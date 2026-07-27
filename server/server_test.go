@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -702,6 +703,23 @@ func TestTrimHistory_Empty(t *testing.T) {
 	out := trimHistory([]*schema.Message{}, 5, 100)
 	if len(out) != 0 {
 		t.Errorf("want 0, got %d", len(out))
+	}
+}
+
+func TestCompactHistory_SummarizesOlderMessagesAndKeepsLatestSix(t *testing.T) {
+	history := make([]*schema.Message, 0, 13)
+	for i := 0; i < 13; i++ {
+		history = append(history, schema.UserMessage(fmt.Sprintf("message-%d", i)))
+	}
+	out := compactHistory(history)
+	if len(out) != 7 {
+		t.Fatalf("compact history length = %d, want summary + 6 recent", len(out))
+	}
+	if out[0].Role != schema.System || !strings.Contains(out[0].Content, "历史对话摘要") || !strings.Contains(out[0].Content, "message-0") {
+		t.Fatalf("first message should be a summary, got %+v", out[0])
+	}
+	if out[1].Content != "message-7" || out[6].Content != "message-12" {
+		t.Fatalf("latest six messages not preserved: first=%q last=%q", out[1].Content, out[6].Content)
 	}
 }
 

@@ -21,6 +21,34 @@ go test ./sensitive -run '^$' -bench 'BenchmarkCheck_(Hit|Miss)$' -benchmem -cou
 
 不同机器的绝对值不可直接横比；提交结果时应保留完整终端输出。
 
+## 本地并发流量模拟（可直接量化 Token 节省）
+
+`cmd/loadtest` 复用生产默认的两级限流参数（每顾客 `1 req/s`、burst `5`；全局 `100 req/s`、burst `200`），并发模拟入口流量。它不会启动 HTTP 服务、调用模型或连接 MySQL/Redis，因此不会产生模型费用或污染业务数据。
+
+```powershell
+# 分散用户攻击：10,000 个请求、100 并发、1,000 位顾客；每次调用估算输入 600、输出 200 Token
+go run ./cmd/loadtest -requests 10000 -concurrency 100 -customers 1000 -input-tokens 600 -output-tokens 200 -input-cny-per-1k 0.001 -output-cny-per-1k 0.002
+
+# 单人暴力：验证单顾客 burst=5 对模型调用/Token 上限的保护
+go run ./cmd/loadtest -requests 10000 -concurrency 100 -customers 1 -input-tokens 600 -output-tokens 200 -input-cny-per-1k 0.001 -output-cny-per-1k 0.002
+
+# 机器可读结果，便于保存到 CI 或报表
+go run ./cmd/loadtest -requests 10000 -concurrency 100 -customers 1000 -json
+
+# 验证超时不会永久占用 worker：100ms 模拟处理耗时会被 20ms 请求上限中断
+go run ./cmd/loadtest -requests 1000 -concurrency 100 -customers 1000 -simulated-work 100ms -request-timeout 20ms
+```
+
+报告中的“基线”是假设每个进入请求都直接触发一次模型调用；“优化后”只对实际放行请求计 Token。节省率为 `(基线 Token - 优化后 Token) / 基线 Token`。输入/输出 Token 与单价分别通过 `input-tokens`、`output-tokens`、`input-cny-per-1k`、`output-cny-per-1k` 设置，必须替换为目标模型的实际监控均值和采购价格；它们不是线上账单，也不代表 HTTP、模型或数据库的端到端吞吐。
+
+建议将两种攻击专项压测分开记录：分散用户攻击使用 `customers=1000`，单人暴力使用 `customers=1`。后者能直接展示每顾客 burst=5 对 Token 风险的抑制效果；两者都不是正常预约对话的到达节奏。
+
+### 用真实 API Usage 校准估算
+
+该模拟器不调用模型，因此不会伪造真实用量。用隔离的测试环境对目标模型跑一轮固定请求集，在运行前后抓取 `/metrics`，计算 `openbook_llm_prompt_tokens_total` 与 `openbook_llm_completion_tokens_total` 的增量，再除以成功模型调用数。将所得均值写回 `input-tokens` 与 `output-tokens`；同时将供应商当前输入/输出单价分别填入对应价格参数。保留“预估 Token、Usage 实测 Token、误差率”三列，才能持续校准成本结论。
+
+每个模拟请求都受 `-request-timeout`（默认 `3s`）约束，超时会计入 `timed_out` 并释放 worker；`-simulated-work` 默认是 `0s`，只用于本地验证超时机制。将来接入真实 HTTP 目标时，下游请求也必须使用该请求 context，才能真正中止网络 I/O 或模型调用。
+
 ## 待完成的端到端压测
 
 ### 目的

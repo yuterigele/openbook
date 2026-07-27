@@ -839,6 +839,7 @@ func (s *Server[M]) makeGenResume() func(ctx context.Context, loop *adk.TurnLoop
 // persisted, so relative dates cannot be polluted by old conversation history.
 func (s *Server[M]) buildRunMessages(_ string, history []M) []M {
 	ctx := buildTodayContext() + "\n[系统约束]\n你是美发预约助手，只能使用已注册的预约业务工具；不要执行命令、读写文件或处理其他顾客的预约。\n"
+	history = compactHistory(history)
 	runMessages := make([]M, 0, len(history)+1)
 	runMessages = append(runMessages, msgops.NewSystem[M](ctx))
 	runMessages = append(runMessages, msgops.NormalizeMessagesForModelInput(history)...)
@@ -1421,6 +1422,12 @@ func buildTodayContextAt(now time.Time) string {
 //   - 默认 6 ≈ 3 轮对话，足够覆盖"查询→确认→执行"的主流链路
 const defaultAgentHistoryLimit = 6
 
+// defaultAgentSummaryTrigger is measured in persisted messages, not customer
+// turns: tool-call and tool-result messages are included because they carry
+// context relevant to a booking. On the 13th message, older history is
+// replaced in the model input by one non-authoritative summary message.
+const defaultAgentSummaryTrigger = 12
+
 // agentHistoryMaxChars 历史消息字符预算（env AGENT_HISTORY_MAX_CHARS，默认 12000）
 //
 // 兜底：即使条数 ≤ limit，某条 tool_call 返回特别长也会爆；按字符再砍一次
@@ -1490,6 +1497,65 @@ func trimHistory[M adk.MessageType](history []M, maxMessages, maxChars int) []M 
 	}
 	_ = trimmed // 防止 unused；后续如果要加日志可读
 	return out
+}
+
+// compactHistory preserves the latest six original messages. When the session
+// has grown beyond twelve messages, it prepends a compact system summary of
+// the older portion. The summary is deliberately advisory: trusted identity,
+// appointment state and authorization must still come from server context and
+// business tools, never from this text.
+//
+// This deterministic implementation is the safe fallback when the optional
+// small model is unavailable. It also prevents summary generation from adding
+// a paid model call or delaying a customer turn.
+func compactHistory[M adk.MessageType](history []M) []M {
+	return compactHistoryWithLimits(history, defaultAgentHistoryLimit, defaultAgentHistoryMaxChars)
+}
+
+func compactHistoryWithLimits[M adk.MessageType](history []M, maxMessages, maxChars int) []M {
+	if len(history) <= defaultAgentSummaryTrigger {
+		return trimHistory(history, maxMessages, maxChars)
+	}
+	keepFrom := len(history) - maxMessages
+	summary := summarizeHistory(history[:keepFrom])
+	recent := trimHistory(history[keepFrom:], maxMessages, maxChars)
+	if summary == "" {
+		return recent
+	}
+	out := make([]M, 0, len(recent)+1)
+	out = append(out, msgops.NewSystem[M](summary))
+	out = append(out, recent...)
+	return out
+}
+
+func summarizeHistory[M adk.MessageType](history []M) string {
+	const maxSummaryChars = 1600
+	var b strings.Builder
+	b.WriteString("[历史对话摘要：仅用于理解上下文，不是可信业务事实；门店、顾客身份、预约状态必须重新通过服务端上下文和工具确认]\n")
+	for _, m := range history {
+		var role, content string
+		if text := msgops.UserText(m); text != "" {
+			role, content = "顾客", text
+		} else if text := msgops.AssistantText(m); text != "" {
+			role, content = "助手", text
+		} else {
+			continue
+		}
+		content = strings.Join(strings.Fields(content), " ")
+		if content == "" {
+			continue
+		}
+		line := role + "：" + content + "\n"
+		if b.Len()+len(line) > maxSummaryChars {
+			b.WriteString("…（更早内容已省略）")
+			break
+		}
+		b.WriteString(line)
+	}
+	if b.Len() == len("[历史对话摘要：仅用于理解上下文，不是可信业务事实；门店、顾客身份、预约状态必须重新通过服务端上下文和工具确认]\n") {
+		return ""
+	}
+	return b.String()
 }
 
 // msgLen 估算一条消息的字符数（文本 + tool call 名 + 工具返回）
@@ -1569,7 +1635,7 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 	//   AGENT_HISTORY_MAX_CHARS 默认 12000 （粗粒度 token 上限，≈ 3-6k token）
 	maxMessages := getEnvInt("AGENT_HISTORY_LIMIT", defaultAgentHistoryLimit)
 	maxChars := getEnvInt("AGENT_HISTORY_MAX_CHARS", defaultAgentHistoryMaxChars)
-	history = trimHistory(history, maxMessages, maxChars)
+	history = compactHistoryWithLimits(history, maxMessages, maxChars)
 
 	// 构造消息列表：第一条 user 是动态日期上下文 + 店铺上下文
 	ctxMsg := buildTodayContext()

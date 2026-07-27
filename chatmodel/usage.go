@@ -267,6 +267,7 @@ func NewUsageHandler() callbacks.Handler {
 				return ctx
 			}
 			DefaultUsageTracker.Calls.Add(1)
+			DefaultDegradationMonitor.RecordAttempt()
 			DefaultUsageTracker.NonStreamingCalls.Add(1)
 			// Try the chat path first.
 			if mo := einomodel.ConvCallbackOutput(output); mo != nil && mo.Message != nil {
@@ -287,6 +288,7 @@ func NewUsageHandler() callbacks.Handler {
 				return ctx
 			}
 			DefaultUsageTracker.Calls.Add(1)
+			DefaultDegradationMonitor.RecordAttempt()
 			DefaultUsageTracker.ErroredCalls.Add(1)
 			DefaultUsageTracker.NonStreamingCalls.Add(1)
 			return ctx
@@ -302,6 +304,7 @@ func NewUsageHandler() callbacks.Handler {
 				return ctx
 			}
 			DefaultUsageTracker.Calls.Add(1)
+			DefaultDegradationMonitor.RecordAttempt()
 			DefaultUsageTracker.StreamingCalls.Add(1)
 			if output == nil {
 				return ctx

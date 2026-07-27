@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/yuterigele/openbook/lock"
 	"github.com/yuterigele/openbook/storage"
 )
 
@@ -105,6 +106,9 @@ func (t *HandoffToHumanTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 //  3. 写埋点（storage.TrackEvent）—— 商户后台 `/api/admin/events?event_type=handoff_to_human` 可查
 //  4. 返回结构化摘要给 Agent，Agent 用自然语言转述给顾客
 func (t *HandoffToHumanTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if lock.IsReadOnly() {
+		return "当前预约服务处于只读保护中，暂不能创建人工工单；请稍后重试。", nil
+	}
 	var params struct {
 		Customer        string `json:"customer"`
 		Reason          string `json:"reason"`

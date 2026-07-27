@@ -185,6 +185,7 @@ func NewRuntimeFailoverConfig[M adk.MessageType](buildCtx context.Context, prima
 				return nil, nil, fmt.Errorf("build runtime failover provider %s: %w", provider, err)
 			}
 			log.Printf("[chatmodel] runtime failover attempt=%d provider=%s", failoverCtx.FailoverAttempt, provider)
+			DefaultDegradationMonitor.RecordFallback()
 			return model, nil, nil
 		},
 	}

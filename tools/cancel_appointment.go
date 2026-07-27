@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/yuterigele/openbook/lock"
 	"github.com/yuterigele/openbook/storage"
 )
 
@@ -46,6 +47,9 @@ func (t *CancelAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 
 // InvokableRun 执行取消预约
 func (t *CancelAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if lock.IsReadOnly() {
+		return "", fmt.Errorf("预约服务暂时只读，暂不能取消预约，请稍后再试")
+	}
 	// 解析参数
 	var params struct {
 		AppointmentID string `json:"appointment_id"`

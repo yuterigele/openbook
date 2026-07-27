@@ -2,14 +2,19 @@
 package lock
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,6 +22,12 @@ import (
 
 // Client 全局 Redis 客户端（InitRedis 后赋值）
 var Client *redis.Client
+
+var redisReadOnly atomic.Bool
+
+// IsReadOnly reports whether Redis health has crossed the write-safety
+// threshold. Reads may continue; mutations must fail closed.
+func IsReadOnly() bool { return redisReadOnly.Load() }
 
 // ErrLockNotAcquired 拿锁失败
 var ErrLockNotAcquired = errors.New("lock not acquired")
@@ -47,11 +58,81 @@ func InitRedis(ctx context.Context) (*redis.Client, error) {
 		ReadTimeout:  2 * time.Second,
 		WriteTimeout: 2 * time.Second,
 	})
+	// Keep the client even when the initial Ping fails so the health monitor can
+	// recover automatically when Redis comes back.
+	Client = c
 	if err := c.Ping(ctx).Err(); err != nil {
+		redisReadOnly.Store(true)
+		go sendFeishuRedisAlert("Redis 初始化失败，服务已进入只读模式")
 		return nil, fmt.Errorf("连接 Redis %s 失败: %w", addr, err)
 	}
-	Client = c
+	redisReadOnly.Store(false)
 	return c, nil
+}
+
+// StartHealthMonitor changes to read-only after three failed probes and
+// re-enables writes after three consecutive successful probes. It is safe to
+// call once during application startup.
+func StartHealthMonitor(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		failures, successes := 0, 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+				err := error(nil)
+				if Client == nil {
+					err = ErrRedisUnavailable
+				} else {
+					err = Client.Ping(probeCtx).Err()
+				}
+				cancel()
+				if err != nil {
+					failures++
+					successes = 0
+					if failures >= 3 && !redisReadOnly.Swap(true) {
+						fmt.Printf("[redis] health failed; switching to read-only mode\n")
+						go sendFeishuRedisAlert("Redis 连续 3 次健康检查失败，服务已进入只读模式；预约创建、取消和转人工已暂停")
+					}
+					continue
+				}
+				successes++
+				failures = 0
+				if successes >= 3 && redisReadOnly.Swap(false) {
+					fmt.Printf("[redis] health restored; write mode enabled\n")
+					go sendFeishuRedisAlert("Redis 连续 3 次健康检查成功，服务已恢复写入模式")
+				}
+			}
+		}
+	}()
+}
+
+func sendFeishuRedisAlert(text string) {
+	url := strings.TrimSpace(os.Getenv("FEISHU_ALERT_WEBHOOK_URL"))
+	if url == "" {
+		return
+	}
+	body, _ := json.Marshal(map[string]any{"msg_type": "text", "content": map[string]string{"text": "[OpenBook Redis 告警] " + text}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[redis] build Feishu alert request failed: %v", err)
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[redis] Feishu alert failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("[redis] Feishu alert returned HTTP %d", resp.StatusCode)
+	}
 }
 
 // Lock 单把锁句柄；用完记得 defer Unlock
@@ -180,6 +261,9 @@ func (l *Lock) stop() {
 //   - 获取成功后看门狗约每 ttl/3 校验 token 并续租
 //   - wait 默认 1.5s 内重试
 func AcquireAppointmentLock(ctx context.Context, barberID, date, timeStr string) (*Lock, error) {
+	if IsReadOnly() {
+		return nil, ErrRedisUnavailable
+	}
 	if Client == nil {
 		if redisLockRequired() {
 			return nil, ErrRedisUnavailable

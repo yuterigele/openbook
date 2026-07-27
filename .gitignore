@@ -57,13 +57,12 @@ web/coverage/
 # Local scratch
 /tmp/
 
+# Personal career materials
+docs/career/
+
 # 商业文档（放飞书/wiki，不入代码仓）
 商业计划书.md
 市场调研分析.md
 使用总结.md
 具体实现方案.md
 *预约流程*商业计划*.md
-
-# Personal notes (本地草稿,不入公开仓)
-docs/notes/
-docs/business/   # 本地商业/产品草稿,放飞书/wiki

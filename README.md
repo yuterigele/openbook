@@ -47,7 +47,7 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 模型失败或结果不可信时不得写库或宣称操作成功。真实密钥、企业微信凭据、数据库口令和 `JWT_SECRET` 只放本机 `.env` 或密钥管理系统，不得提交。
 
-本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。这仍是本地 Demo，不是公网生产部署方案。详细取舍见 [AI 工程复盘](docs/ai-engineering-notes.md)。
+本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。这仍是本地 Demo，不是公网生产部署方案；相关取舍见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
 
 ## 快速开始
 
@@ -63,7 +63,7 @@ docker compose up --build
 
 打开 `http://127.0.0.1:38080` 体验聊天页，商户后台为 `http://127.0.0.1:38080/admin`。Compose 默认 `AGENT_REPLY_MODE=mock`，回复只写入事件记录，不会发送到企业微信。
 
-Compose 从宿主 `.env` 注入其 `environment:` 明确列出的变量；修改 `.env` 后执行 `docker compose up -d --force-recreate app`。容器说明、停止与重置方式见 [容器 Demo](docs/CONTAINER_DEMO.md)。
+Compose 从宿主 `.env` 注入其 `environment:` 明确列出的变量；修改 `.env` 后执行 `docker compose up -d --force-recreate app`。
 
 ### 本地开发
 
@@ -110,15 +110,15 @@ go test ./internal/agent ./server -count=1
 
 预约的核心数据（理发师、服务、档期、预约状态）是强结构化且实时变化的数据，直接通过受约束业务工具查询，比向量检索更准确、可审计。当前 MVP 中，非结构化知识库不是成交闭环的瓶颈，因此不为“看起来像 AI”额外引入 embedding、索引同步与多租户召回复杂度。
 
-当商家沉淀出大量价目、活动、服务说明等非结构化资料，并出现召回质量或查询延迟瓶颈时，再评估混合检索和向量库。完整判断过程见 [AI 工程复盘](docs/ai-engineering-notes.md#为什么当前不先上向量库)。
+当商家沉淀出大量价目、活动、服务说明等非结构化资料，并出现召回质量或查询延迟瓶颈时，再评估混合检索和向量库。完整判断过程见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
 
 ## 文档
 
-- [AI 工程复盘](docs/ai-engineering-notes.md) — 相对时间、越权、提示注入、种子数据、容器化的复现与修复
-- [容器 Demo](docs/CONTAINER_DEMO.md) — 本地 Docker 启动与安全边界
-- [部署 Demo](docs/DEPLOY_DEMO.md) — systemd 裸机部署流程
 - [benchmarks](docs/benchmarks.md) — 压测方案与记录模板
-- [产品需求](docs/hair-salon-agent-prd.md) — 预约场景与业务规则
+- [产品需求](docs/product/产品需求.md) — 预约场景与业务规则
+- [美业门店痛点分析](docs/product/美业门店痛点分析.md) — 目标用户与业务痛点
+- [架构说明](docs/架构说明.md) — 运行时链路与安全边界
+- [工程问题复盘](docs/engineering/工程问题复盘.md) — 真实问题、取舍与验证
 - [CHANGELOG](docs/CHANGELOG.md) — 20+ 次版本迭代记录
 
 ## 技术栈

@@ -58,6 +58,7 @@ func main() {
 	// MESSAGE_KIND, MODEL_TYPE, API keys) are visible to every downstream call,
 	// including msgops.KindFromEnv below. No-op if .env is absent.
 	chatmodel.LoadEnv()
+	chatmodel.SendFeishuDegradationTestAlert()
 
 	// 加载敏感词词表（v4.17+：用户输入预过滤）
 	// 文件缺失时静默放过，过滤器仍可工作（空词表 = 全部放行）。
@@ -84,7 +85,10 @@ func main() {
 	// 初始化 Redis（PRD §3.3：分布式锁防并发预约冲突）
 	// 本地开发无 Redis 时也会降级放行（lock.AcquireAppointmentLock 返回无锁句柄）。
 	if _, err := lockpkg.InitRedis(ctx); err != nil {
-		log.Printf("⚠️  Redis 初始化失败（继续运行，但并发预约可能冲突）: %v", err)
+		log.Printf("⚠️  Redis 初始化失败；健康检查恢复前仅提供查询服务: %v", err)
+		lockpkg.StartHealthMonitor(ctx)
+	} else {
+		lockpkg.StartHealthMonitor(ctx)
 	}
 
 	// v4.17+：手写 worker pool（bounded concurrency + backpressure + panic recovery）

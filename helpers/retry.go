@@ -27,6 +27,11 @@ import (
 	"github.com/cloudwego/eino/adk/prebuilt/deep"
 )
 
+// maxModelRetriesPerProvider keeps transient recovery bounded for an
+// interactive booking turn. Together with provider failover, a larger value
+// can consume the entire request deadline before another provider is tried.
+const maxModelRetriesPerProvider = 2
+
 // ApplyMessageModelRetry enables model-call retries for transient rate-limit
 // and transport errors.
 //
@@ -36,7 +41,7 @@ import (
 // 在 init 阶段切 provider 兜底。
 func ApplyMessageModelRetry[M adk.MessageType](cfg *deep.TypedConfig[M]) {
 	cfg.ModelRetryConfig = &adk.TypedModelRetryConfig[M]{
-		MaxRetries: 5,
+		MaxRetries: maxModelRetriesPerProvider,
 		IsRetryAble: func(_ context.Context, err error) bool {
 			msg := err.Error()
 			// 限流类
