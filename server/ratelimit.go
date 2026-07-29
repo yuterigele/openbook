@@ -84,6 +84,11 @@ type RateLimiter struct {
 	mu  sync.Mutex
 	ll  *list.List               // *list.Element 的值指向 entry
 	idx map[string]*list.Element // OpenID → LRU 节点
+
+	// Recently evicted keys restart cold when they re-enter. This prevents
+	// LRU eviction from resetting a customer's burst quota.
+	evictedLL  *list.List
+	evictedIdx map[string]*list.Element
 }
 
 // RateLimitReason 表示请求被哪一层限流，用于日志、指标和调用方决策。
@@ -137,12 +142,14 @@ func newRateLimiter(r rate.Limit, burst, cap int, globalRate rate.Limit, globalB
 		return nil, errors.New("全局持续速率和突发容量必须同时配置")
 	}
 	rl := &RateLimiter{
-		rate:    r,
-		burst:   burst,
-		cap:     cap,
-		idx:     make(map[string]*list.Element, cap),
-		ll:      list.New(),
-		metrics: &RateLimitMetrics{},
+		rate:       r,
+		burst:      burst,
+		cap:        cap,
+		idx:        make(map[string]*list.Element, cap),
+		ll:         list.New(),
+		evictedIdx: make(map[string]*list.Element, cap),
+		evictedLL:  list.New(),
+		metrics:    &RateLimitMetrics{},
 	}
 	if globalRate > 0 {
 		rl.global = rate.NewLimiter(globalRate, globalBurst)
@@ -153,8 +160,8 @@ func newRateLimiter(r rate.Limit, burst, cap int, globalRate rate.Limit, globalB
 // Allow 判断指定键的请求当前是否可以通过。返回 true 时会从令牌桶消费一个
 // 令牌；返回 false 时，调用方应拒绝请求并提示顾客稍后再试。
 //
-// 新键首次请求会获得一个装满突发令牌的新桶，因此刚进入会话的真实顾客无需
-// 等待即可发送第一条消息。
+// 首次接入的新键会获得装满突发令牌的新桶；被 LRU 淘汰后回访的键则从冷桶
+// 恢复，避免通过身份轮换重置 burst 额度。
 //
 // Allow 支持并发调用。每次调用都会更新当前限流器实例自己的指标，不会污染
 // 默认实例或其他测试实例的统计。
@@ -184,19 +191,22 @@ func (rl *RateLimiter) limiterFor(key string) *rate.Limiter {
 	rl.mu.Lock()
 	el, ok := rl.idx[key]
 	if !ok {
+		coldStart := rl.takeEvicted(key)
 		// 达到容量上限时淘汰最久未使用的节点。
 		if rl.cap > 0 && rl.ll.Len() >= rl.cap {
 			oldest := rl.ll.Back()
 			if oldest != nil {
 				rl.ll.Remove(oldest)
-				delete(rl.idx, oldest.Value.(*entry).key)
+				oldestKey := oldest.Value.(*entry).key
+				delete(rl.idx, oldestKey)
+				rl.rememberEvicted(oldestKey)
 				rl.metrics.Evicted.Add(1)
 			}
 		}
 		// 在链表头部插入新节点（最近使用）。
 		el = rl.ll.PushFront(&entry{
 			key:   key,
-			limit: rate.NewLimiter(rl.rate, rl.burst),
+			limit: newCustomerLimiter(rl.rate, rl.burst, coldStart),
 		})
 		rl.idx[key] = el
 		rl.metrics.ActiveKeys.Store(int64(rl.ll.Len()))
@@ -206,6 +216,46 @@ func (rl *RateLimiter) limiterFor(key string) *rate.Limiter {
 	limiter := el.Value.(*entry).limit
 	rl.mu.Unlock()
 	return limiter
+}
+
+func newCustomerLimiter(r rate.Limit, burst int, coldStart bool) *rate.Limiter {
+	limiter := rate.NewLimiter(r, burst)
+	if !coldStart {
+		return limiter
+	}
+	now := time.Now()
+	limiter.SetBurstAt(now, 0)
+	limiter.SetBurstAt(now, burst)
+	return limiter
+}
+
+// rememberEvicted keeps a bounded tombstone set with the same capacity as the
+// active LRU. It is called while rl.mu is held.
+func (rl *RateLimiter) rememberEvicted(key string) {
+	if existing, ok := rl.evictedIdx[key]; ok {
+		rl.evictedLL.MoveToFront(existing)
+		return
+	}
+	if rl.evictedLL.Len() >= rl.cap {
+		oldest := rl.evictedLL.Back()
+		if oldest != nil {
+			rl.evictedLL.Remove(oldest)
+			delete(rl.evictedIdx, oldest.Value.(string))
+		}
+	}
+	rl.evictedIdx[key] = rl.evictedLL.PushFront(key)
+}
+
+// takeEvicted reports whether key was recently evicted and removes its
+// tombstone. It is called while rl.mu is held.
+func (rl *RateLimiter) takeEvicted(key string) bool {
+	el, ok := rl.evictedIdx[key]
+	if !ok {
+		return false
+	}
+	rl.evictedLL.Remove(el)
+	delete(rl.evictedIdx, key)
+	return true
 }
 
 // Wait 是阻塞式版本：持续等待，直到获得可用令牌。适用于希望排队而非直接

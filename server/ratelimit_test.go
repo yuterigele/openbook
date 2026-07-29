@@ -106,10 +106,10 @@ func TestRateLimiter_LRUEviction(t *testing.T) {
 	if rl.Size() != 2 {
 		t.Errorf("size after 3 inserts with cap=2 = %d, want 2", rl.Size())
 	}
-	// The oldest ("a") should be evicted; accessing it again
-	// creates a fresh bucket (burst=1, so this call passes).
-	if !rl.Allow("a") {
-		t.Error("evicted key should be re-creatable as fresh bucket")
+	// The oldest ("a") should be evicted. Recreating it must not
+	// replenish its burst quota.
+	if rl.Allow("a") {
+		t.Error("evicted key must restart cold instead of receiving a fresh burst")
 	}
 }
 
@@ -132,10 +132,27 @@ func TestRateLimiter_LRUAccessRefreshes(t *testing.T) {
 	if rl.Allow("a") {
 		t.Error("a should still be tracked (burst already used)")
 	}
-	// "b" was evicted — accessing it now creates a fresh bucket
-	// (burst=1, so this passes).
-	if !rl.Allow("b") {
-		t.Error("b should have been evicted and re-created with fresh burst")
+	// "b" was evicted — it must not get a fresh burst when recreated.
+	if rl.Allow("b") {
+		t.Error("b should restart cold after eviction")
+	}
+}
+
+func TestRateLimiter_EvictedKeyDoesNotRegainBurst(t *testing.T) {
+	rl := newTestRateLimiter(t, rate.Every(time.Hour), 5, 1)
+	for i := 0; i < 5; i++ {
+		if !rl.Allow("a") {
+			t.Fatalf("a request %d should consume its initial burst", i+1)
+		}
+	}
+	if rl.Allow("a") {
+		t.Fatal("a burst should be exhausted")
+	}
+	if !rl.Allow("b") { // Evicts a.
+		t.Fatal("fresh key b should receive its initial burst")
+	}
+	if rl.Allow("a") { // Recreates a from its tombstone.
+		t.Fatal("evicted key a must not regain a burst")
 	}
 }
 
