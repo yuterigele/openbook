@@ -47,7 +47,7 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 ## 可观测性
 
-Docker Compose 已包含本地观测栈：应用的 `/metrics` 由 Prometheus 每 15 秒抓取；Grafana Alloy（Promtail 的后继）通过只读 Docker Socket 采集带 `logging=openbook` 标签的应用容器日志并写入 Loki；Grafana 预置 Prometheus、Loki 数据源及 OpenBook 概览看板。
+Docker Compose 默认仅启动应用、MySQL、Redis 和数据库初始化，适合低配线上服务器。可观测性栈位于 `observability` profile，需在本地显式启动：`docker compose --profile observability up -d`。启用后，应用的 `/metrics` 由 Prometheus 每 15 秒抓取；Grafana Alloy（Promtail 的后继）通过只读 Docker Socket 采集带 `logging=openbook` 标签的应用容器日志并写入 Loki；Grafana 预置 Prometheus、Loki 数据源及 OpenBook 概览看板。
 
 ```text
 OpenBook /metrics → Prometheus → Grafana
@@ -82,6 +82,8 @@ Grafana 通用 Webhook 的 `Message` 字段不是完整 HTTP 请求体，不能�
 本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。这仍是本地 Demo，不是公网生产部署方案；相关取舍见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
 
 ## 快速开始
+
+部署到预发布或生产前，请先阅读[环境分层与发布约定](docs/deployment/environments.md)。本地 `.env` 仅用于 development；staging 和 production 必须使用独立凭据、独立数据库/Redis 与独立回调配置。
 
 ### Docker（推荐）
 
@@ -126,7 +128,7 @@ go run .
 
 本地 `go run .` 会在 `127.0.0.1:6060` 开启 pprof：`http://127.0.0.1:6060/debug/pprof/`。下载 `/debug/pprof/trace?seconds=5` 后可用 `go tool trace trace.out` 查看。不要将该端口暴露到公网。
 
-Compose 将容器内 pprof 映射到宿主机 `127.0.0.1:6060`，可直接访问上述地址；端口不会暴露到公网。
+默认 Compose 不向宿主机暴露 pprof。仅本地排障时，在 `.env` 设置 `PPROF_ADDR=0.0.0.0:6060`，并临时添加 `127.0.0.1:6060:6060` 端口映射后再访问。
 
 ## 测试重点
 

@@ -104,22 +104,26 @@ services:
       # Default to a safe local demonstration mode: replies are recorded instead
       # of being sent to a real enterprise-WeChat account.
       AGENT_REPLY_MODE: ${AGENT_REPLY_MODE:-mock}
+      APP_ENV: ${APP_ENV:-development}
+      REDIS_REQUIRED: ${REDIS_REQUIRED:-0}
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-change-me-before-exposing}
       DEFAULT_PLATFORM_ADMIN_USERNAME: ${DEFAULT_PLATFORM_ADMIN_USERNAME:-platform}
       DEFAULT_PLATFORM_ADMIN_PASSWORD: ${DEFAULT_PLATFORM_ADMIN_PASSWORD:-change-me-before-exposing}
       PORT: "38080"
-      PPROF_ADDR: 0.0.0.0:6060
+      # 不向宿主机暴露 pprof；本地排障可通过 .env 覆盖为 0.0.0.0:6060，
+      # 并临时恢复 6060 端口映射。
+      PPROF_ADDR: ${PPROF_ADDR:-}
       TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:38080:38080"
-      - "127.0.0.1:6060:6060"
     volumes:
       - app_data:/app/data
-    labels:
-      logging: openbook
 
+  # 本地可观测性栈不会随默认 `docker compose up` 启动。
+  # 需要时使用：docker compose --profile observability up -d
   prometheus:
+    profiles: ["observability"]
     image: prom/prometheus:v3.5.0
     restart: unless-stopped
     command:
@@ -137,6 +141,7 @@ services:
       - app
 
   loki:
+    profiles: ["observability"]
     image: grafana/loki:3.7.0
     restart: unless-stopped
     command: -config.file=/etc/loki/loki.yml
@@ -147,6 +152,7 @@ services:
       - "127.0.0.1:3100:3100"
 
   alloy:
+    profiles: ["observability"]
     image: grafana/alloy:v1.10.0
     restart: unless-stopped
     command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
@@ -157,6 +163,7 @@ services:
       - loki
 
   grafana:
+    profiles: ["observability"]
     image: grafana/grafana:11.6.0
     restart: unless-stopped
     environment:
@@ -175,6 +182,7 @@ services:
       - loki
 
   feishu-alert-bridge:
+    profiles: ["observability"]
     build:
       context: ./observability/feishu-alert-bridge
       dockerfile: Dockerfile
