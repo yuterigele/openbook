@@ -83,6 +83,8 @@ services:
       OPENBOOK_LLM_CHAIN: ${OPENBOOK_LLM_CHAIN:-deepseek,openai,ark}
       FEISHU_ALERT_WEBHOOK_URL: ${FEISHU_ALERT_WEBHOOK_URL:-}
       FEISHU_ALERT_TEST: ${FEISHU_ALERT_TEST:-0}
+      LLM_DEBUG_LOG: ${LLM_DEBUG_LOG:-0}
+      LLM_DEBUG_LOG_MAX_CHARS: ${LLM_DEBUG_LOG_MAX_CHARS:-4000}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
@@ -114,7 +116,79 @@ services:
       - "127.0.0.1:6060:6060"
     volumes:
       - app_data:/app/data
+    labels:
+      logging: openbook
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - app
+
+  loki:
+    image: grafana/loki:3.7.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  alloy:
+    image: grafana/alloy:v1.10.0
+    restart: unless-stopped
+    command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-before-exposing}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://127.0.0.1:33000}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:33000:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+  feishu-alert-bridge:
+    build:
+      context: ./observability/feishu-alert-bridge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Do not put the real Feishu webhook in Grafana contact points.
+      FEISHU_GRAFANA_WEBHOOK_URL: ${FEISHU_GRAFANA_WEBHOOK_URL:-}
+      FEISHU_ALERT_BRIDGE_ADDR: ":8080"
+    depends_on:
+      - grafana
 
 volumes:
   mysql_data:
   app_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:

@@ -45,6 +45,34 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 - 运行时使用 `Asia/Shanghai` 日期上下文，并做敏感内容、输入信任、限流与工具错误保护。
 - 平台超管可查看 Agent/工具成功率、Token 用量与阈值告警。
 
+## 可观测性
+
+Docker Compose 已包含本地观测栈：应用的 `/metrics` 由 Prometheus 每 15 秒抓取；Grafana Alloy（Promtail 的后继）通过只读 Docker Socket 采集带 `logging=openbook` 标签的应用容器日志并写入 Loki；Grafana 预置 Prometheus、Loki 数据源及 OpenBook 概览看板。
+
+```text
+OpenBook /metrics → Prometheus → Grafana
+OpenBook stdout → Grafana Alloy → Loki → Grafana
+```
+
+启动后可访问：
+
+- Grafana：`http://127.0.0.1:33000`（账号和密码由 `GRAFANA_ADMIN_*` 配置）
+- Prometheus：`http://127.0.0.1:9090`
+- Loki 就绪检查：`http://127.0.0.1:3100/ready`
+
+观测服务均默认只绑定本机。Alloy 需要挂载 Docker Socket 才能发现并读取容器日志，因此只应在受信任的本机或受控主机上使用；生产环境应改用受限的日志采集身份与集中式存储。Prometheus 预置了 OpenBook 指标不可抓取、LLM 错误率过高、限流拒绝过多三条告警规则；需接入 Alertmanager 或 Grafana Alerting 接收器后才会对外通知。
+
+### Grafana 告警发送到飞书
+
+Grafana 通用 Webhook 的 `Message` 字段不是完整 HTTP 请求体，不能直接对接飞书机器人。Compose 包含 `feishu-alert-bridge`，负责把 Grafana 标准告警转换成飞书机器人消息；该服务没有对宿主机暴露端口。
+
+1. 在飞书群机器人设置中创建或轮换 Webhook，将完整地址只写入本机 `.env`：`FEISHU_GRAFANA_WEBHOOK_URL=...`。
+2. 运行 `docker compose up -d --build feishu-alert-bridge`。
+3. Grafana → Alerting → Contact points 新建 `Webhook`，URL 填写 `http://feishu-alert-bridge:8080/grafana`，HTTP Method 选 `POST`，`Title` 和 `Message` 可留默认值；不要在 Grafana 填写飞书真实地址。
+4. 点击 Contact point 的 **Test**。成功时飞书会收到格式化告警；失败可用 `docker compose logs feishu-alert-bridge` 查看 HTTP 状态，日志不会输出 Webhook 地址。
+
+若飞书机器人开启了关键词校验，请在关键词中加入 `OpenBook`；若开启签名校验，则需关闭签名校验或另行配置带签名的转发器。
+
 ## 安全边界
 
 顾客消息不拥有文件系统、Shell、任意 SQL 或商户后台能力。Agent 仅注册预约业务所需工具；查询、取消和改约均忽略模型传入的身份字段，只使用服务端从微信客服会话或本地会话写入的可信上下文，并校验门店隔离、资源归属和调用者权限。
@@ -68,6 +96,8 @@ docker compose up --build
 打开 `http://127.0.0.1:38080` 体验聊天页，商户后台为 `http://127.0.0.1:38080/admin`。Compose 默认 `AGENT_REPLY_MODE=mock`，回复只写入事件记录，不会发送到企业微信。
 
 Compose 从宿主 `.env` 注入其 `environment:` 明确列出的变量；修改 `.env` 后执行 `docker compose up -d --force-recreate app`。
+
+本地排障如需在容器日志中查看 LLM 请求和回复，可设置 `LLM_DEBUG_LOG=1`（可用 `LLM_DEBUG_LOG_MAX_CHARS` 控制单条上限）。日志会脱敏手机号和常见密钥，但请求仍可能包含顾客内容；仅短时启用，排障后立即改回 `0` 并重启应用。
 
 ### 本地开发
 

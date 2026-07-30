@@ -55,6 +55,7 @@ func (r *Reminder) Stop(ctx context.Context) error {
 
 func (r *Reminder) scanAndRemind() {
 	if storage.DB == nil {
+		DefaultTaskMetrics.RecordFailure("reminder")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -63,9 +64,11 @@ func (r *Reminder) scanAndRemind() {
 	appts, err := storage.FindAppointmentsToRemind(ctx)
 	if err != nil {
 		log.Printf("[cron] 查询待提醒预约失败: %v", err)
+		DefaultTaskMetrics.RecordFailure("reminder")
 		return
 	}
 	if len(appts) == 0 {
+		DefaultTaskMetrics.RecordSuccess("reminder")
 		return
 	}
 	log.Printf("[cron] 找到 %d 条待提醒预约", len(appts))
@@ -78,6 +81,7 @@ func (r *Reminder) scanAndRemind() {
 		}
 		_ = storage.MarkReminderSent(ctx, appt.ID, "pre_2h", "wecom", "sent", "")
 	}
+	DefaultTaskMetrics.RecordSuccess("reminder")
 }
 
 func (r *Reminder) sendReminder(ctx context.Context, appt *storage.Appointment) error {

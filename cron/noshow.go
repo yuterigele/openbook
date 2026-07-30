@@ -62,6 +62,7 @@ func (n *NoShowScanner) Stop(ctx context.Context) error {
 // 节假日跳过：店铺设为休息日不营业的日期不算爽约（避免误判）。
 func (n *NoShowScanner) scan() {
 	if storage.DB == nil {
+		DefaultTaskMetrics.RecordFailure("noshow")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -82,6 +83,7 @@ func (n *NoShowScanner) scan() {
 		Where("status = ? AND date >= ? AND date <= ?", "active", yesterday, tomorrow).
 		Find(&appts).Error; err != nil {
 		log.Printf("[noshow] 扫描失败: %v", err)
+		DefaultTaskMetrics.RecordFailure("noshow")
 		return
 	}
 
@@ -114,6 +116,7 @@ func (n *NoShowScanner) scan() {
 			log.Printf("[noshow] 标记失败 appt=%s: %v", a.ID, err)
 		}
 	}
+	DefaultTaskMetrics.RecordSuccess("noshow")
 }
 
 func (n *NoShowScanner) markNoShow(ctx context.Context, appt *storage.Appointment) error {

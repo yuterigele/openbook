@@ -25,6 +25,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 
+	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/helpers"
 	"github.com/yuterigele/openbook/msgops"
 )
@@ -283,6 +284,9 @@ func streamEvents[M adk.MessageType](w io.Writer, surfaceID string, rootChildren
 				})
 			}
 			log.Printf("[a2ui] assistant stream: content=%d chars toolCalls=%d", accContent.Len(), len(toolCalls))
+			if accContent.Len() > 0 {
+				chatmodel.DebugLogResponse("web-agent-stream", accContent.String())
+			}
 
 			if !writerBroken {
 				for _, tc := range toolCalls {
@@ -309,6 +313,9 @@ func streamEvents[M adk.MessageType](w io.Writer, surfaceID string, rootChildren
 			content := msgops.AssistantText(msg)
 			toolCalls := msgops.ToolCalls(msg)
 			log.Printf("[a2ui] assistant message: content=%d chars toolCalls=%d", len(content), len(toolCalls))
+			if content != "" {
+				chatmodel.DebugLogResponse("web-agent", content)
+			}
 
 			if !writerBroken {
 				for _, tc := range toolCalls {

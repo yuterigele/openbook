@@ -1,0 +1,83 @@
+groups:
+  - name: openbook
+    rules:
+      - alert: OpenBookMetricsTargetDown
+        expr: up{job="openbook"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenBook metrics endpoint is unreachable
+          description: Prometheus has not scraped the OpenBook /metrics endpoint for two minutes.
+
+      - alert: OpenBookHighLLMErrorRate
+        expr: increase(openbook_llm_errored_calls_total[5m]) / clamp_min(increase(openbook_llm_calls_total[5m]), 1) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenBook LLM error rate is above 10%
+          description: More than 10% of LLM calls failed during the last five minutes.
+
+      - alert: OpenBookRateLimitRejections
+        expr: increase(openbook_ratelimit_throttled_total[5m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenBook is rejecting a high number of requests
+          description: More than 20 requests were rejected by the rate limiter in five minutes.
+
+      - alert: OpenBookRedisReadOnly
+        expr: openbook_redis_read_only == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenBook 已进入 Redis 只读降级
+          description: Redis 异常，写入类预约操作已安全暂停。
+
+      - alert: OpenBookHighLLMFallbackRate
+        expr: increase(openbook_llm_runtime_fallbacks_total[5m]) / clamp_min(increase(openbook_llm_calls_total[5m]), 1) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenBook 模型运行时降级率超过 20%
+          description: 首选模型频繁失败并切换到备用模型，请检查配额、网络和模型服务。
+
+      - alert: OpenBookHighToolFailureRate
+        expr: sum(increase(openbook_agent_tool_failures_total[5m])) / clamp_min(sum(increase(openbook_agent_tool_calls_total[5m])), 1) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenBook Agent 工具失败率超过 10%
+          description: 请按 tool 标签下钻，检查预约冲突、数据库、参数或权限校验。
+
+      - alert: OpenBookFeishuAlertBridgeDown
+        expr: up{job="feishu-alert-bridge"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 飞书告警桥接服务不可用
+          description: Grafana 无法通过 feishu-alert-bridge 投递告警，请检查容器及 Webhook 配置。
+
+      - alert: OpenBookCronTaskFailures
+        expr: increase(openbook_cron_failures_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenBook 定时任务执行失败
+          description: 某项高频定时任务失败，请按 task 标签检查数据库与任务日志。
+
+      - alert: OpenBookCronHeartbeatMissing
+        expr: time() - openbook_cron_last_success_timestamp_seconds{task=~"reminder|leave_expirer"} > 300
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenBook 高频定时任务超过 5 分钟未成功执行
+          description: 请检查应用进程、调度器和数据库连接；task 标签标识任务名称。

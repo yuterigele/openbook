@@ -20,9 +20,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/yuterigele/openbook/chatmodel"
+	"github.com/yuterigele/openbook/cron"
+	"github.com/yuterigele/openbook/lock"
 	"github.com/yuterigele/openbook/sensitive"
 	"github.com/yuterigele/openbook/server"
 )
@@ -48,8 +51,24 @@ func metricsHandler(_ context.Context, c *app.RequestContext) {
 	c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	body := sensitive.DefaultMetrics.PrometheusText() +
 		"\n" + chatmodel.DefaultUsageTracker.PrometheusText() +
-		"\n" + rateLimitPromText()
+		"\n" + rateLimitPromText() +
+		"\n" + agentMetricsPromText() +
+		"\n" + availabilityPromText() +
+		"\n" + cron.DefaultTaskMetrics.PrometheusText()
 	c.String(http.StatusOK, body)
+}
+
+func availabilityPromText() string {
+	readOnly := 0
+	if lock.IsReadOnly() {
+		readOnly = 1
+	}
+	return fmt.Sprintf("# HELP openbook_redis_read_only Whether Redis safety mode has disabled business writes (1=true).\n"+
+		"# TYPE openbook_redis_read_only gauge\n"+
+		"openbook_redis_read_only %d\n"+
+		"# HELP openbook_llm_runtime_fallbacks_total Total runtime LLM provider failovers.\n"+
+		"# TYPE openbook_llm_runtime_fallbacks_total counter\n"+
+		"openbook_llm_runtime_fallbacks_total %d\n", readOnly, chatmodel.RuntimeFallbackAttempts())
 }
 
 // rateLimitPromText renders the per-customer rate-limiter counters
@@ -79,4 +98,33 @@ func rateLimitPromText() string {
 		snap.Allowed, snap.Throttled, snap.CustomerThrottled,
 		snap.GlobalThrottled, snap.Evicted, snap.ActiveKeys,
 	)
+}
+
+func agentMetricsPromText() string {
+	snap := server.DefaultAgentMetrics.Snapshot()
+	body := fmt.Sprintf(
+		"# HELP openbook_agent_tasks_started_total Total Agent tasks started.\n"+
+			"# TYPE openbook_agent_tasks_started_total counter\n"+
+			"openbook_agent_tasks_started_total %d\n"+
+			"# HELP openbook_agent_tasks_succeeded_total Total Agent tasks completed successfully.\n"+
+			"# TYPE openbook_agent_tasks_succeeded_total counter\n"+
+			"openbook_agent_tasks_succeeded_total %d\n"+
+			"# HELP openbook_agent_tasks_failed_total Total Agent tasks that failed.\n"+
+			"# TYPE openbook_agent_tasks_failed_total counter\n"+
+			"openbook_agent_tasks_failed_total %d\n",
+		snap.TasksStarted, snap.TasksSucceeded, snap.TasksFailed,
+	)
+	body += "# HELP openbook_agent_tool_calls_total Total Agent tool calls by tool name.\n" +
+		"# TYPE openbook_agent_tool_calls_total counter\n" +
+		"# HELP openbook_agent_tool_failures_total Total failed Agent tool calls by tool name.\n" +
+		"# TYPE openbook_agent_tool_failures_total counter\n"
+	for _, tool := range snap.Tools {
+		label := strconv.Quote(tool.Name)
+		body += fmt.Sprintf(
+			"openbook_agent_tool_calls_total{tool=%s} %d\n"+
+				"openbook_agent_tool_failures_total{tool=%s} %d\n",
+			label, tool.Calls, label, tool.Failed,
+		)
+	}
+	return body
 }

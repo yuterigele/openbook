@@ -129,6 +129,10 @@ func main() {
 	// /metrics 端点 + 告警（>X tokens / min）+ per-shop 看板都用得上。
 	// Always wired in (不像 cozeloop 需要外部凭证)。
 	callbacks.AppendGlobalHandlers(chatmodel.NewUsageHandler())
+	if debugHandler := chatmodel.NewDebugLogHandler(); debugHandler != nil {
+		callbacks.AppendGlobalHandlers(debugHandler)
+		log.Printf("[llm-debug] prompt/response logging enabled; content is redacted and truncated")
+	}
 
 	switch msgops.KindFromEnv() {
 	case msgops.KindAgentic:

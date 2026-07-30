@@ -41,6 +41,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/yuterigele/openbook/a2ui"
+	"github.com/yuterigele/openbook/chatmodel"
 	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
 	"github.com/yuterigele/openbook/mem"
 	"github.com/yuterigele/openbook/msgops"
@@ -343,6 +344,7 @@ func (s *Server[M]) handleChat(ctx context.Context, c *app.RequestContext) {
 	}
 
 	log.Printf("[chat] session=%s msg=%q", id, req.Message)
+	chatmodel.DebugLogPrompt("web-agent", req.Message)
 
 	sess, err := s.cfg.Store.GetOrCreate(id)
 	if err != nil {

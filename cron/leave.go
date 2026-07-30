@@ -72,6 +72,7 @@ func (l *LeaveExpirer) Stop(ctx context.Context) error {
 //   - 商户也不需要被通知"你的请假过期了"——他从列表里能看到状态变化
 func (l *LeaveExpirer) scan() {
 	if storage.DB == nil {
+		DefaultTaskMetrics.RecordFailure("leave_expirer")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -81,9 +82,11 @@ func (l *LeaveExpirer) scan() {
 	expired, err := storage.ExpireOverdueLeaves(ctx, now)
 	if err != nil {
 		log.Printf("[leave-expirer] 扫描失败: %v", err)
+		DefaultTaskMetrics.RecordFailure("leave_expirer")
 		return
 	}
 	if expired > 0 {
 		log.Printf("[leave-expirer] 已过期 %d 条请假", expired)
 	}
+	DefaultTaskMetrics.RecordSuccess("leave_expirer")
 }

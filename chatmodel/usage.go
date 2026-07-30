@@ -255,22 +255,23 @@ func addUsageFromMessage(t *UsageTracker, usage *schema.TokenUsage) {
 //	callbacks.AppendGlobalHandlers(chatmodel.NewUsageHandler())
 //
 // once at startup. The handler is then invoked for every component
-// (model, tool, agent, etc.) but filters to model calls via
-// RunInfo.Name == "ChatModel".
+// (model, tool, agent, etc.). Component names are implementation details
+// (the ADK streaming path does not always use "ChatModel"), so successful
+// calls are identified from their typed model output rather than name.
 //
 // Both the chat path (*schema.Message) and the agentic path
 // (*schema.AgenticMessage) are supported via separate Conv helpers.
 func NewUsageHandler() callbacks.Handler {
 	return callbacks.NewHandlerBuilder().
 		OnEndFn(func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
-			if info == nil || info.Name != "ChatModel" {
+			if !isModelRun(info) {
 				return ctx
 			}
-			DefaultUsageTracker.Calls.Add(1)
-			DefaultDegradationMonitor.RecordAttempt()
-			DefaultUsageTracker.NonStreamingCalls.Add(1)
 			// Try the chat path first.
 			if mo := einomodel.ConvCallbackOutput(output); mo != nil && mo.Message != nil {
+				DefaultUsageTracker.Calls.Add(1)
+				DefaultDegradationMonitor.RecordAttempt()
+				DefaultUsageTracker.NonStreamingCalls.Add(1)
 				addUsageFromMessage(DefaultUsageTracker, mo.Message.ResponseMeta.Usage)
 				return ctx
 			}
@@ -278,13 +279,16 @@ func NewUsageHandler() callbacks.Handler {
 			// token-usage field is named "TokenUsage", not
 			// "Usage" as in the chat path's ResponseMeta.
 			if ao := einomodel.ConvAgenticCallbackOutput(output); ao != nil && ao.Message != nil && ao.Message.ResponseMeta != nil {
+				DefaultUsageTracker.Calls.Add(1)
+				DefaultDegradationMonitor.RecordAttempt()
+				DefaultUsageTracker.NonStreamingCalls.Add(1)
 				addUsageFromMessage(DefaultUsageTracker, ao.Message.ResponseMeta.TokenUsage)
 				return ctx
 			}
 			return ctx
 		}).
 		OnErrorFn(func(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
-			if info == nil || info.Name != "ChatModel" {
+			if !isModelRun(info) {
 				return ctx
 			}
 			DefaultUsageTracker.Calls.Add(1)
@@ -300,15 +304,12 @@ func NewUsageHandler() callbacks.Handler {
 			// with ResponseMeta.Usage. We must consume the stream
 			// (close after EOF) — the comment on OnEndWithStreamOutputFn
 			// warns "MUST close the reader after consuming it".
-			if info == nil || info.Name != "ChatModel" {
+			if !isModelRun(info) || output == nil {
 				return ctx
 			}
 			DefaultUsageTracker.Calls.Add(1)
 			DefaultDegradationMonitor.RecordAttempt()
 			DefaultUsageTracker.StreamingCalls.Add(1)
-			if output == nil {
-				return ctx
-			}
 			defer output.Close()
 			// Drain the stream. The last message carries the
 			// usage. Earlier chunks are the streamed text
@@ -329,4 +330,11 @@ func NewUsageHandler() callbacks.Handler {
 			}
 		}).
 		Build()
+}
+
+// The typed deep-agent streaming path reports its configured model under the
+// agent name, while direct Eino model calls use ChatModel. Keep this allowlist
+// narrow so tools and agent events cannot inflate the usage counter.
+func isModelRun(info *callbacks.RunInfo) bool {
+	return info != nil && (info.Name == "ChatModel" || info.Name == "BarberAssistant")
 }

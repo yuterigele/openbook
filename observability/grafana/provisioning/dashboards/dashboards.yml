@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: OpenBook
+    orgId: 1
+    folder: OpenBook
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

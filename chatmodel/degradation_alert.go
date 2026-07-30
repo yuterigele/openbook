@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +34,8 @@ type DegradationMonitor struct {
 
 var DefaultDegradationMonitor = &DegradationMonitor{client: &http.Client{Timeout: 5 * time.Second}}
 
+var runtimeFallbackAttempts atomic.Int64
+
 // SendFeishuDegradationTestAlert sends one connectivity-check notification
 // when explicitly enabled. It never changes alert counters or state.
 func SendFeishuDegradationTestAlert() {
@@ -44,8 +47,14 @@ func SendFeishuDegradationTestAlert() {
 	go DefaultDegradationMonitor.send("连通性测试", 0, 0, 0)
 }
 
-func (m *DegradationMonitor) RecordAttempt()  { m.record(false) }
-func (m *DegradationMonitor) RecordFallback() { m.record(true) }
+func (m *DegradationMonitor) RecordAttempt() { m.record(false) }
+func (m *DegradationMonitor) RecordFallback() {
+	runtimeFallbackAttempts.Add(1)
+	m.record(true)
+}
+
+// RuntimeFallbackAttempts returns process-lifetime LLM provider switches.
+func RuntimeFallbackAttempts() int64 { return runtimeFallbackAttempts.Load() }
 
 func (m *DegradationMonitor) record(fallback bool) {
 	now := time.Now()
