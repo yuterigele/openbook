@@ -79,7 +79,7 @@ Grafana 通用 Webhook 的 `Message` 字段不是完整 HTTP 请求体，不能�
 
 模型失败或结果不可信时不得写库或宣称操作成功。真实密钥、企业微信凭据、数据库口令和 `JWT_SECRET` 只放本机 `.env` 或密钥管理系统，不得提交。
 
-本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。这仍是本地 Demo，不是公网生产部署方案；相关取舍见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
+本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。`.env.example` 会通过 `COMPOSE_FILE` 加载本地数据库端口映射；线上 `.env` 应只设置 `COMPOSE_FILE=docker-compose.yml`，从而完全不向宿主机发布 MySQL 和 Redis 端口。这仍是本地 Demo，不是公网生产部署方案；相关取舍见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
 
 ## 快速开始
 
@@ -98,6 +98,14 @@ docker compose up --build
 打开 `http://127.0.0.1:38080` 体验聊天页，商户后台为 `http://127.0.0.1:38080/admin`。Compose 默认 `AGENT_REPLY_MODE=mock`，回复只写入事件记录，不会发送到企业微信。
 
 Compose 从宿主 `.env` 注入其 `environment:` 明确列出的变量；修改 `.env` 后执行 `docker compose up -d --force-recreate app`。
+
+生产环境请在其未提交的 `.env` 中设置：
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml
+```
+
+这样 MySQL 和 Redis 仅供 Compose 内部服务访问；无需再注释 `docker-compose.yml` 的 `ports`，后续 `git pull` 也不会产生这类冲突。
 
 本地排障如需在容器日志中查看 LLM 请求和回复，可设置 `LLM_DEBUG_LOG=1`（可用 `LLM_DEBUG_LOG_MAX_CHARS` 控制单条上限）。日志会脱敏手机号和常见密钥，但请求仍可能包含顾客内容；仅短时启用，排障后立即改回 `0` 并重启应用。
 

@@ -1,0 +1,10 @@
+# 仅用于本地开发：将数据库端口绑定到回环地址，不对局域网或公网暴露。
+# 由 .env.example 中的 COMPOSE_FILE 自动加载；生产环境不要加载此文件。
+services:
+  mysql:
+    ports:
+      - "${MYSQL_DOCKER_BIND_ADDR:-127.0.0.1}:${MYSQL_DOCKER_PORT:-3306}:3306"
+
+  redis:
+    ports:
+      - "${REDIS_DOCKER_BIND_ADDR:-127.0.0.1}:${REDIS_DOCKER_PORT:-6379}:6379"
