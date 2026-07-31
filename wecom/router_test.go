@@ -34,4 +34,26 @@ func TestRouter_SharedCorpIDRoutesEachShopByOpenKfID(t *testing.T) {
 	if _, ok := r.SingleClient(); !ok {
 		t.Fatal("SingleClient() = no client, want shared-CorpID client")
 	}
+	if _, ok := r.SingleShop(); ok {
+		t.Fatal("SingleShop() succeeded for a two-shop router")
+	}
+}
+
+func TestRouterSingleShopFallback(t *testing.T) {
+	r := NewRouter()
+	shop := &storage.Shop{
+		ID:                  "only-shop",
+		WecomCorpID:         "ww-single",
+		WecomSecret:         "secret",
+		WecomToken:          "token",
+		WecomEncodingAESKey: "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+	}
+	if err := r.Register(shop); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	sc, ok := r.SingleShop()
+	if !ok || sc.ShopID != shop.ID {
+		t.Fatalf("SingleShop() = %#v, %v; want %q", sc, ok, shop.ID)
+	}
 }

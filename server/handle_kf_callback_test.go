@@ -56,8 +56,9 @@ type fakeFetcher struct {
 	errs    []error
 
 	// SyncMsg 调用记录
-	syncCalls  int32
-	lastCursor string
+	syncCalls    int32
+	lastOpenKfID string
+	lastCursor   string
 
 	// SendKfTextMessage 配置 + 调用记录
 	kfErr   error
@@ -68,10 +69,11 @@ type fakeFetcher struct {
 	textCalls int32
 }
 
-func (f *fakeFetcher) SyncMsg(_ context.Context, cursor, _ string, _ int) (*wecom.SyncKfMsgResult, error) {
+func (f *fakeFetcher) SyncMsg(_ context.Context, openKfID, cursor, _ string, _ int) (*wecom.SyncKfMsgResult, error) {
 	atomic.AddInt32(&f.syncCalls, 1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastOpenKfID = openKfID
 	f.lastCursor = cursor
 	idx := int(atomic.LoadInt32(&f.syncCalls)) - 1
 	if idx >= len(f.results) {
@@ -202,6 +204,10 @@ func TestHandleKfCallback_FirstPull_WritesCursorAndSeen(t *testing.T) {
 		Token:    "tok",
 	}
 	srv.handleKfCallback(context.Background(), fetcher, callback, "shop-1")
+
+	if fetcher.lastOpenKfID != callback.OpenKfId {
+		t.Fatalf("sync_msg open_kfid = %q, want callback value %q", fetcher.lastOpenKfID, callback.OpenKfId)
+	}
 
 	// 等异步 goroutine 跑完 sendReply
 	waitForCalls(t, fetcher, 1, 3*time.Second)

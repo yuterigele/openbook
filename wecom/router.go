@@ -194,3 +194,18 @@ func (r *Router) SingleClient() (*Client, bool) {
 	}
 	return nil, false
 }
+
+// SingleShop returns the only configured shop. It is used as a safe fallback
+// for a single-shop deployment when the first WeChat Customer Service callback
+// reveals its open_kfid before that ID has been persisted in the shop record.
+func (r *Router) SingleShop() (*ShopCrypto, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.shops) != 1 {
+		return nil, false
+	}
+	for _, sc := range r.shops {
+		return sc, true
+	}
+	return nil, false
+}

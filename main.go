@@ -508,7 +508,7 @@ func parseRecipients(raw string) []string {
 //
 // 历史 bug 链：
 //   - v4.9.3 修：按 external_user_id / wechat_open_id 自动选 SendKfTextMessage / SendTextMessage（修 81013）
-//   - v4.10 修：多店路由（之前全平台用 DefaultOpenKfID，A 店顾客发到 B 店 KF 会 93001900）
+//   - v4.10 修：多店路由（禁止使用跨店硬编码 open_kfid）
 //   - v4.10 修：按 shopID 反查 client + openKfID
 //   - v4.10 修：ChannelSelector 选通道，phone-only 顾客走 skipped 而非报 err
 //   - v4.10 修：SendWithRetry 3 次指数退避，单次抖动不丢消息
@@ -554,9 +554,7 @@ func buildLeaveNotificationSender(router *wecom.Router, fallbackClient *wecom.Cl
 		case storage.NotifChannelWeComKF:
 			kfID := openKfID
 			if kfID == "" {
-				// shop 没配 openKfID → fallback 到全局默认（仅单店部署兼容）
-				kfID = wecom.DefaultOpenKfID
-				log.Printf("[leave] 店铺 %s 未配置 open_kf_id，临时使用 DefaultOpenKfID（多店场景下应填正确的）", appt.ShopID)
+				return fmt.Errorf("店铺 %s 未配置 open_kf_id，无法发送微信客服通知", appt.ShopID)
 			}
 			sender = storage.WeComSenderFunc(func(ctx context.Context, target, content string) error {
 				return client.SendKfTextMessage(ctx, target, kfID, content)

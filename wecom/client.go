@@ -1,16 +1,16 @@
 package wecom
 
 import (
-		"bytes"
-		"context"
-		"encoding/json"
-		"fmt"
-		"io"
-		"log"
-		"net/http"
-		"sync"
-		"time"
-	)
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+)
 
 const (
 	// 获取 Access Token
@@ -91,12 +91,12 @@ func (c *Client) GetAccessToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("获取 Access Token 失败: %d %s", result.Errcode, result.Errmsg)
 	}
 
-		c.accessToken = result.AccessToken
-		c.accessTokenExp = time.Now().Add(time.Duration(result.ExpiresIn-300) * time.Second) // 提前5分钟过期
+	c.accessToken = result.AccessToken
+	c.accessTokenExp = time.Now().Add(time.Duration(result.ExpiresIn-300) * time.Second) // 提前5分钟过期
 
-		log.Printf("[wecom] access_token: %s (expires_in=%d)", c.accessToken, result.ExpiresIn)
+	log.Printf("[wecom] access_token 获取成功 (expires_in=%d)", result.ExpiresIn)
 
-		return c.accessToken, nil
+	return c.accessToken, nil
 }
 
 // SendTextMessage 发送文本消息
@@ -150,10 +150,6 @@ func (c *Client) SendTextMessage(ctx context.Context, userID, content string) er
 	return nil
 }
 
-// OpenKfID 微信客服ID（来自回调事件的OpenKfId字段，非固定值）
-// 实际使用的 open_kfid 从企业微信回调事件中动态获取
-const DefaultOpenKfID = "wk4_kOBgAAqc8MJamoIGE7PmZo1ZpMGQ"
-
 // SendKfTextMessage 通过微信客服接口发送文本消息
 // 文档：https://developer.work.weixin.qq.com/document/path/94677
 func (c *Client) SendKfTextMessage(ctx context.Context, externalUserID, openKfID, content string) error {
@@ -163,9 +159,9 @@ func (c *Client) SendKfTextMessage(ctx context.Context, externalUserID, openKfID
 	}
 
 	msg := map[string]interface{}{
-		"touser":   externalUserID,
+		"touser":    externalUserID,
 		"open_kfid": openKfID,
-		"msgtype":  "text",
+		"msgtype":   "text",
 		"text": map[string]interface{}{
 			"content": content,
 		},
@@ -231,14 +227,14 @@ type SyncKfMsgResult struct {
 
 // SyncMsg 拉取微信客服消息
 // 文档：https://developer.work.weixin.qq.com/document/path/94670
-func (c *Client) SyncMsg(ctx context.Context, cursor, token string, limit int) (*SyncKfMsgResult, error) {
+func (c *Client) SyncMsg(ctx context.Context, openKfID, cursor, token string, limit int) (*SyncKfMsgResult, error) {
 	accessToken, err := c.GetAccessToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Access Token 失败: %w", err)
 	}
 
 	body := map[string]interface{}{
-		"open_kfid": DefaultOpenKfID,
+		"open_kfid": openKfID,
 		"limit":     limit,
 	}
 	if cursor != "" {
@@ -278,6 +274,7 @@ func (c *Client) SyncMsg(ctx context.Context, cursor, token string, limit int) (
 
 	return &result, nil
 }
+
 // AddContactWayResult 创建「联系我」二维码的结果
 type AddContactWayResult struct {
 	ConfigID string `json:"config_id"`
@@ -300,14 +297,14 @@ func (c *Client) AddContactWay(ctx context.Context, userID, state string, isTemp
 		return nil, fmt.Errorf("获取 Access Token 失败: %w", err)
 	}
 
-		body := map[string]interface{}{
-			"type":        1,         // 1=单人 2=多人
-			"scene":       2,         // 1=小程序 2=二维码
-			"user":        []string{userID},
-			"is_temp":     isTemp,
-			"skip_verify": true,      // 无需验证，直接添加
-			"state":       state,
-		}
+	body := map[string]interface{}{
+		"type":        1, // 1=单人 2=多人
+		"scene":       2, // 1=小程序 2=二维码
+		"user":        []string{userID},
+		"is_temp":     isTemp,
+		"skip_verify": true, // 无需验证，直接添加
+		"state":       state,
+	}
 
 	jsonData, err := json.Marshal(body)
 	if err != nil {
@@ -327,35 +324,35 @@ func (c *Client) AddContactWay(ctx context.Context, userID, state string, isTemp
 	}
 	defer resp.Body.Close()
 
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("[wecom] add_contact_way 原始响应: %s", string(respBody))
+	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[wecom] add_contact_way 原始响应: %s", string(respBody))
 
-		// 先解析到通用 map 以兼容不同字段名
-		var raw map[string]interface{}
-		if err := json.Unmarshal(respBody, &raw); err != nil {
-			return nil, fmt.Errorf("解析响应失败: %w (body=%s)", err, string(respBody))
-		}
+	// 先解析到通用 map 以兼容不同字段名
+	var raw map[string]interface{}
+	if err := json.Unmarshal(respBody, &raw); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w (body=%s)", err, string(respBody))
+	}
 
-		errcode := int(raw["errcode"].(float64))
-		errmsg, _ := raw["errmsg"].(string)
-		configID, _ := raw["config_id"].(string)
+	errcode := int(raw["errcode"].(float64))
+	errmsg, _ := raw["errmsg"].(string)
+	configID, _ := raw["config_id"].(string)
 
-		if errcode != 0 {
-			return nil, fmt.Errorf("创建联系我二维码失败: %d %s", errcode, errmsg)
-		}
+	if errcode != 0 {
+		return nil, fmt.Errorf("创建联系我二维码失败: %d %s", errcode, errmsg)
+	}
 
-		// 兼容 qr_code 或 qrcode 两种字段名
-		qrCode, _ := raw["qr_code"].(string)
-		if qrCode == "" {
-			qrCode, _ = raw["qrcode"].(string)
-		}
+	// 兼容 qr_code 或 qrcode 两种字段名
+	qrCode, _ := raw["qr_code"].(string)
+	if qrCode == "" {
+		qrCode, _ = raw["qrcode"].(string)
+	}
 
-		log.Printf("[wecom] 联系我二维码生成成功: configID=%s qrCode=%s", configID, qrCode)
+	log.Printf("[wecom] 联系我二维码生成成功: configID=%s qrCode=%s", configID, qrCode)
 
-		return &AddContactWayResult{
-			ConfigID: configID,
-			QrCode:   qrCode,
-		}, nil
+	return &AddContactWayResult{
+		ConfigID: configID,
+		QrCode:   qrCode,
+	}, nil
 }
 
 func (c *Client) SendTextMessageToParty(ctx context.Context, partyID, content string) error {
@@ -365,9 +362,9 @@ func (c *Client) SendTextMessageToParty(ctx context.Context, partyID, content st
 	}
 
 	msg := map[string]interface{}{
-		"toparty":  partyID,
-		"msgtype":  "text",
-		"agentid":  c.agentID,
+		"toparty": partyID,
+		"msgtype": "text",
+		"agentid": c.agentID,
 		"text": map[string]interface{}{
 			"content": content,
 		},

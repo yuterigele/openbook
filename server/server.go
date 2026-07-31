@@ -1071,9 +1071,15 @@ func (s *Server[M]) registerWeComCallback(h *hserver.Hertz) {
 			if shopRoute, ok := router.LookupByOpenKfID(msg.OpenKfId); ok {
 				sc = shopRoute
 			} else if msg.MsgType == "event" && msg.Event == "kf_msg_or_event" {
-				log.Printf("[wecom] 未配置 OpenKfId=%s 对应店铺，拒绝处理客服回调", msg.OpenKfId)
-				c.Data(consts.StatusOK, "text/plain", []byte("success"))
-				return
+				if onlyShop, ok := router.SingleShop(); ok {
+					sc = onlyShop
+					log.Printf("[wecom] OpenKfId=%s 未预配置，单店模式自动路由到 shop=%s",
+						msg.OpenKfId, sc.ShopID)
+				} else {
+					log.Printf("[wecom] 未配置 OpenKfId=%s 对应店铺，多店模式拒绝处理客服回调", msg.OpenKfId)
+					c.Data(consts.StatusOK, "text/plain", []byte("success"))
+					return
+				}
 			}
 		}
 
@@ -1104,7 +1110,9 @@ func (s *Server[M]) registerWeComCallback(h *hserver.Hertz) {
 
 		// 处理微信客服事件
 		if msg.MsgType == "event" && msg.Event == "kf_msg_or_event" {
-			go s.handleKfCallback(ctx, sc.Client, msg, sc.ShopID)
+			// 回调必须尽快响应 success，后续 sync_msg 在后台完成。脱离请求取消
+			// 信号，避免 HTTP handler 返回后拉取消息立刻 context canceled。
+			go s.handleKfCallback(context.WithoutCancel(ctx), sc.Client, msg, sc.ShopID)
 		}
 
 		// 处理外部联系人添加事件
@@ -1116,12 +1124,11 @@ func (s *Server[M]) registerWeComCallback(h *hserver.Hertz) {
 		c.Data(consts.StatusOK, "text/plain", []byte("success"))
 	})
 
-	// 生成「联系我」二维码接口
-	// 员工个人生成的二维码不会触发回调，必须使用此 API 生成官方二维码。
-	// 返回二维码图片 URL，客户扫码发消息时企业微信会将消息推送到 /wecom/callback。
+	// 生成「联系我」二维码接口。该二维码用于添加企业成员为外部联系人；
+	// 外部联系人单聊正文不会推送给应用。需要 Agent 收发消息时应使用微信客服入口。
 	//
 	// 使用方式：curl http://localhost:38080/wecom/contact-qrcode?user_id=ZhangSan
-	// 可选参数 is_temp=1（临时会话，未认证企业必须用 1）默认为 1
+	// 可选参数 is_temp=1 开启临时会话；默认使用兼容性更好的正式联系二维码。
 	// 返回：{"qr_code": "https://..."}，将二维码 URL 生成图片后展示给客户扫码。
 	h.GET("/wecom/contact-qrcode", func(ctx context.Context, c *app.RequestContext) {
 		userID := c.Query("user_id")
@@ -1130,9 +1137,9 @@ func (s *Server[M]) registerWeComCallback(h *hserver.Hertz) {
 			return
 		}
 
-		isTemp := 1 // 默认临时会话（兼容未认证企业）
-		if tmpStr := c.Query("is_temp"); tmpStr == "0" {
-			isTemp = 0
+		isTemp := 0
+		if tmpStr := c.Query("is_temp"); tmpStr == "1" {
+			isTemp = 1
 		}
 
 		// 选 client：query ?corp_id= 优先；不传则 router 第一个
@@ -1177,7 +1184,26 @@ func (s *Server[M]) registerWeComCallback(h *hserver.Hertz) {
 			"qr_code":   result.QrCode,
 			"config_id": result.ConfigID,
 			"user_id":   userID,
-			"tip":       "将此二维码展示给客户扫码，客户发送的消息将通过回调送达服务器",
+			"tip":       "该二维码用于添加企业成员；如需与 Agent 对话，请使用 /wecom/kf-entry 返回的微信客服链接",
+		})
+	})
+
+	// 微信客服入口。WECOM_KF_LINK 是可公开给顾客访问的客服链接，不包含 API 密钥。
+	// 客户通过该链接进入的会话会触发 kf_msg_or_event，再由服务端调用 sync_msg 拉取正文。
+	h.GET("/wecom/kf-entry", func(ctx context.Context, c *app.RequestContext) {
+		kfLink := ""
+		if s.cfg.WeComConfig != nil {
+			kfLink = strings.TrimSpace(s.cfg.WeComConfig.KFLink)
+		}
+		if kfLink == "" {
+			c.JSON(consts.StatusServiceUnavailable, map[string]string{
+				"error": "WECOM_KF_LINK 未配置",
+			})
+			return
+		}
+		c.JSON(consts.StatusOK, map[string]string{
+			"kf_link": kfLink,
+			"tip":     "将 kf_link 直接发给顾客，或将它生成二维码供顾客扫码进入微信客服",
 		})
 	})
 
@@ -1741,7 +1767,7 @@ const kfSyncWindow = 48 * time.Hour
 // 嵌入 replySender 的原因：handleKfCallback 拉消息后调 handleWeComMessageWithOpenKfID → sendReply，
 // 发送链路（SendKfTextMessage）走同一个 client。测试时一个 mock 满足两个接口即可。
 type syncMsgFetcher interface {
-	SyncMsg(ctx context.Context, cursor, token string, limit int) (*wecom.SyncKfMsgResult, error)
+	SyncMsg(ctx context.Context, openKfID, cursor, token string, limit int) (*wecom.SyncKfMsgResult, error)
 	replySender
 }
 
@@ -1814,7 +1840,7 @@ func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher
 	}
 	log.Printf("[kf] 使用cursor拉取: cursor=%q (首次=%v)", cursor, cursor == "")
 
-	result, err := fetcher.SyncMsg(ctx, cursor, callback.Token, 50)
+	result, err := fetcher.SyncMsg(ctx, openKfID, cursor, callback.Token, 50)
 	if err != nil {
 		log.Printf("[kf] 拉取消息失败: %v", err)
 		return

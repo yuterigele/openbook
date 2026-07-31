@@ -64,7 +64,7 @@ type Shop struct {
 	WecomKFLink         string `gorm:"size:512" json:"wecom_kf_link"`
 	// OpenKfID 微信客服 open_kfid（每个店铺独立；leave notify 等多店路由靠这个字段选 client）
 	// 取值来源：企业微信管理后台"客服账号"页；多店场景下不同 corpID 对应不同 openKfID。
-	// 留空时 fallback 到 wecom.DefaultOpenKfID（MVP 兼容）。
+	// 单店的客服回调可在未预配置时自动路由；主动通知仍要求显式配置，避免跨店误发。
 	OpenKfID  string    `gorm:"size:64;index" json:"open_kf_id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
