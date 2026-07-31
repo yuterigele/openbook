@@ -290,7 +290,7 @@ func (s *Server[M]) Spin() {
 	})
 
 	// 企业微信回调接口
-	if s.cfg.WeComRouter != nil && s.cfg.WeComRouter.Count() > 0 {
+	if s.cfg.WeComRouter != nil {
 		s.registerWeComCallback(h)
 	}
 

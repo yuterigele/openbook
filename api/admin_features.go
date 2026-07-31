@@ -42,18 +42,18 @@ import (
 
 // ShopUpdateRequest 商户后台更新店铺字段（PRD §5 shops 表）
 //
-// 注意：wecom_* 字段不在此处暴露（多店版本每个店单独配，env 注入；后台改 wecom 会引入
-// 一致性风险）。Plan / ExpiresAt 也不在此处直接改（走 subscription/renew 接口）。
+// 注意：企业微信主体凭据由 WECOM_* 环境变量统一提供，不在后台暴露；门店级客服
+// 路由另行维护。Plan / ExpiresAt 也不在此处直接改（走 subscription/renew 接口）。
 type ShopUpdateRequest struct {
-	Name        *string `json:"name,omitempty"`         // 店铺名
-	Address     *string `json:"address,omitempty"`      // 店铺地址
-	OpenHour    *int    `json:"open_hour,omitempty"`    // 营业开始（0-23）
-	CloseHour   *int    `json:"close_hour,omitempty"`   // 营业结束（1-24）
-	LunchStart  *int    `json:"lunch_start,omitempty"`  // 午休开始
-	LunchEnd    *int    `json:"lunch_end,omitempty"`    // 午休结束
+	Name        *string `json:"name,omitempty"`          // 店铺名
+	Address     *string `json:"address,omitempty"`       // 店铺地址
+	OpenHour    *int    `json:"open_hour,omitempty"`     // 营业开始（0-23）
+	CloseHour   *int    `json:"close_hour,omitempty"`    // 营业结束（1-24）
+	LunchStart  *int    `json:"lunch_start,omitempty"`   // 午休开始
+	LunchEnd    *int    `json:"lunch_end,omitempty"`     // 午休结束
 	LunchEndMin *int    `json:"lunch_end_min,omitempty"` // 午休结束分钟
-	Timezone    *string `json:"timezone,omitempty"`     // IANA 时区
-	Holidays    *string `json:"holidays,omitempty"`     // 逗号分隔 YYYY-MM-DD
+	Timezone    *string `json:"timezone,omitempty"`      // IANA 时区
+	Holidays    *string `json:"holidays,omitempty"`      // 逗号分隔 YYYY-MM-DD
 }
 
 // getShopHandler GET /api/admin/shop
@@ -184,13 +184,13 @@ func updateShopHandler(ctx context.Context, c *app.RequestContext) {
 
 // HandoffItem 转人工列表的一项（含解析后的 reason/last_user_message）
 type HandoffItem struct {
-	ID            uint64    `json:"id"`
-	CreatedAt     time.Time `json:"created_at"`
-	CustomerID    string    `json:"customer_id"`     // ref_id（顾客标识）
-	CustomerName  string    `json:"customer_name"`   // 关联 customers.name（可能为空）
-	Reason        string    `json:"reason"`          // 解析自 meta.reason
-	LastUserMsg   string    `json:"last_user_message"`
-	ShopID        string    `json:"shop_id"`
+	ID           uint64    `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	CustomerID   string    `json:"customer_id"`   // ref_id（顾客标识）
+	CustomerName string    `json:"customer_name"` // 关联 customers.name（可能为空）
+	Reason       string    `json:"reason"`        // 解析自 meta.reason
+	LastUserMsg  string    `json:"last_user_message"`
+	ShopID       string    `json:"shop_id"`
 }
 
 // listHandoffsHandler GET /api/admin/handoffs?limit=50
@@ -475,14 +475,14 @@ func customerInShop(ctx context.Context, shopID, customerID string) bool {
 
 // SubscriptionHistoryItem 订阅历史的一项
 type SubscriptionHistoryItem struct {
-	ID         string     `json:"id"`
-	Plan       string     `json:"plan"`
-	StartedAt  time.Time  `json:"started_at"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	AutoRenew  bool       `json:"auto_renew"`
+	ID          string     `json:"id"`
+	Plan        string     `json:"plan"`
+	StartedAt   time.Time  `json:"started_at"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	AutoRenew   bool       `json:"auto_renew"`
 	CancelledAt *time.Time `json:"cancelled_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	IsCurrent  bool       `json:"is_current"` // 是否当前生效
+	CreatedAt   time.Time  `json:"created_at"`
+	IsCurrent   bool       `json:"is_current"` // 是否当前生效
 }
 
 // listSubscriptionsHandler GET /api/admin/subscription
@@ -788,9 +788,9 @@ const (
 // Alert 单条告警
 type Alert struct {
 	Severity    AlertSeverity `json:"severity"`
-	Code        string        `json:"code"`         // 稳定 code，前端可作 key 渲染
-	Title       string        `json:"title"`        // 一句话标题
-	Description string        `json:"description"`  // 详细说明
+	Code        string        `json:"code"`             // 稳定 code，前端可作 key 渲染
+	Title       string        `json:"title"`            // 一句话标题
+	Description string        `json:"description"`      // 详细说明
 	Action      *AlertAction  `json:"action,omitempty"` // 跳转目标（dashboard 卡片 → 详情页）
 }
 
@@ -802,11 +802,11 @@ type AlertAction struct {
 
 // AlertResponse 告警响应
 type AlertResponse struct {
-	Alerts       []Alert `json:"alerts"`
-	GeneratedAt  time.Time `json:"generated_at"`
-	AlertCount   int    `json:"alert_count"`
-	HasCritical  bool   `json:"has_critical"`
-	HasWarning   bool   `json:"has_warning"`
+	Alerts      []Alert   `json:"alerts"`
+	GeneratedAt time.Time `json:"generated_at"`
+	AlertCount  int       `json:"alert_count"`
+	HasCritical bool      `json:"has_critical"`
+	HasWarning  bool      `json:"has_warning"`
 }
 
 // getAlertsHandler GET /api/admin/alerts

@@ -243,10 +243,14 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	var wecomClient *wecom.Client
 	wecomRouter := wecom.NewRouter()
 
-	if err := wecomRouter.ReloadFromDB(); err != nil {
+	wecomConfig = wecom.LoadConfig()
+	if err := wecomRouter.ReloadFromDBWithConfig(wecomConfig); err != nil {
 		log.Printf("⚠️  从 DB 加载 shops 到 router 失败: %v", err)
 	} else {
 		log.Printf("[wecom] router 已加载 %d 个店铺、%d 个企业微信主体", wecomRouter.Count(), wecomRouter.CorpCount())
+		if wecomRouter.Count() > 0 && wecomConfig.CorpID != "" {
+			log.Printf("[wecom] 企业级凭据来自环境变量，门店路由信息来自 shops 表")
+		}
 		if client, ok := wecomRouter.SingleClient(); ok {
 			wecomClient = client
 		}

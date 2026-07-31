@@ -154,7 +154,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 // 配置来源：
 //   - DEFAULT_SHOP_ID     店铺 ID（默认 "default"）
 //   - DEFAULT_SHOP_NAME   店铺名（默认 "默认理发店"）
-//   - 企业微信凭据由店铺管理配置写入 shops 表，不从环境变量读取
+//   - 企业微信主体凭据由 WECOM_* 环境变量提供；门店表保存 open_kf_id 等路由信息
 //   - DEFAULT_ADMIN_USERNAME / DEFAULT_ADMIN_PASSWORD（默认 admin / admin123）
 //
 // 修复（2026-06-20）：之前如果店铺已存在就直接 return，导致 admin 永远建不出来。
@@ -163,8 +163,7 @@ func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
 	shopID := getenv("DEFAULT_SHOP_ID", "default")
 	now := time.Now()
 
-	// 1) 建店铺。企业微信凭据必须随后写入 shops 表，避免环境变量
-	// 覆盖已有门店配置或将单一主体错误套用到所有门店。
+	// 1) 建店铺。企业微信主体凭据在运行时从 WECOM_* 读取，不复制进门店记录。
 	var existing Shop
 	if err := db.WithContext(ctx).Where("id = ?", shopID).First(&existing).Error; err != nil {
 		shop := Shop{

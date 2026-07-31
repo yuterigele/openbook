@@ -89,8 +89,31 @@ func (r *Router) ReloadFromDB(ctx ...interface{}) error {
 	if err := storage.DB.Where("wecom_corp_id <> '' AND wecom_token <> '' AND wecom_encoding_aes_key <> ''").Find(&rows).Error; err != nil {
 		return err
 	}
+	return r.reload(rows, nil)
+}
+
+// ReloadFromDBWithConfig loads shop routing identities from the database while
+// using one shared enterprise-WeChat configuration for every shop. This is the
+// normal deployment mode when all shops belong to the same enterprise.
+//
+// Shop-level OpenKfID and other routing fields remain in the database. Non-zero
+// config values override the legacy per-shop credential columns, allowing old
+// deployments to keep working while avoiding duplicated secrets in every row.
+func (r *Router) ReloadFromDBWithConfig(cfg *Config) error {
+	var rows []storage.Shop
+	if err := storage.DB.Find(&rows).Error; err != nil {
+		return err
+	}
+	return r.reload(rows, cfg)
+}
+
+func (r *Router) reload(rows []storage.Shop, cfg *Config) error {
 	next := NewRouter()
 	for i := range rows {
+		applySharedConfig(&rows[i], cfg)
+		if rows[i].WecomCorpID == "" || rows[i].WecomToken == "" || rows[i].WecomEncodingAESKey == "" {
+			continue
+		}
 		if err := next.Register(&rows[i]); err != nil {
 			return err
 		}
@@ -99,6 +122,30 @@ func (r *Router) ReloadFromDB(ctx ...interface{}) error {
 	defer r.mu.Unlock()
 	r.corps, r.shops, r.openKfShops = next.corps, next.shops, next.openKfShops
 	return nil
+}
+
+func applySharedConfig(shop *storage.Shop, cfg *Config) {
+	if shop == nil || cfg == nil {
+		return
+	}
+	if cfg.CorpID != "" {
+		shop.WecomCorpID = cfg.CorpID
+	}
+	if cfg.AgentID != 0 {
+		shop.WecomAgentID = cfg.AgentID
+	}
+	if cfg.Secret != "" {
+		shop.WecomSecret = cfg.Secret
+	}
+	if cfg.Token != "" {
+		shop.WecomToken = cfg.Token
+	}
+	if cfg.EncodingAESKey != "" {
+		shop.WecomEncodingAESKey = cfg.EncodingAESKey
+	}
+	if cfg.KFLink != "" {
+		shop.WecomKFLink = cfg.KFLink
+	}
 }
 
 func (r *Router) Lookup(corpID string) (*ShopCrypto, bool) {
