@@ -248,6 +248,10 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		log.Printf("⚠️  从 DB 加载 shops 到 router 失败: %v", err)
 	} else {
 		log.Printf("[wecom] router 已加载 %d 个店铺、%d 个企业微信主体", wecomRouter.Count(), wecomRouter.CorpCount())
+		wecomRouter.SetKfAutoTakeover(wecomConfig.KFAutoTakeover)
+		if wecomConfig.KFAutoTakeover {
+			log.Printf("[wecom] 微信客服 Agent 自动接管已启用（95018 时切回智能助手并重试一次）")
+		}
 		if wecomRouter.Count() > 0 && wecomConfig.CorpID != "" {
 			log.Printf("[wecom] 企业级凭据来自环境变量，门店路由信息来自 shops 表")
 		}

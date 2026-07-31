@@ -23,15 +23,24 @@ const (
 
 // Client 企业微信客户端
 type Client struct {
-	corpID     string
-	agentID    int
-	secret     string
-	httpClient *http.Client
+	corpID         string
+	agentID        int
+	secret         string
+	httpClient     *http.Client
+	kfAutoTakeover bool
 
 	// Access Token 缓存
 	accessToken     string
 	accessTokenExp  time.Time
 	accessTokenLock sync.RWMutex
+}
+
+// SetKfAutoTakeover controls whether a 95018 response may transfer a session
+// from a human servicer back to the intelligent-assistant state and retry once.
+// It is deliberately opt-in so the Agent never steals an intentional human
+// takeover unless the deployment explicitly enables it.
+func (c *Client) SetKfAutoTakeover(enabled bool) {
+	c.kfAutoTakeover = enabled
 }
 
 // NewClient 创建企业微信客户端
@@ -153,9 +162,30 @@ func (c *Client) SendTextMessage(ctx context.Context, userID, content string) er
 // SendKfTextMessage 通过微信客服接口发送文本消息
 // 文档：https://developer.work.weixin.qq.com/document/path/94677
 func (c *Client) SendKfTextMessage(ctx context.Context, externalUserID, openKfID, content string) error {
+	errCode, errMsg, err := c.sendKfTextMessageOnce(ctx, externalUserID, openKfID, content)
+	if err != nil {
+		return err
+	}
+	if errCode == 95018 && c.kfAutoTakeover {
+		log.Printf("[wecom] 客服会话状态不允许发送，尝试切回智能助手接待: openKfID=%s", openKfID)
+		if err := c.TransferKfServiceState(ctx, externalUserID, openKfID, 1); err != nil {
+			return fmt.Errorf("发送客服消息失败: %d %s；自动接管失败: %w", errCode, errMsg, err)
+		}
+		errCode, errMsg, err = c.sendKfTextMessageOnce(ctx, externalUserID, openKfID, content)
+		if err != nil {
+			return err
+		}
+	}
+	if errCode != 0 {
+		return fmt.Errorf("发送客服消息失败: %d %s", errCode, errMsg)
+	}
+	return nil
+}
+
+func (c *Client) sendKfTextMessageOnce(ctx context.Context, externalUserID, openKfID, content string) (int, string, error) {
 	accessToken, err := c.GetAccessToken(ctx)
 	if err != nil {
-		return fmt.Errorf("获取 Access Token 失败: %w", err)
+		return 0, "", fmt.Errorf("获取 Access Token 失败: %w", err)
 	}
 
 	msg := map[string]interface{}{
@@ -169,19 +199,19 @@ func (c *Client) SendKfTextMessage(ctx context.Context, externalUserID, openKfID
 
 	jsonData, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("序列化消息失败: %w", err)
+		return 0, "", fmt.Errorf("序列化消息失败: %w", err)
 	}
 
 	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token=%s", accessToken)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
+		return 0, "", fmt.Errorf("创建请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("发送客服消息失败: %w", err)
+		return 0, "", fmt.Errorf("发送客服消息失败: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -193,13 +223,49 @@ func (c *Client) SendKfTextMessage(ctx context.Context, externalUserID, openKfID
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("解析响应失败: %w", err)
+		return 0, "", fmt.Errorf("解析响应失败: %w", err)
 	}
 
+	return result.Errcode, result.Errmsg, nil
+}
+
+// TransferKfServiceState changes who is receiving a WeChat Customer Service
+// session. serviceState=1 means intelligent-assistant reception.
+func (c *Client) TransferKfServiceState(ctx context.Context, externalUserID, openKfID string, serviceState int) error {
+	accessToken, err := c.GetAccessToken(ctx)
+	if err != nil {
+		return fmt.Errorf("获取 Access Token 失败: %w", err)
+	}
+	body, err := json.Marshal(map[string]interface{}{
+		"open_kfid":       openKfID,
+		"external_userid": externalUserID,
+		"service_state":   serviceState,
+	})
+	if err != nil {
+		return fmt.Errorf("序列化客服状态请求失败: %w", err)
+	}
+	url := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token=%s", accessToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("创建客服状态请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("切换客服会话状态失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Errcode int    `json:"errcode"`
+		Errmsg  string `json:"errmsg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("解析客服状态响应失败: %w", err)
+	}
 	if result.Errcode != 0 {
-		return fmt.Errorf("发送客服消息失败: %d %s", result.Errcode, result.Errmsg)
+		return fmt.Errorf("%d %s", result.Errcode, result.Errmsg)
 	}
-
 	return nil
 }
 

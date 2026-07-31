@@ -101,6 +101,7 @@ services:
       WECOM_TOKEN: ${WECOM_TOKEN:-}
       WECOM_ENCODING_AES_KEY: ${WECOM_ENCODING_AES_KEY:-}
       WECOM_KF_LINK: ${WECOM_KF_LINK:-}
+      WECOM_KF_AUTO_TAKEOVER: ${WECOM_KF_AUTO_TAKEOVER:-0}
       # Default to a safe local demonstration mode: replies are recorded instead
       # of being sent to a real enterprise-WeChat account.
       AGENT_REPLY_MODE: ${AGENT_REPLY_MODE:-mock}

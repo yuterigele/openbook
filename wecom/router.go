@@ -209,3 +209,12 @@ func (r *Router) SingleShop() (*ShopCrypto, bool) {
 	}
 	return nil, false
 }
+
+// SetKfAutoTakeover applies the shared deployment policy to every CorpID client.
+func (r *Router) SetKfAutoTakeover(enabled bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, sc := range r.corps {
+		sc.Client.SetKfAutoTakeover(enabled)
+	}
+}
