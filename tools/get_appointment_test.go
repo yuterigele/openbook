@@ -27,18 +27,19 @@ func TestGetAppointmentTool_InfoMentionsPreModify(t *testing.T) {
 	if info.Name != "get_appointment" {
 		t.Errorf("tool name should be 'get_appointment', got %q", info.Name)
 	}
-	// 关键约束不能漏（去掉 markdown ** 噪声再断言）
-	desc := strings.ReplaceAll(info.Desc, "**", "")
+	// 保留模型决策所需的调用约束，不携带历史版本或实现背景。
+	desc := info.Desc
 	mustHave := []string{
-		"改时间 / 取消前必调",                  // 触发场景
-		"history 里的 barber_name 可能是旧的", // 为什么
-		"leave 改派后",                    // 真实场景
-		"不返回 phone",                    // 隐私
+		"改时间或取消前必须调用",
+		"以工具结果为准",
 	}
 	for _, sub := range mustHave {
 		if !strings.Contains(desc, sub) {
-			t.Errorf("Info.Desc should mention %q (v4.13.6), got %q", sub, info.Desc)
+			t.Errorf("Info.Desc should mention %q, got %q", sub, info.Desc)
 		}
+	}
+	if strings.Contains(strings.ToLower(desc), "v4.") {
+		t.Errorf("Info.Desc should not contain a version number, got %q", info.Desc)
 	}
 }
 

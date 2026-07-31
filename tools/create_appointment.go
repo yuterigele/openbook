@@ -105,28 +105,11 @@ type CreateAppointmentTool struct{}
 func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "create_appointment",
-		Desc: "为顾客创建一个新的预约。需要提供理发师姓名、顾客姓名、手机号、日期、时间，可选择服务项目。\n" +
-			"\n" +
-			"【调用时机】\n" +
-			"  - 顾客明确说「帮我约一下」「我要预约」、说出具体理发师/时间时；\n" +
-			"  - 调用前**先调 query_schedule 确认该时段真空闲**（避免顾客告诉你一个时间，你不去查就盲下）；\n" +
-			"  - 调用前**确认 date 参数**：顾客说「明天」就转成 today+1 的 YYYY-MM-DD；说「3 号」就转成 YYYY-MM-03。\n" +
-			"  - 调用前**必填手机号**：顾客没主动给手机号时**主动问一次**（如「方便留个手机号吗，到店前我们提醒你~」），不要凭空编。\n" +
-			"\n" +
-			"【业务规则】\n" +
-			"  - 同一理发师的同一时段只能有一个预约；并发请求会被 Redis 锁挡掉；\n" +
-			"  - 如果理发师在所选时段请假（P4），会返回错误，需要换理发师或换时间；\n" +
-			"  - 不接过去时间（已过时刻）、22:00 之后、节假日；\n" +
-			"  - 手机号必须 11 位数字、1 开头（如 13812345678）。工具会严格校验。\n" +
-			"\n" +
-			"【回复要求】\n" +
-			"  - 成功后用自然语气确认：「好的，已帮你约好 Tony 师傅 6 月 22 日 15:00，到店报名字就行~」；\n" +
-			"  - 失败时**不要**把工具错误原文（如「ErrSlotTaken」）告诉顾客，翻译成场景化话术：\n" +
-			"    * 时段被占 → 「这个时段刚被别的顾客抢了，我帮你看下一个空档」\n" +
-			"    * 理发师请假 → 「Tony 师傅 X 点到 X 点请假了，要不要换 Kevin 师傅或换个时间？」\n" +
-			"    * 节假日（v4.16.2 改）→ 先调 list_shop_holidays 拿本店完整节假日清单，再调 query_schedule 验证推荐日期可约，\n" +
-			"      最后回「X 月 X 日是节假日休息日，本店 X 月 X 日 / X 月 X 日也能约，您看哪天方便？」\n" +
-			"      **禁止**凭印象推「前后两天」（v4.16.1 事故：店设 7-1、7-2 休息，Agent 推 7-1 给顾客，实际 7-1 也是假期）。",
+		Desc: "创建预约；需理发师、顾客姓名、11 位手机号、日期和时间。\n" +
+			"调用前必须先用 query_schedule 确认空闲；相对日期换算为 YYYY-MM-DD，勿编造手机号。\n" +
+			"时段不可约、师傅请假、过去时间、22:00 后或节假日时按工具结果引导换时间或师傅。\n" +
+			"节假日推荐日期前先调 list_shop_holidays，再用 query_schedule 验证。\n" +
+			"成功后自然确认并告知预约号；失败时用友好话术，不展示工具错误。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"barber_name": {
 				Type: "string", Desc: "理发师姓名，例如：Tony、Kevin", Required: true,
@@ -211,6 +194,20 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	shop, _ := storage.GetShopByID(ctx, barber.ShopID)
 	if storage.IsShopHoliday(shop, params.Date) {
 		return "", fmt.Errorf("%s 是本店休息日，麻烦换个日期试试", params.Date)
+	}
+
+	// Agent/模型供应商偶尔会在已经收到成功结果后重复同一个 tool call。
+	// 这不是新的预约意图；若直接继续创建，第二次会因 slot taken 失败，且失败
+	// 话术可能覆盖前一次的成功回复。用已验证的手机号 + 完整 slot + 服务项目
+	// 做精确幂等匹配，只把同一顾客的原预约作为成功结果返回。
+	existing, err := storage.FindActiveAppointmentForCustomerSlot(
+		ctx, barber.ShopID, barber.ID, params.Phone, params.Date, params.Time, params.Service,
+	)
+	if err != nil {
+		return "", FriendlyError(ctx, err, "查询预约状态失败，请稍后重试", "create_appointment.idempotency_check")
+	}
+	if existing != nil {
+		return appointmentSuccessMessage(existing), nil
 	}
 
 	// P4 理发师请假拦截（PRD §11.7.4）：
@@ -317,14 +314,18 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		storage.TrackEvent(ctx, persisted.ShopID, storage.EventFirstAppointment, persisted.ID, nil)
 	}
 
+	return appointmentSuccessMessage(persisted), nil
+}
+
+func appointmentSuccessMessage(appointment *storage.Appointment) string {
 	return fmt.Sprintf("预约创建成功！\n预约ID：%s\n理发师：%s\n顾客：%s\n日期：%s\n时间：%s\n服务：%s",
-		persisted.ID,
-		persisted.BarberName,
-		persisted.Customer,
-		persisted.Date,
-		persisted.Time,
-		persisted.Service,
-	), nil
+		appointment.ID,
+		appointment.BarberName,
+		appointment.Customer,
+		appointment.Date,
+		appointment.Time,
+		appointment.Service,
+	)
 }
 
 // clipLeaveToDate 把 leave 区间裁到 date 当天 [00:00:00, 23:59:59.999999999]

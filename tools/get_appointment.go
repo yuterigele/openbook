@@ -39,17 +39,7 @@ type GetAppointmentTool struct{}
 func (t *GetAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "get_appointment",
-		Desc: "查询一个预约的当前真实状态（理发师 / 日期 / 时间 / 服务 / 状态）。\n" +
-			"\n" +
-			"【v4.13.6 关键调用时机】\n" +
-			"  - **改时间 / 取消前必调**：history 里的 barber_name 可能是旧的（leave 改派后已变），\n" +
-			"    必须用本工具拿到当前真实 barber_name，再决定 create_appointment / cancel_appointment 怎么调。\n" +
-			"  - 顾客问'我约的什么'时也调这个（少用，主要靠 history）。\n" +
-			"\n" +
-			"【输出】\n" +
-			"  - 完整返回：理发师、日期、时间、服务项目、状态（active / cancelled / completed / noshow）\n" +
-			"  - **不**返回 phone 字段（Agent 不需要，避免越权）\n" +
-			"  - 已取消的也会返回 status=cancelled，Agent 可据此告诉顾客'上次约的已取消'",
+		Desc: "查询当前预约的理发师、日期、时间、服务和状态。改时间或取消前必须调用，以工具结果为准；顾客询问已有预约时也可调用。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"appointment_id": {
 				Type:     "string",

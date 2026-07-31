@@ -24,6 +24,7 @@ import (
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/yuterigele/openbook/helpers"
 )
 
 // ChatModel is the minimal interface the LLM classifier needs. Satisfied
@@ -53,7 +54,7 @@ func NewLLMClassifyFunc(cm ChatModel) LLMClassifyFunc {
 			return "", 0, "", fmt.Errorf("nil chat model")
 		}
 		prompt := buildClassifyPrompt(userText, intents)
-		resp, err := cm.Generate(ctx, []*schema.Message{
+		resp, err := helpers.GenerateSmallWithPolicy(ctx, cm, []*schema.Message{
 			schema.UserMessage(prompt),
 		})
 		if err != nil {

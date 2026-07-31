@@ -380,6 +380,32 @@ func CreateAppointmentFullContext(ctx context.Context, shopID, barberName, custo
 	return &appt, nil
 }
 
+// FindActiveAppointmentForCustomerSlot returns an existing active appointment
+// for the exact customer and slot. It is used by the Agent-facing create tool
+// as an idempotency check: a provider may repeat the same tool call after a
+// successful response, which must not be presented to the customer as a slot
+// conflict. Phone is already mandatory and validated at that boundary.
+//
+// A nil appointment with nil error means no matching appointment exists.
+func FindActiveAppointmentForCustomerSlot(ctx context.Context, shopID, barberID, phone, date, timeStr, service string) (*Appointment, error) {
+	if service == "" {
+		service = "剪发"
+	}
+	var appt Appointment
+	err := mustDB().WithContext(ctx).
+		Joins("JOIN customers ON customers.id = appointments.customer_id").
+		Where("appointments.shop_id = ? AND appointments.barber_id = ? AND appointments.date = ? AND appointments.time = ? AND appointments.service = ? AND appointments.status = ? AND customers.phone = ?",
+			shopID, barberID, date, timeStr, service, "active", phone).
+		First(&appt).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &appt, nil
+}
+
 func isActiveSlotConflict(err error) bool {
 	if err == nil {
 		return false

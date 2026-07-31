@@ -37,14 +37,14 @@ func TestBarberLeave_InfoMentionsUniqueSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Info: %v", err)
 	}
-	if !strings.Contains(info.Desc, "唯一") {
-		t.Errorf("Info.Desc 应明确说明本工具是「唯一可信来源」（防 LLM 幻觉）: %q", info.Desc)
+	if !strings.Contains(info.Desc, "只信本工具返回") {
+		t.Errorf("Info.Desc 应明确要求只信工具返回: %q", info.Desc)
 	}
-	if !strings.Contains(info.Desc, "v4.16.3") {
-		t.Errorf("Info.Desc 应标注 v4.16.3 事故背景: %q", info.Desc)
+	if strings.Contains(strings.ToLower(info.Desc), "v4.") {
+		t.Errorf("Info.Desc 不应包含版本号: %q", info.Desc)
 	}
-	if !strings.Contains(info.Desc, "幻觉") {
-		t.Errorf("Info.Desc 应明确提到「幻觉」(LLM hallucination) 字样: %q", info.Desc)
+	if !strings.Contains(info.Desc, "不得对顾客提及") {
+		t.Errorf("Info.Desc 应禁止编造未返回的请假信息: %q", info.Desc)
 	}
 }
 
@@ -110,16 +110,16 @@ func TestBarberLeave_NeverExposesSensitiveReason(t *testing.T) {
 	end, _ := time.ParseInLocation("2006-01-02 15:04", date+" 18:00", loc)
 	// 直接建一条带敏感 Reason 的 leave（绕开 MakeBarberLeave 工具方法）
 	storage.DB.Create(&storage.BarberLeave{
-		ID:     "leave-sensitive",
-		ShopID: shop.ID,
-		BarberID: "b-1",
+		ID:         "leave-sensitive",
+		ShopID:     shop.ID,
+		BarberID:   "b-1",
 		BarberName: "Tony",
-		StartAt: start,
-		EndAt:   end,
-		Reason:  "痔疮手术",  // 模拟商户填了敏感字眼
+		StartAt:    start,
+		EndAt:      end,
+		Reason:     "痔疮手术", // 模拟商户填了敏感字眼
 		// v4.13.0：CustomerFacingReason 字段已删除
-		Action:  storage.LeaveActionCancel,
-		Status:  storage.LeaveStatusActive,
+		Action:    storage.LeaveActionCancel,
+		Status:    storage.LeaveStatusActive,
 		CreatedBy: "test",
 		CreatedAt: time.Now(),
 	})

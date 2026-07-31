@@ -38,13 +38,28 @@ type ToolMetric struct {
 	SuccessRate float64 `json:"success_rate"`
 }
 
+const (
+	// ToolSuccessTarget is the platform SLO for successful technical tool
+	// executions. Business rejections are normal tool results and do not count
+	// as failures; only the SafeToolMiddleware error envelope does.
+	ToolSuccessTarget     = 0.95
+	toolSLOMinimumSamples = 20
+)
+
 // AgentMetricsSnapshot is the platform-only Agent observability response.
 type AgentMetricsSnapshot struct {
-	TasksStarted    int64        `json:"tasks_started"`
-	TasksSucceeded  int64        `json:"tasks_succeeded"`
-	TasksFailed     int64        `json:"tasks_failed"`
-	TaskSuccessRate float64      `json:"task_success_rate"`
-	Tools           []ToolMetric `json:"tools"`
+	TasksStarted      int64        `json:"tasks_started"`
+	TasksSucceeded    int64        `json:"tasks_succeeded"`
+	TasksFailed       int64        `json:"tasks_failed"`
+	TaskSuccessRate   float64      `json:"task_success_rate"`
+	ToolCalls         int64        `json:"tool_calls"`
+	ToolSucceeded     int64        `json:"tool_succeeded"`
+	ToolFailed        int64        `json:"tool_failed"`
+	ToolSuccessRate   float64      `json:"tool_success_rate"`
+	ToolSuccessTarget float64      `json:"tool_success_target"`
+	ToolSLOEvaluated  bool         `json:"tool_slo_evaluated"`
+	ToolSLOMet        bool         `json:"tool_slo_met"`
+	Tools             []ToolMetric `json:"tools"`
 }
 
 // DefaultAgentMetrics is process-local by design, like the LLM usage tracker.
@@ -113,9 +128,18 @@ func (m *AgentMetrics) Snapshot() AgentMetricsSnapshot {
 		if c.Calls > 0 {
 			metric.SuccessRate = float64(c.Succeeded) / float64(c.Calls)
 		}
+		s.ToolCalls += c.Calls
+		s.ToolSucceeded += c.Succeeded
+		s.ToolFailed += c.Failed
 		s.Tools = append(s.Tools, metric)
 	}
 	m.mu.Unlock()
+	if s.ToolCalls > 0 {
+		s.ToolSuccessRate = float64(s.ToolSucceeded) / float64(s.ToolCalls)
+	}
+	s.ToolSuccessTarget = ToolSuccessTarget
+	s.ToolSLOEvaluated = s.ToolCalls >= toolSLOMinimumSamples
+	s.ToolSLOMet = !s.ToolSLOEvaluated || s.ToolSuccessRate >= ToolSuccessTarget
 	sort.Slice(s.Tools, func(i, j int) bool { return s.Tools[i].Name < s.Tools[j].Name })
 	return s
 }

@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -44,10 +46,21 @@ type safeToolMiddleware[M adk.MessageType] struct {
 func (m *safeToolMiddleware[M]) WrapInvokableToolCall(
 	_ context.Context,
 	endpoint adk.InvokableToolCallEndpoint,
-	_ *adk.ToolContext,
+	tCtx *adk.ToolContext,
 ) (adk.InvokableToolCallEndpoint, error) {
 	return func(ctx context.Context, args string, opts ...tool.Option) (string, error) {
 		result, err := endpoint(ctx, args, opts...)
+		if err != nil && isRetryableReadTool(tCtx, err) {
+			// Read-only tools never mutate reservations. One short retry absorbs
+			// transient DB/Redis/network blips without risking a duplicate write.
+			select {
+			case <-ctx.Done():
+			case <-time.After(100 * time.Millisecond):
+			}
+			if ctx.Err() == nil {
+				result, err = endpoint(ctx, args, opts...)
+			}
+		}
 		if err != nil {
 			if _, ok := compose.IsInterruptRerunError(err); ok {
 				return "", err
@@ -56,6 +69,33 @@ func (m *safeToolMiddleware[M]) WrapInvokableToolCall(
 		}
 		return result, nil
 	}, nil
+}
+
+func isRetryableReadTool(tCtx *adk.ToolContext, err error) bool {
+	if tCtx == nil || err == nil || !readOnlyToolNames[tCtx.Name] {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"connection reset", "connection refused", "connection closed", "i/o timeout",
+		"deadline exceeded", "database is locked", "temporarily unavailable", "eof",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var readOnlyToolNames = map[string]bool{
+	"sensitive_check":    true,
+	"classify_intent":    true,
+	"query_schedule":     true,
+	"list_barbers":       true,
+	"list_services":      true,
+	"barber_leave":       true,
+	"get_appointment":    true,
+	"list_shop_holidays": true,
 }
 
 func (m *safeToolMiddleware[M]) WrapStreamableToolCall(

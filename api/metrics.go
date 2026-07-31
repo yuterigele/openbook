@@ -126,5 +126,24 @@ func agentMetricsPromText() string {
 			label, tool.Calls, label, tool.Failed,
 		)
 	}
+	body += fmt.Sprintf(
+		"# HELP openbook_agent_tool_success_rate Tool execution success rate for this process.\n"+
+			"# TYPE openbook_agent_tool_success_rate gauge\n"+
+			"openbook_agent_tool_success_rate %.6f\n"+
+			"# HELP openbook_agent_tool_success_target Tool execution success-rate SLO target.\n"+
+			"# TYPE openbook_agent_tool_success_target gauge\n"+
+			"openbook_agent_tool_success_target %.6f\n"+
+			"# HELP openbook_agent_tool_slo_met Whether the tool success-rate SLO is currently met after the minimum sample size.\n"+
+			"# TYPE openbook_agent_tool_slo_met gauge\n"+
+			"openbook_agent_tool_slo_met %d\n",
+		snap.ToolSuccessRate, snap.ToolSuccessTarget, boolToInt(snap.ToolSLOMet),
+	)
 	return body
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

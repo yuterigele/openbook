@@ -114,6 +114,37 @@ func TestCreateAppointment_NoLeave_Succeeds(t *testing.T) {
 	}
 }
 
+// A repeated identical tool call can happen when the model retries after it
+// has already received a successful result. It must preserve the first
+// appointment's success result instead of turning it into a false "slot busy"
+// reply, and it must not create a second row.
+func TestCreateAppointment_RepeatedIdenticalRequestIsIdempotent(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	storage.MakeBarber(t, "barber-Tony", shop.ID, "Tony")
+
+	_, _, args := buildApptArgs("Alice", "Tony", 2)
+	first, err := runCreate(t, shop.ID, args)
+	if err != nil {
+		t.Fatalf("first create: %v / %q", err, first)
+	}
+	second, err := runCreate(t, shop.ID, args)
+	if err != nil {
+		t.Fatalf("repeated create should return prior success, got: %v / %q", err, second)
+	}
+	if second != first {
+		t.Errorf("repeated create reply = %q, want original success reply %q", second, first)
+	}
+
+	var count int64
+	if err := storage.DB.Model(&storage.Appointment{}).Count(&count).Error; err != nil {
+		t.Fatalf("count appointments: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("appointment count = %d, want 1", count)
+	}
+}
+
 // ===================== Leave covers appointment → reject =====================
 
 func TestCreateAppointment_LeaveCovering_Rejected(t *testing.T) {

@@ -3363,6 +3363,15 @@ return `<table class="table">
     const llm = data.llm || {};
     const fmtRate = n => fmtPct(Number(n || 0));
     const tools = agent.tools || [];
+    const toolSLOEvaluated = !!agent.tool_slo_evaluated;
+    const toolSLOMet = !!agent.tool_slo_met;
+    const toolRate = fmtRate(agent.tool_success_rate);
+    const toolTarget = fmtRate(agent.tool_success_target || 0.95);
+    const toolSLOClass = toolSLOEvaluated ? (toolSLOMet ? 'success' : 'alert') : 'normal';
+    const toolSLOValue = toolSLOEvaluated ? (toolSLOMet ? '达标' : '未达标') : '样本不足';
+    const toolSLOHint = toolSLOEvaluated
+      ? `成功率 ${toolRate}，目标 ≥ ${toolTarget}；调用 ${Number(agent.tool_calls || 0).toLocaleString('zh-CN')} 次。`
+      : `累计 ${Number(agent.tool_calls || 0).toLocaleString('zh-CN')} 次调用，达到 20 次后开始判定目标 ≥ ${toolTarget}。`;
     const alertClass = llm.token_alert_5m ? 'alert' : 'success';
     const alertHint = llm.token_alert_5m
       ? `已超过 5 分钟阈值 ${(llm.token_alert_limit_5m || 0).toLocaleString('zh-CN')} Token，请排查异常流量。`
@@ -3379,6 +3388,7 @@ return `<table class="table">
       ${kpiCard('LLM 调用错误', Number(llm.errored_calls || 0).toLocaleString('zh-CN'), llm.errored_calls > 0 ? 'alert' : 'success', `总调用 ${Number(llm.calls || 0).toLocaleString('zh-CN')}`)}
       ${kpiCard('累计 Token', Number(llm.total_tokens || 0).toLocaleString('zh-CN'), 'normal', `平均每次 ${Number(llm.avg_tokens_per_call || 0).toLocaleString('zh-CN')} Token`)}
       ${kpiCard('Token 异常检测', llm.token_alert_5m ? '告警' : '正常', alertClass, alertHint)}
+      ${kpiCard('工具成功率 SLO', toolSLOValue, toolSLOClass, toolSLOHint)}
     </div>
     <div class="section"><div class="card card-pad">
       <div class="section-head"><h2>工具调用成功率</h2><span class="sub">工具原始执行错误会计为失败；业务拒绝但正常返回不计为执行失败</span></div>
