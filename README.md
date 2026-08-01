@@ -11,16 +11,19 @@
 
 这是一个可运行的本地 Demo / MVP，不宣称生产就绪。它用美发预约验证 Agent 在真实业务中最容易出错的几个环节：相对日期理解、结构化工具调用、并发撞单、身份归属与失败兜底。
 
-顾客无需安装企业微信，可使用普通微信通过两种入口完成查排班、预约、改约、取消、查询服务与转人工：
+顾客无需安装企业微信。正式的预约业务入口为门店的**微信客服会话**：顾客可直接点击客服链接或扫描客服二维码进入；添加店主或理发师的企业微信好友后，系统会自动发送包含客服链接的欢迎语，引导顾客进入客服会话。企业微信好友仅承担引导，不作为新门店的正式预约入口。
 
-1. 添加店主或理发师的企业微信为好友，在原微信聊天窗口直接咨询；
-2. 点击门店微信客服链接或扫描客服二维码，进入专用客服会话。
+## 架构说明
 
-两条通道分别接入企业微信“客户联系”和“微信客服”能力，后端统一进入同一套 Agent、身份校验与预约业务流程。
+完整的六层架构、模块职责、降级条件、数据边界和告警规则见[架构说明](docs/架构说明.md)。
 
-## 架构图
+### 主业务链路
 
-![架构图](架构说明.drawio.svg)
+![OpenBook 主业务链路](output/openbook-main-business-flow.svg)
+
+### 可靠性与观测
+
+![OpenBook 可靠性与观测](output/openbook-reliability-observability.svg)
 
 ```text
 顾客：明天下午 2 点想约 Tony 剪发
@@ -39,11 +42,12 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 ## 核心实现
 
-- Agent 仅可调用白名单预约工具；身份、门店和顾客归属由服务端上下文注入。
-- MySQL 保存业务数据，Redis 锁防止同一时段并发撞单。
-- 默认模型链为 DeepSeek → OpenAI → Ark；不可用时进入不调用工具、不写库的 Stub 模式。
-- 运行时使用 `Asia/Shanghai` 日期上下文，并做敏感内容、输入信任、限流与工具错误保护。
-- 平台超管可查看 Agent/工具成功率、Token 用量与阈值告警。
+- 正式入口为微信客服：好友添加事件只发送客服链接；客服消息经验签、解密、多店路由、持久化去重和 debounce 后进入 Agent。
+- Agent 仅可调用白名单预约工具；门店、顾客身份与北京时间由服务端上下文注入，并在工具层校验门店隔离和预约归属。
+- 创建预约依次经过幂等检查、Redis 时段锁、MySQL 事务/活跃时段约束和提交后复核；无法确认结果时不回复成功。
+- 请求先经过每顾客限流（默认 `1 req/s`、突发 `5`）和进程全局限流（默认 `100 req/s`、突发 `200`）。当前没有门店聚合总量限流。
+- 默认模型链为 DeepSeek → OpenAI → Ark。启动或运行时全部模型不可用时使用 Stub 安全降级：不调用工具、不写库；只读工具的瞬态错误最多安全重试一次，写工具不自动重试。
+- Redis 连续 3 次健康检查失败时进入只读保护，连续 3 次成功后恢复；查询仍可用，写操作会安全拒绝。
 
 ## 可观测性
 
@@ -60,7 +64,9 @@ OpenBook stdout → Grafana Alloy → Loki → Grafana
 - Prometheus：`http://127.0.0.1:9090`
 - Loki 就绪检查：`http://127.0.0.1:3100/ready`
 
-观测服务均默认只绑定本机。Alloy 需要挂载 Docker Socket 才能发现并读取容器日志，因此只应在受信任的本机或受控主机上使用；生产环境应改用受限的日志采集身份与集中式存储。Prometheus 预置了 OpenBook 指标不可抓取、LLM 错误率过高、限流拒绝过多三条告警规则；需接入 Alertmanager 或 Grafana Alerting 接收器后才会对外通知。
+观测服务均默认只绑定本机。Alloy 需要挂载 Docker Socket 才能发现并读取容器日志，因此只应在受信任的本机或受控主机上使用；生产环境应改用受限的日志采集身份与集中式存储。Prometheus 预置指标不可抓取、LLM 错误率、限流拒绝、Redis 只读、模型降级率、工具失败率、飞书告警桥、cron 失败和 cron 心跳缺失等规则；需接入 Grafana Alerting 或其他通知接收器后才会对外通知。
+
+工具技术执行成功率 SLO 为 **≥95%**：正常业务拒绝不计技术失败；工具调用累计达到 20 次后开始判定。平台后台与 `/metrics` 会暴露 SLO 状态，详见[架构说明的观测监控层](docs/架构说明.md#7-观测监控层)。
 
 ### Grafana 告警发送到飞书
 
@@ -79,7 +85,7 @@ Grafana 通用 Webhook 的 `Message` 字段不是完整 HTTP 请求体，不能�
 
 模型失败或结果不可信时不得写库或宣称操作成功。真实密钥、企业微信凭据、数据库口令和 `JWT_SECRET` 只放本机 `.env` 或密钥管理系统，不得提交。
 
-本地 Compose 的 HTTP、MySQL 和 Redis 默认仅监听 `127.0.0.1`；应用使用受限 MySQL 账号而非 `root`。`.env.example` 会通过 `COMPOSE_FILE` 加载本地数据库端口映射；线上 `.env` 应只设置 `COMPOSE_FILE=docker-compose.yml`，从而完全不向宿主机发布 MySQL 和 Redis 端口。这仍是本地 Demo，不是公网生产部署方案；相关取舍见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
+本地 Compose 仅将应用 HTTP 暴露到 `127.0.0.1:38080`；MySQL 和 Redis 只供 Compose 内部服务访问。应用使用受限 MySQL 账号而非 `root`。这仍是本地 Demo，不是公网生产部署方案；相关取舍见 [工程问题复盘](docs/engineering/工程问题复盘.md)。
 
 ## 快速开始
 
@@ -128,9 +134,10 @@ go run .
 
 - 模型：`OPENBOOK_LLM_CHAIN=deepseek,openai,ark` 控制顺序；分别配置 `DEEPSEEK_*`、`OPENAI_*`、`ARK_*`。设置 `OPENBOOK_LLM_CHAIN=stub` 可验证安全降级，不会调用模型、工具或写库。
 - 数据：本地进程使用 `MYSQL_DSN` 或 `MYSQL_*`、`REDIS_*`；Compose 会覆盖应用的数据库地址并使用 `MYSQL_APP_PASSWORD` 创建受限账号。
-- Agent：`AGENT_REPLY_MODE=mock` 禁止真实企微发送；`AGENT_MAX_EXECUTION_SECONDS`、`USER_INPUT_TRUST_THRESHOLD` 控制执行和输入保护。
+- Agent：`AGENT_REPLY_MODE=mock` 禁止真实企微发送；`AGENT_MAX_EXECUTION_SECONDS`、`USER_INPUT_TRUST_THRESHOLD` 控制执行和输入保护；`SMALL_MODEL_ENABLED` 和 `SENSITIVE_LLM_FALLBACK` 分别控制可选意图分类和敏感语义复核。
 - 企业微信：同一企业下的门店共用 `.env` 中的 `WECOM_CORP_ID`、`WECOM_AGENT_ID`、`WECOM_SECRET`、`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`；`WECOM_KF_LINK` 是顾客进入微信客服的公开链接。门店级 `open_kf_id` 等路由信息保存在 `shops` 表；单店部署可在首次客服回调时自动路由。全自动 Agent 客服可设置 `WECOM_KF_AUTO_TAKEOVER=1`，在 95018 时将会话从人工切回智能助手并重试一次；有人工作业的账号必须保持关闭。修改环境变量后需重启应用。
 - 管理端：修改 `DEFAULT_ADMIN_*`、`DEFAULT_PLATFORM_ADMIN_*` 和 `JWT_SECRET` 后再暴露服务。
+- 观测与告警：`LLM_TOKEN_ALERT_5M` 设置 5 分钟 Token 阈值；`FEISHU_ALERT_WEBHOOK_URL` 接收 Redis 健康和模型降级直连通知；Grafana 告警可经 `FEISHU_GRAFANA_WEBHOOK_URL` 转发。
 - 安全：不要在 README、日志或仓库中记录真实凭据。
 
 ### 性能分析

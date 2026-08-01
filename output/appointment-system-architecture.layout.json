@@ -1,0 +1,11 @@
+{
+  "issues": [
+    {
+      "code": "LAYOUT_ERROR",
+      "message": "no collision-free label position for '寮傚父鍛婅\\udcad\\udca6'",
+      "severity": "error"
+    }
+  ],
+  "ok": false,
+  "schema_version": 1
+}

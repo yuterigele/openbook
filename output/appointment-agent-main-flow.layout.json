@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "input_schema": "v1",
+  "mode": "architecture",
+  "style": {
+    "id": 1,
+    "name": "Flat Icon"
+  },
+  "semantics": {
+    "ok": true,
+    "style": 1,
+    "visual_theme": "Flat Icon",
+    "profile": "generic",
+    "details": {}
+  },
+  "ok": true,
+  "canvas": {
+    "width": 1180.0,
+    "height": 1020.0
+  },
+  "text_metrics": "heuristic-v1",
+  "placements": {
+    "legend": null
+  },
+  "edges": [
+    {
+      "id": "guide-to-kf",
+      "source": "friend-guide",
+      "target": "kf-entry",
+      "source_port": [
+        590.0,
+        193.0
+      ],
+      "target_port": [
+        590.0,
+        275.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          590.0,
+          193.0
+        ],
+        [
+          590.0,
+          275.0
+        ]
+      ],
+      "length": 82.0,
+      "bends": 0,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    },
+    {
+      "id": "kf-to-ingress",
+      "source": "kf-entry",
+      "target": "ingress",
+      "source_port": [
+        590.0,
+        325.0
+      ],
+      "target_port": [
+        590.0,
+        410.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          590.0,
+          325.0
+        ],
+        [
+          590.0,
+          410.0
+        ]
+      ],
+      "length": 85.0,
+      "bends": 0,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    },
+    {
+      "id": "ingress-to-govern",
+      "source": "ingress",
+      "target": "govern",
+      "source_port": [
+        590.0,
+        460.0
+      ],
+      "target_port": [
+        590.0,
+        545.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          590.0,
+          460.0
+        ],
+        [
+          590.0,
+          545.0
+        ]
+      ],
+      "length": 85.0,
+      "bends": 0,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    },
+    {
+      "id": "govern-to-runtime",
+      "source": "govern",
+      "target": "agent-runtime",
+      "source_port": [
+        590.0,
+        595.0
+      ],
+      "target_port": [
+        590.0,
+        680.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          590.0,
+          595.0
+        ],
+        [
+          590.0,
+          680.0
+        ]
+      ],
+      "length": 85.0,
+      "bends": 0,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    },
+    {
+      "id": "runtime-to-agent",
+      "source": "agent-runtime",
+      "target": "agent-tools",
+      "source_port": [
+        590.0,
+        730.0
+      ],
+      "target_port": [
+        355.0,
+        815.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          590.0,
+          730.0
+        ],
+        [
+          590.0,
+          750.4
+        ],
+        [
+          355.0,
+          750.4
+        ],
+        [
+          355.0,
+          815.0
+        ]
+      ],
+      "length": 320.0,
+      "bends": 2,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    },
+    {
+      "id": "agent-to-tools",
+      "source": "agent-tools",
+      "target": "business",
+      "source_port": [
+        565.0,
+        840.0
+      ],
+      "target_port": [
+        635.0,
+        840.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          565.0,
+          840.0
+        ],
+        [
+          635.0,
+          840.0
+        ]
+      ],
+      "length": 70.0,
+      "bends": 0,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    },
+    {
+      "id": "tools-to-reply",
+      "source": "business",
+      "target": "reply",
+      "source_port": [
+        835.0,
+        875.0
+      ],
+      "target_port": [
+        590.0,
+        940.0
+      ],
+      "waypoints": [],
+      "route": [
+        [
+          835.0,
+          875.0
+        ],
+        [
+          835.0,
+          889.0
+        ],
+        [
+          590.0,
+          889.0
+        ],
+        [
+          590.0,
+          940.0
+        ]
+      ],
+      "length": 310.0,
+      "bends": 2,
+      "route_stretch": 1.0,
+      "crossings": [],
+      "bridges": []
+    }
+  ],
+  "composition": {
+    "profile": "standard",
+    "ok": true,
+    "score": 100,
+    "metrics": {
+      "total_bends": 4,
+      "bridged_crossings": 0,
+      "max_route_stretch": 1.0,
+      "minimum_node_gap": 65.0,
+      "minimum_container_gutter": 13.0,
+      "shortest_segment": 14.0
+    },
+    "limits": {
+      "profile": "standard",
+      "max_bends_per_edge": 12,
+      "max_total_bends": 100,
+      "max_route_stretch": 5.0,
+      "max_bridged_crossings": 8,
+      "min_node_gap": 0.0,
+      "min_container_gutter": 0.0,
+      "min_label_clearance": 2.0,
+      "min_segment_length": 0.0
+    },
+    "violations": []
+  },
+  "issues": [],
+  "summary": {
+    "nodes": 8,
+    "edges": 7,
+    "bridged_crossings": 0
+  }
+}

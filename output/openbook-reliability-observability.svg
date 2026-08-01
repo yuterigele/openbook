@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790">
+<style>text{font-family:'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;fill:#111827} .title{font-size:28px;font-weight:700} .sub{font-size:14px;fill:#6b7280} .layer{font-size:13px;font-weight:700;fill:#2563eb;letter-spacing:1px} .label{font-size:15px;font-weight:600} .small{font-size:12px;fill:#6b7280}</style>
+<defs><marker id="blue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#2563eb"/></marker><marker id="purple" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#7c3aed"/></marker><marker id="green" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#16a34a"/></marker><marker id="orange" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#ea580c"/></marker></defs>
+<rect width="1200" height="100%" fill="#ffffff"/>
+<text x="600" y="44" text-anchor="middle" class="title">OpenBook 可靠性、降级与观测链路</text>
+<text x="600" y="70" text-anchor="middle" class="sub">故障时优先停止不可靠写入；监控与告警只发送运行状态，不包含客户内容</text>
+<rect x="38" y="95" width="1124" height="165" rx="12" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="118" class="layer">模型可靠性</text>
+<rect x="95" y="145" width="185" height="60" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="187.5" y="175" text-anchor="middle" class="label">DeepSeek</text>
+<text x="187.5" y="195" text-anchor="middle" class="small">默认首选 Provider</text>
+<rect x="330" y="145" width="185" height="60" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="422.5" y="175" text-anchor="middle" class="label">OpenAI</text>
+<text x="422.5" y="195" text-anchor="middle" class="small">运行时备用</text>
+<rect x="565" y="145" width="185" height="60" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="657.5" y="175" text-anchor="middle" class="label">Ark</text>
+<text x="657.5" y="195" text-anchor="middle" class="small">运行时备用</text>
+<rect x="850" y="145" width="235" height="60" rx="9" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+<text x="967.5" y="175" text-anchor="middle" class="label">Stub 安全降级</text>
+<text x="967.5" y="195" text-anchor="middle" class="small">仅回复不可用；不调工具、不写库</text>
+<path d="M 280 175 L 330 175" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 515 175 L 565 175" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 750 175 L 850 175" fill="none" stroke="#dc2626" stroke-width="2.4"  marker-end="url(#purple)"/>
+<text x="600" y="240" text-anchor="middle" class="small">触发：启动初始化失败或运行时 429 / 5xx / 连接重置 / 超时；当前 Provider 最多重试 2 次后切换</text>
+<rect x="38" y="295" width="1124" height="150" rx="12" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="318" class="layer">写入可靠性</text>
+<rect x="105" y="342" width="220" height="62" rx="9" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="215.0" y="372" text-anchor="middle" class="label">Redis 健康监测</text>
+<text x="215.0" y="392" text-anchor="middle" class="small">连续 3 次探测失败</text>
+<rect x="455" y="342" width="220" height="62" rx="9" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+<text x="565.0" y="372" text-anchor="middle" class="label">只读保护</text>
+<text x="565.0" y="392" text-anchor="middle" class="small">查询可用；写操作拒绝</text>
+<rect x="805" y="342" width="220" height="62" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="915.0" y="372" text-anchor="middle" class="label">恢复写入</text>
+<text x="915.0" y="392" text-anchor="middle" class="small">连续 3 次探测成功</text>
+<path d="M 325 373 L 455 373" fill="none" stroke="#dc2626" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 675 373 L 805 373" fill="none" stroke="#16a34a" stroke-width="2.4"  marker-end="url(#green)"/>
+<text x="600" y="430" text-anchor="middle" class="small">创建预约仍由：幂等检查 → Redis 锁 → MySQL 事务/约束 → 提交复核保护</text>
+<rect x="38" y="495" width="1124" height="180" rx="12" fill="#fff1f2" stroke="#fecdd3" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="518" class="layer">观测与告警</text>
+<rect x="90" y="545" width="210" height="62" rx="9" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.5"/>
+<text x="195.0" y="575" text-anchor="middle" class="label">应用指标与日志</text>
+<text x="195.0" y="595" text-anchor="middle" class="small">/metrics、工具、LLM、cron</text>
+<rect x="410" y="545" width="210" height="62" rx="9" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.5"/>
+<text x="515.0" y="575" text-anchor="middle" class="label">Prometheus + Loki</text>
+<text x="515.0" y="595" text-anchor="middle" class="small">指标抓取、日志采集</text>
+<rect x="730" y="545" width="210" height="62" rx="9" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.5"/>
+<text x="835.0" y="575" text-anchor="middle" class="label">Grafana</text>
+<text x="835.0" y="595" text-anchor="middle" class="small">看板与规则评估</text>
+<rect x="980" y="545" width="135" height="62" rx="9" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.5"/>
+<text x="1047.5" y="575" text-anchor="middle" class="label">飞书</text>
+<text x="1047.5" y="595" text-anchor="middle" class="small">告警通知</text>
+<path d="M 300 576 L 410 576" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 620 576 L 730 576" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 940 576 L 980 576" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<text x="600" y="640" text-anchor="middle" class="small">告警：metrics 2 分钟不可达；LLM 错误率 &gt;10% / 5 分钟；限流拒绝 &gt;20 / 5 分钟；Redis 只读；模型降级率 &gt;20% / 5 分钟；工具失败率 &gt;10% / 5 分钟；cron 失败或心跳缺失</text>
+<rect x="38" y="705" width="1124" height="55" rx="12" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="728" class="layer">工具成功率 SLO</text>
+<text x="600" y="742" text-anchor="middle" class="label">技术执行成功率 ≥ 95%（累计 20 次调用后判定）；只读工具瞬态错误安全重试 1 次，写工具不自动重试</text>
+<text x="52" y="782" class="small">直接飞书通知：Redis 初始化失败 / 切入只读 / 恢复写入；模型降级：5 分钟 ≥20 次调用且降级率 &gt;5%，最多每 15 分钟重复一次</text>
+</svg>

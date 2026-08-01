@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 1020" width="1180" height="1020" data-generator="fireworks-tech-graph" data-schema-version="1" data-text-metrics="heuristic-v1" data-style-id="1" data-visual-theme="Flat Icon" data-diagram-type="architecture" data-motion-scene="" data-semantic-profile="generic" data-semantic-valid="true" data-quality-profile="standard" data-max-bends-per-edge="12" data-max-total-bends="100" data-max-route-stretch="5.0" data-max-bridged-crossings="8" data-min-node-gap="0.0" data-min-container-gutter="0.0" data-min-label-clearance="2.0" data-min-segment-length="0.0">
+  <defs>
+    <marker id="arrowA" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowC" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowE" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f97316"/>
+    </marker>
+    <marker id="arrowF" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowH" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+    <filter id="shadowSoft" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <filter id="shadowGlass" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+    <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+    .title { font-size: 30px; font-weight: 700; fill: #111827; }
+    .subtitle { font-size: 14px; font-weight: 500; fill: #6b7280; }
+    .section { font-size: 13px; font-weight: 700; fill: #2563eb; letter-spacing: 1.4px; }
+    .section-sub { font-size: 12px; font-weight: 500; fill: #94a3b8; }
+    .node-title { font-weight: 700; fill: #111827; }
+    .node-sub { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .node-type { font-size: 12px; font-weight: 700; fill: #9ca3af; letter-spacing: 0.08em; }
+    .arrow-label { font-size: 12px; font-weight: 600; fill: #6b7280; }
+    .legend { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .footnote { font-size: 12px; font-weight: 500; fill: #94a3b8; }
+    .metric-label { font-size: 8.5px; font-weight: 700; fill: #94a3b8; text-transform: uppercase; }
+    .metric-value { font-size: 9.5px; font-weight: 700; fill: #111827; }
+    </style>
+  </defs>
+  <rect data-graph-role="background" width="1180.0" height="1020.0" fill="#ffffff"/>
+  <text x="590.0" y="56" text-anchor="middle" class="title">美发门店预约 Agent · 主业务处理链路</text>
+  <text x="590.0" y="82" text-anchor="middle" class="subtitle">企业好友仅作客服链接引导；统一由企业微信客服承接智能对话与预约交易</text>
+  <g id="guide" data-graph-role="container" data-container-id="guide" data-semantic-role="boundary" data-graph-bounds="50,115,1130,215">
+  <rect data-graph-role="container" x="50.0" y="115.0" width="1080.0" height="100.0" rx="16.0" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="139.0" class="section">① 引导入口 · 企业微信好友</text>
+    <rect id="guide-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="121" width="189.12" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="service" data-graph-role="container" data-container-id="service" data-semantic-role="boundary" data-graph-bounds="50,245,1130,350">
+  <rect data-graph-role="container" x="50.0" y="245.0" width="1080.0" height="105.0" rx="16.0" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="269.0" class="section">② 统一会话入口 · 企业微信客服</text>
+    <rect id="service-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="251" width="215.12" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="gateway" data-graph-role="container" data-container-id="gateway" data-semantic-role="boundary" data-graph-bounds="50,380,1130,485">
+  <rect data-graph-role="container" x="50.0" y="380.0" width="1080.0" height="105.0" rx="16.0" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="404.0" class="section">③ 接入与身份可信化</text>
+    <rect id="gateway-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="386" width="146.22" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="governance" data-graph-role="container" data-container-id="governance" data-semantic-role="boundary" data-graph-bounds="50,515,1130,620">
+  <rect data-graph-role="container" x="50.0" y="515.0" width="1080.0" height="105.0" rx="16.0" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="539.0" class="section">④ 流量治理与内容安全</text>
+    <rect id="governance-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="521" width="159.22" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="runtime" data-graph-role="container" data-container-id="runtime" data-semantic-role="boundary" data-graph-bounds="50,650,1130,755">
+  <rect data-graph-role="container" x="50.0" y="650.0" width="1080.0" height="105.0" rx="16.0" fill="#fff7ed" stroke="#fdba74" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="674.0" class="section">⑤ AGENT 运行时与会话状态</text>
+    <rect id="runtime-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="656" width="188.6" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="transaction" data-graph-role="container" data-container-id="transaction" data-semantic-role="boundary" data-graph-bounds="50,785,1130,890">
+  <rect data-graph-role="container" x="50.0" y="785.0" width="1080.0" height="105.0" rx="16.0" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="809.0" class="section">⑥ 受控业务执行与预约一致性</text>
+    <rect id="transaction-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="791" width="198.22" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="delivery" data-graph-role="container" data-container-id="delivery" data-semantic-role="boundary" data-graph-bounds="50,920,1130,985">
+  <rect data-graph-role="container" x="50.0" y="920.0" width="1080.0" height="65.0" rx="16.0" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="68.0" y="944.0" class="section">⑦ 渠道回执</text>
+    <rect id="delivery-header" data-graph-role="reserved" data-reserved-kind="container-header" x="58" y="926" width="94.22" height="30" fill="none" stroke="none"/>
+  </g>
+  <path id="guide-to-kf" data-graph-role="edge" data-edge-id="guide-to-kf" data-source="friend-guide" data-target="kf-entry" data-edge-kind="flow" data-topic-id="" data-flow="primary" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 590,193 L 590,275" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="kf-to-ingress" data-graph-role="edge" data-edge-id="kf-to-ingress" data-source="kf-entry" data-target="ingress" data-edge-kind="flow" data-topic-id="" data-flow="primary" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 590,325 L 590,410" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="ingress-to-govern" data-graph-role="edge" data-edge-id="ingress-to-govern" data-source="ingress" data-target="govern" data-edge-kind="flow" data-topic-id="" data-flow="primary" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 590,460 L 590,545" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="govern-to-runtime" data-graph-role="edge" data-edge-id="govern-to-runtime" data-source="govern" data-target="agent-runtime" data-edge-kind="flow" data-topic-id="" data-flow="primary" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 590,595 L 590,680" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="runtime-to-agent" data-graph-role="edge" data-edge-id="runtime-to-agent" data-source="agent-runtime" data-target="agent-tools" data-edge-kind="flow" data-topic-id="" data-flow="primary" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="2" data-route-stretch="1.0" data-bridges="" d="M 590,730 L 590,750.4 L 355,750.4 L 355,815" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="agent-to-tools" data-graph-role="edge" data-edge-id="agent-to-tools" data-source="agent-tools" data-target="business" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 565,840 L 635,840" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="tools-to-reply" data-graph-role="edge" data-edge-id="tools-to-reply" data-source="business" data-target="reply" data-edge-kind="flow" data-topic-id="" data-flow="primary" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="2" data-route-stretch="1.0" data-bridges="" d="M 835,875 L 835,889 L 590,889 L 590,940" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <g id="node-friend-guide" data-graph-role="node" data-node-id="friend-guide" data-semantic-role="browser" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="guide" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="380,145,800,193">
+  <rect x="380.0" y="145.0" width="420.0" height="48.0" rx="10.0" fill="#ffffff" stroke="#3b82f6" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <text x="590.0" y="163.0" text-anchor="middle" class="node-type">企业微信好友</text>
+  <text x="590.0" y="175.0" text-anchor="middle" class="node-title" font-size="18.0">添加企业好友 → 自动下发企业微信客服链接</text>
+  </g>
+  <g id="node-kf-entry" data-graph-role="node" data-node-id="kf-entry" data-semantic-role="browser" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="service" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="325,275,855,325">
+  <rect x="325.0" y="275.0" width="530.0" height="50.0" rx="10.0" fill="#ffffff" stroke="#14b8a6" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <text x="590.0" y="293.0" text-anchor="middle" class="node-type">企业微信客服入口</text>
+  <text x="590.0" y="306.0" text-anchor="middle" class="node-title" font-size="18.0">扫码 / 链接进入；所有 Agent 对话统一从此承接</text>
+  </g>
+  <g id="node-ingress" data-graph-role="node" data-node-id="ingress" data-semantic-role="hexagon" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="gateway" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="220,410,960,460">
+  <path d="M 242.0 410.0 L 938.0 410.0 L 960.0 435.0 L 938.0 460.0 L 242.0 460.0 L 220.0 435.0 Z" fill="#ffffff" stroke="#2563eb" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <text x="590.0" y="428.0" text-anchor="middle" class="node-type">可信接入流水线</text>
+  <text x="590.0" y="441.0" text-anchor="middle" class="node-title" font-size="18.0">签名验证 · AES 解密 · MsgId 幂等去重 · 店铺路由 · 服务端注入 shop_id</text>
+  </g>
+  <g id="node-govern" data-graph-role="node" data-node-id="govern" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="governance" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="160,545,1020,595">
+  <rect x="160.0" y="545.0" width="860.0" height="50.0" rx="10.0" fill="#ffffff" stroke="#dc2626" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="590.0" y="563.0" text-anchor="middle" class="node-type">安全与流控策略</text>
+  <text x="590.0" y="576.0" text-anchor="middle" class="node-title" font-size="17.79">LRU 会话缓存 + 单用户 / 门店 / 全局令牌桶限流器 · 输入规范化 · qwen-flash 意图与违规分类</text>
+  </g>
+  <g id="node-agent-runtime" data-graph-role="node" data-node-id="agent-runtime" data-semantic-role="double_rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="runtime" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="145,680,1035,730">
+  <rect x="145.0" y="680.0" width="890.0" height="50.0" rx="10.0" fill="#ffffff" stroke="#f97316" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <rect x="151.0" y="686.0" width="878.0" height="38.0" rx="7.0" fill="none" stroke="#f97316" stroke-width="1.2" opacity="0.65"/>
+  <text x="590.0" y="698.0" text-anchor="middle" class="node-type">Agent Runtime</text>
+  <text x="590.0" y="711.0" text-anchor="middle" class="node-title" font-size="16.84">Channel 背压队列 · Worker 并发池 · Panic 隔离 · Context 超时 / 熔断 · Redis 会话历史与摘要压缩</text>
+  </g>
+  <g id="node-agent-tools" data-graph-role="node" data-node-id="agent-tools" data-semantic-role="hexagon" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="transaction" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="145,815,565,865">
+  <path d="M 167.0 815.0 L 543.0 815.0 L 565.0 840.0 L 543.0 865.0 L 167.0 865.0 L 145.0 840.0 Z" fill="#ffffff" stroke="#8b5cf6" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <text x="355.0" y="833.0" text-anchor="middle" class="node-type">DeepSeek-V3 Agent</text>
+  <text x="355.0" y="846.0" text-anchor="middle" class="node-title" font-size="18.0">工具规划 · 四级模型回退 · 白名单授权</text>
+  </g>
+  <g id="node-business" data-graph-role="node" data-node-id="business" data-semantic-role="tool" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="transaction" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="635,805,1035,875">
+  <rect x="635.0" y="805.0" width="400.0" height="70.0" rx="10.0" fill="#ffffff" stroke="#8b5cf6" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <text x="835.0" y="823.0" text-anchor="middle" class="node-type">确定性业务工具</text>
+  <text x="835.0" y="846.0" text-anchor="middle" class="node-title" font-size="12.0">查询：排班 / 技师 / 服务
+交易：创建 / 改约 / 取消 · 人工：投诉 / 退款 / 转接</text>
+  </g>
+  <g id="node-reply" data-graph-role="node" data-node-id="reply" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="delivery" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="300,940,880,972">
+  <rect x="300.0" y="940.0" width="580.0" height="32.0" rx="10.0" fill="#ffffff" stroke="#14b8a6" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="590.0" y="958.0" text-anchor="middle" class="node-type">回复投递</text>
+  <text x="590.0" y="962.0" text-anchor="middle" class="node-title" font-size="18.0">qwen-flash 润色 → 企业微信客服 API 回复顾客</text>
+  </g>
+  <g id="footer" data-graph-role="reserved" data-graph-bounds="42,992,273,1008">
+  <text x="42.0" y="1004.0" class="footnote">企业好友引导不进入 Agent 业务域；客服会话是唯一智能处理入口</text>
+  </g>
+</svg>

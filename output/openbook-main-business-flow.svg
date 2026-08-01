@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790">
+<style>text{font-family:'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;fill:#111827} .title{font-size:28px;font-weight:700} .sub{font-size:14px;fill:#6b7280} .layer{font-size:13px;font-weight:700;fill:#2563eb;letter-spacing:1px} .label{font-size:15px;font-weight:600} .small{font-size:12px;fill:#6b7280}</style>
+<defs><marker id="blue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#2563eb"/></marker><marker id="purple" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#7c3aed"/></marker><marker id="green" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#16a34a"/></marker><marker id="orange" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#ea580c"/></marker></defs>
+<rect width="1200" height="100%" fill="#ffffff"/>
+<text x="600" y="44" text-anchor="middle" class="title">OpenBook 主业务链路</text>
+<text x="600" y="70" text-anchor="middle" class="sub">企业微信好友只负责引导；微信客服是唯一正式预约入口</text>
+<rect x="38" y="95" width="1124" height="100" rx="12" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="118" class="layer">01 用户端</text>
+<rect x="115" y="130" width="210" height="58" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="220.0" y="160" text-anchor="middle" class="label">企业微信好友</text>
+<text x="220.0" y="180" text-anchor="middle" class="small">添加后收到客服链接</text>
+<rect x="495" y="130" width="210" height="58" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="600.0" y="160" text-anchor="middle" class="label">普通微信顾客</text>
+<text x="600.0" y="180" text-anchor="middle" class="small">进入微信客服会话</text>
+<rect x="875" y="130" width="210" height="58" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="980.0" y="160" text-anchor="middle" class="label">门店 / 平台后台</text>
+<text x="980.0" y="180" text-anchor="middle" class="small">管理员业务与运营</text>
+<path d="M 325 159 L 495 159" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-dasharray="5 4" marker-end="url(#purple)"/>
+<rect x="38" y="225" width="1124" height="110" rx="12" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="248" class="layer">02 接入层</text>
+<rect x="185" y="260" width="245" height="60" rx="9" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="307.5" y="290" text-anchor="middle" class="label">企业微信回调</text>
+<text x="307.5" y="310" text-anchor="middle" class="small">验签、解密、多店路由</text>
+<rect x="490" y="260" width="245" height="60" rx="9" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="612.5" y="290" text-anchor="middle" class="label">客服消息处理</text>
+<text x="612.5" y="310" text-anchor="middle" class="small">同步、持久化去重、debounce</text>
+<rect x="820" y="260" width="195" height="60" rx="9" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="917.5" y="290" text-anchor="middle" class="label">Hertz API</text>
+<text x="917.5" y="310" text-anchor="middle" class="small">后台、Web Demo、metrics</text>
+<path d="M 600 188 L 307 260" fill="none" stroke="#2563eb" stroke-width="2.4"  marker-end="url(#blue)"/>
+<path d="M 430 290 L 490 290" fill="none" stroke="#2563eb" stroke-width="2.4"  marker-end="url(#blue)"/>
+<rect x="38" y="370" width="1124" height="110" rx="12" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="393" class="layer">03 安防层</text>
+<rect x="185" y="405" width="220" height="60" rx="9" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="295.0" y="435" text-anchor="middle" class="label">限流与背压</text>
+<text x="295.0" y="455" text-anchor="middle" class="small">顾客桶 + 进程全局桶</text>
+<rect x="490" y="405" width="220" height="60" rx="9" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="600.0" y="435" text-anchor="middle" class="label">输入安全</text>
+<text x="600.0" y="455" text-anchor="middle" class="small">信任评分、敏感词、意图分类</text>
+<rect x="795" y="405" width="220" height="60" rx="9" fill="#fed7aa" stroke="#ea580c" stroke-width="1.5"/>
+<text x="905.0" y="435" text-anchor="middle" class="label">可信上下文</text>
+<text x="905.0" y="455" text-anchor="middle" class="small">门店、顾客身份、北京时间</text>
+<path d="M 612 320 L 295 405" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 405 435 L 490 435" fill="none" stroke="#ea580c" stroke-width="2.4"  marker-end="url(#orange)"/>
+<path d="M 710 435 L 795 435" fill="none" stroke="#ea580c" stroke-width="2.4"  marker-end="url(#orange)"/>
+<rect x="38" y="515" width="1124" height="145" rx="12" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="538" class="layer">04 应用层</text>
+<rect x="185" y="555" width="235" height="62" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="302.5" y="585" text-anchor="middle" class="label">Eino Booking Agent</text>
+<text x="302.5" y="605" text-anchor="middle" class="small">受控历史、规划、工具循环</text>
+<rect x="490" y="555" width="235" height="62" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="607.5" y="585" text-anchor="middle" class="label">模型运行时</text>
+<text x="607.5" y="605" text-anchor="middle" class="small">DeepSeek → OpenAI → Ark</text>
+<rect x="795" y="555" width="235" height="62" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+<text x="912.5" y="585" text-anchor="middle" class="label">预约业务工具</text>
+<text x="912.5" y="605" text-anchor="middle" class="small">查询、创建、取消、改约</text>
+<path d="M 905 465 L 302 555" fill="none" stroke="#7c3aed" stroke-width="2.4"  marker-end="url(#purple)"/>
+<path d="M 420 586 L 490 586" fill="none" stroke="#2563eb" stroke-width="2.4"  marker-end="url(#blue)"/>
+<path d="M 725 586 L 795 586" fill="none" stroke="#2563eb" stroke-width="2.4"  marker-end="url(#blue)"/>
+<text x="600" y="645" text-anchor="middle" class="small">工具结果校验后生成安全回复，并通过原微信客服会话返回顾客；mock 模式仅记录事件</text>
+<rect x="38" y="690" width="1124" height="72" rx="12" fill="#f0f9ff" stroke="#bae6fd" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="58" y="713" class="layer">05 数据层</text>
+<rect x="300" y="712" width="245" height="38" rx="9" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+<text x="422.5" y="742" text-anchor="middle" class="label">MySQL 8</text>
+<text x="422.5" y="762" text-anchor="middle" class="small">预约、顾客、门店、审计、去重</text>
+<rect x="655" y="712" width="245" height="38" rx="9" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+<text x="777.5" y="742" text-anchor="middle" class="label">Redis 7</text>
+<text x="777.5" y="762" text-anchor="middle" class="small">时段锁、健康检查与只读保护</text>
+<path d="M 912 617 L 778 712" fill="none" stroke="#16a34a" stroke-width="2.4"  marker-end="url(#green)"/>
+<path d="M 1030 617 L 422 712" fill="none" stroke="#16a34a" stroke-width="2.4"  marker-end="url(#green)"/>
+<text x="52" y="782" class="small">主保护：同请求幂等 → Redis 时段锁 → MySQL 事务与活跃时段约束 → 提交后复核</text>
+</svg>
