@@ -24,7 +24,7 @@ go run ./cmd/agent-eval -strategy small -json
 预约主链路使用 `tools/e2e_test.go` 的隔离 SQLite 场景测试，不依赖模型服务或真实 MySQL/Redis：
 
 ```powershell
-go test ./tools -run '^TestE2E_S[1-6]_' -count=1
+go test ./tools -run '^TestE2E_S(1|2|3|4|5|6|8)_' -count=1
 ```
 
-当前覆盖首次预约、取消预约、请假时段拦截、转人工、节假日拒绝和顾客爽约累计等场景。它作为 CI 中独立的 `appointment-flow-regression` 任务运行；意图路由得分只衡量“该走哪条流程”，该任务验证“流程执行后数据与业务规则是否正确”。
+当前覆盖首次预约、取消预约、请假时段拦截、转人工、节假日拒绝、顾客爽约累计，以及跨顾客取消拒绝等场景。它作为 CI 中独立的 `appointment-flow-regression` 任务运行；意图路由得分只衡量“该走哪条流程”，该任务验证“流程执行后数据与业务规则是否正确”。

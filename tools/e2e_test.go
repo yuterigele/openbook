@@ -297,6 +297,37 @@ func TestE2E_S7_DBUnavailable_GracefulDegradation(t *testing.T) {
 	}
 }
 
+// ===================== 场景 S8：身份隔离 =====================
+
+// TestE2E_S8_CrossCustomerCancelDenied 验证顾客只能取消自己的预约。
+// 预约 ID 即使被猜到或从上下文泄露，也不能成为跨顾客操作的授权凭据。
+func TestE2E_S8_CrossCustomerCancelDenied(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "e2e-s8", "")
+	storage.MakeBarber(t, "b-tony", shop.ID, "Tony")
+	owner := storage.MakeCustomer(t, "Alice", 0, 0)
+	other := storage.MakeCustomer(t, "Mallory", 0, 0)
+	date, timeStr := buildApptTimeStr(t, 4)
+	appt := storage.MakeAppointment(t, shop.ID, owner.ID, owner.Name, "Tony", date, timeStr)
+
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), other.WechatOpenID)
+	_, err := (&CancelAppointmentTool{}).InvokableRun(
+		ctx,
+		`{"appointment_id":"`+appt.ID+`"}`,
+	)
+	if err == nil {
+		t.Fatal("other customer must not cancel the appointment")
+	}
+
+	var persisted storage.Appointment
+	if err := storage.DB.First(&persisted, "id = ?", appt.ID).Error; err != nil {
+		t.Fatalf("reload appointment: %v", err)
+	}
+	if persisted.Status != "active" {
+		t.Fatalf("appointment status = %q, want active", persisted.Status)
+	}
+}
+
 // ===================== helpers =====================
 
 // shanghaiLoc 返回 Asia/Shanghai 时区（fallback +08:00 fixed zone）
