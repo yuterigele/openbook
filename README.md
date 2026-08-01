@@ -72,12 +72,16 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 ## 可观测性
 
-Docker Compose 默认仅启动应用、MySQL、Redis 和数据库初始化，适合低配线上服务器。可观测性栈位于 `observability` profile，需在本地显式启动：`docker compose --profile observability up -d`。启用后，应用的 `/metrics` 由 Prometheus 每 15 秒抓取；Grafana Alloy（Promtail 的后继）通过只读 Docker Socket 采集带 `logging=openbook` 标签的应用容器日志并写入 Loki；Grafana 预置 Prometheus、Loki 数据源及 OpenBook 概览看板。
+Docker Compose 默认仅启动应用、MySQL、Redis 和数据库初始化，适合低配线上服务器。可观测性栈位于 `observability` profile，需在本地显式启动：`docker compose --profile observability up -d`。启用后，应用的 `/metrics` 由 Prometheus 每 15 秒抓取；Grafana Alloy（Promtail 的后继）通过只读 Docker Socket 采集 Compose `app` 服务的容器日志并写入 Loki；Grafana 预置 Prometheus、Loki 数据源及 OpenBook 概览看板。
 
 ```text
 OpenBook /metrics → Prometheus → Grafana
 OpenBook stdout → Grafana Alloy → Loki → Grafana
 ```
+
+真实运行总览覆盖 LLM 与 Agent 任务、工具调用成功率、模型降级、预约写入保护、调用分布及容器日志：
+
+![OpenBook Grafana 运行总览](docs/assets/openbook-observability-dashboard.png)
 
 启动后可访问：
 

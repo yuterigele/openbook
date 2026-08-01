@@ -10,8 +10,8 @@ discovery.relabel "openbook" {
   targets = discovery.docker.openbook.targets
 
   rule {
-    source_labels = ["__meta_docker_container_label_logging"]
-    regex         = "openbook"
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "app"
     action        = "keep"
   }
 

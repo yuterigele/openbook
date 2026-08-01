@@ -5,50 +5,79 @@
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
-      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
-      "id": 1,
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}, "id": 1,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "sum(openbook_llm_calls_total)", "refId": "A"}],
-      "title": "LLM 调用总数",
-      "type": "stat"
+      "targets": [{"expr": "sum(openbook_llm_calls_total)", "refId": "A"}], "title": "LLM 调用总数", "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.1}]}, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
-      "id": 2,
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}, "id": 2,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"expr": "sum(increase(openbook_llm_errored_calls_total[5m])) / clamp_min(sum(increase(openbook_llm_calls_total[5m])), 1)", "refId": "A"}],
-      "title": "近 5 分钟 LLM 错误率",
-      "type": "stat"
+      "targets": [{"expr": "sum(increase(openbook_llm_errored_calls_total[5m])) / clamp_min(sum(increase(openbook_llm_calls_total[5m])), 1)", "refId": "A"}], "title": "近 5 分钟 LLM 错误率", "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "linear"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}},
-      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 8},
-      "id": 3,
-      "targets": [
-        {"expr": "sum(rate(openbook_llm_total_tokens_total[5m]))", "legendFormat": "Token/s", "refId": "A"},
-        {"expr": "sum(rate(openbook_ratelimit_throttled_total[5m]))", "legendFormat": "限流拒绝/s", "refId": "B"}
-      ],
-      "title": "Token 消耗与限流拒绝速率",
-      "type": "timeseries"
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0}, "id": 5,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(openbook_agent_tool_calls_total)", "refId": "A"}], "title": "Agent 工具调用总数", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.95}]}, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0}, "id": 6,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "openbook_agent_tool_success_rate", "refId": "A"}], "title": "Agent 工具成功率", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 6}, "id": 7,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(openbook_agent_tasks_started_total)", "refId": "A"}], "title": "Agent 任务总数", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.95}]}, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 6}, "id": 8,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(openbook_agent_tasks_succeeded_total) / clamp_min(sum(openbook_agent_tasks_started_total), 1)", "refId": "A"}], "title": "Agent 任务成功率", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 3}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 6}, "id": 9,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "openbook_llm_runtime_fallbacks_total", "refId": "A"}], "title": "模型运行时降级次数", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"text": "可写"}, "1": {"text": "只读保护"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 6}, "id": 10,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "openbook_redis_read_only", "refId": "A"}], "title": "预约写入状态", "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "linear"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 12}, "id": 3,
+      "targets": [{"expr": "sum(rate(openbook_llm_total_tokens_total[5m]))", "legendFormat": "Token/s", "refId": "A"}, {"expr": "sum(rate(openbook_ratelimit_throttled_total[5m]))", "legendFormat": "限流拒绝/s", "refId": "B"}],
+      "title": "Token 消耗与限流拒绝速率", "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "linear"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 12}, "id": 11,
+      "targets": [{"expr": "sum by (tool) (openbook_agent_tool_calls_total)", "legendFormat": "{{tool}}", "refId": "A"}],
+      "title": "Agent 工具调用分布", "type": "timeseries"
     },
     {
       "datasource": {"type": "loki", "uid": "loki"},
-      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 17},
-      "id": 4,
-      "targets": [{"expr": "{service=\"app\"}", "refId": "A"}],
-      "title": "OpenBook 容器日志",
-      "type": "logs"
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 21}, "id": 4,
+      "targets": [{"expr": "{service=\"app\"}", "refId": "A"}], "title": "OpenBook 容器日志", "type": "logs"
     }
   ],
-  "refresh": "30s",
-  "schemaVersion": 39,
-  "tags": ["openbook"],
-  "templating": {"list": []},
-  "time": {"from": "now-1h", "to": "now"},
-  "title": "OpenBook Overview",
-  "uid": "openbook-overview",
-  "version": 1
+  "refresh": "30s", "schemaVersion": 39, "tags": ["openbook"], "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"}, "title": "OpenBook Overview", "uid": "openbook-overview", "version": 2
 }
