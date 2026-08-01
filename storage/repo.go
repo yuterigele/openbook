@@ -670,6 +670,30 @@ func GetAppointmentForCustomer(ctx context.Context, appointmentID, shopID, custo
 	return &appt, nil
 }
 
+// GetAppointmentForCustomerPrefix resolves a customer-facing appointment
+// reference prefix only inside the verified customer's shop scope. More than
+// one match is deliberately treated as inaccessible so a short reference can
+// never select an arbitrary appointment.
+func GetAppointmentForCustomerPrefix(ctx context.Context, idPrefix, shopID, customerID string) (*Appointment, error) {
+	idPrefix = strings.ToLower(strings.TrimSpace(idPrefix))
+	if idPrefix == "" || shopID == "" || customerID == "" {
+		return nil, ErrCustomerIdentityRequired
+	}
+
+	var appts []Appointment
+	err := mustDB().WithContext(ctx).
+		Where("LOWER(id) LIKE ? AND shop_id = ? AND customer_id = ?", idPrefix+"%", shopID, customerID).
+		Limit(2).
+		Find(&appts).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(appts) != 1 {
+		return nil, ErrAppointmentForbidden
+	}
+	return &appts[0], nil
+}
+
 // ListAppointmentsByShopRange 列出某 shop 在 [dateFrom, dateTo] 区间内的所有预约（v4.12.1）
 //
 // 用于 /api/admin/data/export——不限 status（active / cancelled / completed / noshow 都返）。

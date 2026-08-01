@@ -69,10 +69,14 @@ func (t *CancelAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	if err != nil {
 		return "", err
 	}
+	appt, err := resolveCustomerAppointment(ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID)
+	if err != nil {
+		return "", fmt.Errorf("找不到属于您的预约，确认下预约号是否正确？")
+	}
 
 	// 取消范围固定为服务端注入的 shop + 已验证顾客，模型只能提供预约号和原因。
 	result, err := storage.CancelAppointmentForCustomerWithPolicy(
-		ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID, storage.CancelSourceAgent, params.Reason,
+		ctx, appt.ID, ShopIDFromCtx(ctx), customer.ID, storage.CancelSourceAgent, params.Reason,
 	)
 	if err != nil {
 		// 已过预约时间：特殊错误，引导 Agent 改用 mark_no_show
@@ -84,7 +88,7 @@ func (t *CancelAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		return "", err
 	}
 	// 再读取受当前门店和顾客约束的记录，禁止仅凭取消函数返回值向顾客确认。
-	persisted, err := storage.GetAppointmentForCustomer(ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID)
+	persisted, err := storage.GetAppointmentForCustomer(ctx, appt.ID, ShopIDFromCtx(ctx), customer.ID)
 	if err != nil || persisted.Status != "cancelled" {
 		return "", fmt.Errorf("取消结果校验失败，请勿向顾客确认已取消；请稍后查询预约状态")
 	}

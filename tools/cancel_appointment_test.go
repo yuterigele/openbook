@@ -131,6 +131,27 @@ func TestCancelAppointmentTool_EarlyCancel(t *testing.T) {
 	}
 }
 
+func TestCancelAppointmentTool_LegacyCustomerReference(t *testing.T) {
+	setupToolsTestDB(t)
+	cust := makeToolsCustomer(t, "Alice", 0)
+	date, tm := buildApptTimeStr(t, 4)
+	appt := makeToolsAppointment(t, "shop-1", cust.ID, "Alice", "Tony", date, tm)
+	const legacyID = "a4f0e91b-1234-4e6c-9d8b-0123456789ab"
+	if err := storage.DB.Model(appt).Update("id", legacyID).Error; err != nil {
+		t.Fatalf("set deterministic appointment ID: %v", err)
+	}
+	appt.ID = legacyID
+
+	ctx := WithOpenID(WithShopID(context.Background(), "shop-1"), cust.WechatOpenID)
+	out, err := (&CancelAppointmentTool{}).InvokableRun(ctx, `{"appointment_id":"OB-A4F0"}`)
+	if err != nil {
+		t.Fatalf("legacy customer reference should cancel: %v", err)
+	}
+	if !strings.Contains(out, "已成功取消") {
+		t.Errorf("cancel output = %q, want success", out)
+	}
+}
+
 func TestCancelAppointmentTool_LateCancel_AddsWarning(t *testing.T) {
 	setupToolsTestDB(t)
 	cust := makeToolsCustomer(t, "Bob", 0)

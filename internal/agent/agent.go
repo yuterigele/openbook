@@ -51,7 +51,7 @@ func buildAgentInstruction() string {
 
 【工具流程】
 - 预约：确认师傅、日期、时间、服务；先 query_schedule，空闲后 create_appointment。
-- 取消/改约：优先从 history 找最近的预约ID；先 get_appointment 获取真实状态。改约依次取消旧预约、查新时段、创建新预约。
+- 取消/改约：优先从 history 找最近预约；顾客提供“OB-”开头的预约号时可直接传给 get_appointment。先获取真实状态，再依次取消旧预约、查新时段、创建新预约。
 - 节假日：先 list_shop_holidays，再 query_schedule 验证推荐日期。
 - 顾客问项目/价格用 list_services；问请假原因用 barber_leave。
 - 工具报错或拒绝时按结果说明，不臆测、不重复调用。

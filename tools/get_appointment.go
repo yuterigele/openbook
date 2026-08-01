@@ -43,7 +43,7 @@ func (t *GetAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"appointment_id": {
 				Type:     "string",
-				Desc:     "预约ID（格式如 A1B2C3D），从本会话 history 里取",
+				Desc:     "预约号（格式如 OB-A1B2C3D4）或本会话中的预约ID",
 				Required: true,
 			},
 		}),
@@ -70,7 +70,7 @@ func (t *GetAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	if err != nil {
 		return "", err
 	}
-	appt, err := storage.GetAppointmentForCustomer(ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID)
+	appt, err := resolveCustomerAppointment(ctx, params.AppointmentID, ShopIDFromCtx(ctx), customer.ID)
 	if err != nil {
 		return "", fmt.Errorf("找不到属于您的预约，确认下预约号是否正确？")
 	}

@@ -30,7 +30,7 @@ func TestBuildAgentInstruction_KeyConstraints(t *testing.T) {
 		},
 		{
 			desc: "预约和改约流程",
-			must: []string{"query_schedule", "create_appointment", "get_appointment", "取消旧预约、查新时段、创建新预约"},
+			must: []string{"query_schedule", "create_appointment", "get_appointment", "OB-", "取消旧预约、查新时段、创建新预约"},
 		},
 		{
 			desc: "节假日和师傅信息",

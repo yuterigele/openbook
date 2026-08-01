@@ -81,6 +81,49 @@ func TestGetAppointment_HappyPath(t *testing.T) {
 	}
 }
 
+func TestGetAppointment_LegacyCustomerReference(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	cust := storage.MakeCustomer(t, "Alice", 0, 0)
+	appt := storage.MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2026-06-26", "14:00")
+	const legacyID = "a4f0e91b-1234-4e6c-9d8b-0123456789ab"
+	if err := storage.DB.Model(appt).Update("id", legacyID).Error; err != nil {
+		t.Fatalf("set deterministic appointment ID: %v", err)
+	}
+	appt.ID = legacyID
+
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID)
+	out, err := (&GetAppointmentTool{}).InvokableRun(ctx, `{"appointment_id":"OB-A4F0"}`)
+	if err != nil {
+		t.Fatalf("legacy customer reference should resolve: %v", err)
+	}
+	if !strings.Contains(out, appointmentDisplayNumber(appt.ID)) {
+		t.Errorf("output should contain the current display reference, got %q", out)
+	}
+}
+
+func TestGetAppointment_AmbiguousCustomerReferenceIsRejected(t *testing.T) {
+	setupToolsTestDB(t)
+	shop := storage.MakeShop(t, "shop-1", "")
+	cust := storage.MakeCustomer(t, "Alice", 0, 0)
+	first := storage.MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2026-06-26", "14:00")
+	second := storage.MakeAppointment(t, shop.ID, cust.ID, "Alice", "Tony", "2026-06-27", "14:00")
+	for appt, id := range map[*storage.Appointment]string{
+		first:  "a4f01111-1234-4e6c-9d8b-0123456789ab",
+		second: "a4f02222-1234-4e6c-9d8b-0123456789ab",
+	} {
+		if err := storage.DB.Model(appt).Update("id", id).Error; err != nil {
+			t.Fatalf("set deterministic appointment ID: %v", err)
+		}
+	}
+
+	ctx := WithOpenID(WithShopID(context.Background(), shop.ID), cust.WechatOpenID)
+	_, err := (&GetAppointmentTool{}).InvokableRun(ctx, `{"appointment_id":"OB-A4F0"}`)
+	if err == nil {
+		t.Fatal("ambiguous short reference must be rejected")
+	}
+}
+
 // v4.13.6 根因场景：leave 改派后 barber_name 已经从老王变成 Tony，
 // Agent 调这个工具拿真实状态，决定怎么继续。
 func TestGetAppointment_AfterLeaveReschedule_ReturnsNewBarber(t *testing.T) {
