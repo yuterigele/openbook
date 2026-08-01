@@ -1,11 +1,26 @@
 # OpenBook · 微信一句话预约的 Agent MVP
 
-> 围绕“用户在微信说一句话完成预约”的场景，完成从意图识别、工具调用、业务落库到企业微信回复的 Agent 闭环。
+> 一个用 Go 与 CloudWeGo Eino 构建的美发门店预约 Agent：将自然语言请求安全地转换为可校验、可执行的预约业务操作。
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![CloudWeGo Eino](https://img.shields.io/badge/CloudWeGo-Eino-3B82F6)](https://github.com/cloudwego/eino)
 [![LLM](https://img.shields.io/badge/LLM-DeepSeek%20%2F%20OpenAI%20%2F%20Ark-0066CC)](.)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+## 30 秒了解项目
+
+OpenBook 不是通用聊天机器人，而是验证 Agent 如何在真实业务里可靠落地的可运行 Demo / MVP。用户可以在微信客服中说“明天下午 2 点想约 Tony 剪发”，系统完成意图识别、受限工具调用、库存/档期校验、事务写入与结果回复。
+
+| 关注点 | 项目中的实现 |
+| --- | --- |
+| Agent 编排 | 基于 Eino ADK / compose 支持多轮对话、流式回复与白名单工具调用 |
+| 业务可靠性 | 幂等检查、Redis 时段锁、MySQL 事务与提交后复核，避免并发撞单 |
+| 安全边界 | 服务端注入门店与顾客身份；工具层校验租户隔离、资源归属和操作权限 |
+| 失败降级 | 多模型降级链、Stub 安全降级、Redis 异常时只读保护；无法确认结果不回复成功 |
+| 可观测性 | Prometheus、Loki、Grafana 与 SLO 指标；覆盖模型、工具、限流和 Redis 状态 |
+| RAG 实验 | 面向低频、单文档问答的独立实验流程；预约等确定性业务不依赖 RAG 决策 |
+
+**快速查看：** [架构与安全边界](docs/架构说明.md) · [工程取舍与复盘](docs/engineering/工程问题复盘.md) · [压测口径](docs/benchmarks.md) · [本地启动](#快速开始)
 
 ## 项目定位
 
@@ -181,8 +196,8 @@ go test ./internal/agent ./server -count=1
 
 ## 迭代
 
-- 20+ 版本迭代
-- 重点演进：工具调用闭环、业务规则、身份隔离、时间处理、容器化与回归测试
+- 从 MVP 持续迭代至 **v4.19**，保留 20+ 个有记录的业务版本
+- 重点演进：工具调用闭环、业务规则、身份隔离、时间处理、容器化、可观测性与回归测试
 
 ## License
 
