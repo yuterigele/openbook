@@ -318,8 +318,8 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 }
 
 func appointmentSuccessMessage(appointment *storage.Appointment) string {
-	return fmt.Sprintf("预约创建成功！\n预约ID：%s\n理发师：%s\n顾客：%s\n日期：%s\n时间：%s\n服务：%s",
-		appointment.ID,
+	return fmt.Sprintf("预约创建成功！\n📋 预约信息\n预约号：%s\n理发师：%s\n顾客：%s\n日期：%s\n时间：%s\n服务：%s",
+		appointmentDisplayNumber(appointment.ID),
 		appointment.BarberName,
 		appointment.Customer,
 		appointment.Date,

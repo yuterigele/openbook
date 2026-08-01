@@ -90,7 +90,7 @@ func (t *CancelAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	}
 
 	// 根据 cancel_type 拼装回复
-	msg := fmt.Sprintf("预约 %s 已成功取消。", persisted.ID)
+	msg := fmt.Sprintf("预约号：%s 已成功取消。", appointmentDisplayNumber(persisted.ID))
 	switch result.CancelType {
 	case storage.CancelTypeLate:
 		msg += "\n\n⚠️ 注意：本次取消距离预约时间不足 2 小时，已记录为'晚退订'。" +

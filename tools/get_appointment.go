@@ -77,8 +77,8 @@ func (t *GetAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON s
 
 	// 故意不返回 phone 字段（Agent 不需要，避免越权）
 	// cancel_reason 保留：Agent 可能需要解释为啥被取消（admin 取消 / 顾客取消 / leave 改派失败）
-	return fmt.Sprintf("预约 %s 当前状态：\n理发师：%s\n日期：%s\n时间：%s\n服务：%s\n状态：%s%s",
-		appt.ID,
+	return fmt.Sprintf("预约号：%s\n当前状态：\n理发师：%s\n日期：%s\n时间：%s\n服务：%s\n状态：%s%s",
+		appointmentDisplayNumber(appt.ID),
 		appt.BarberName,
 		appt.Date,
 		appt.Time,

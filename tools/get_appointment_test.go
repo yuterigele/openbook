@@ -61,11 +61,14 @@ func TestGetAppointment_HappyPath(t *testing.T) {
 
 	// 必须含完整字段
 	mustHave := []string{
-		appt.ID,
+		appointmentDisplayNumber(appt.ID),
 		"Tony",
 		"2026-06-26",
 		"14:00",
 		"active", // status
+	}
+	if strings.Contains(out, appt.ID) {
+		t.Errorf("output should NOT expose the internal appointment ID, got %q", out)
 	}
 	for _, sub := range mustHave {
 		if !strings.Contains(out, sub) {
