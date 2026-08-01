@@ -20,6 +20,12 @@ OpenBook 不是通用聊天机器人，而是验证 Agent 如何在真实业务�
 | 可观测性 | Prometheus、Loki、Grafana 与 SLO 指标；覆盖模型、工具、限流和 Redis 状态 |
 | RAG 实验 | 面向低频、单文档问答的独立实验流程；预约等确定性业务不依赖 RAG 决策 |
 
+### 企业微信预约 Demo
+
+用户提出预约请求后，Agent 查询可约时段、补齐必要的顾客资料，再创建预约并返回短预约号。
+
+![OpenBook 企业微信预约演示](docs/assets/openbook-wecom-booking-demo.png)
+
 **快速查看：** [架构与安全边界](docs/架构说明.md) · [工程取舍与复盘](docs/engineering/工程问题复盘.md) · [压测口径](docs/benchmarks.md) · [本地启动](#快速开始)
 
 ## 项目定位
