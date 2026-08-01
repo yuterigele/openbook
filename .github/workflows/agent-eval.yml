@@ -7,6 +7,8 @@ on:
       - "docs/evals/**"
       - "evaluation/**"
       - "intent/**"
+      - "tools/**"
+      - "storage/**"
   push:
     branches: [main]
     paths:
@@ -14,6 +16,8 @@ on:
       - "docs/evals/**"
       - "evaluation/**"
       - "intent/**"
+      - "tools/**"
+      - "storage/**"
 
 jobs:
   keyword-baseline:
@@ -27,3 +31,13 @@ jobs:
         run: go test ./evaluation -count=1
       - name: Enforce keyword routing baseline
         run: go run ./cmd/agent-eval -min-accuracy 1 -min-critical-accuracy 1
+
+  appointment-flow-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+      - name: Verify deterministic appointment flows
+        run: go test ./tools -run '^TestE2E_S[1-6]_' -count=1
