@@ -31,3 +31,16 @@ func TestEvaluateIntentReportsCategoryAndCriticalScores(t *testing.T) {
 		t.Fatalf("unexpected source score: %+v", score.BySource)
 	}
 }
+
+func TestCheckIntentThresholds(t *testing.T) {
+	score := IntentScore{Accuracy: 0.9, CriticalAccuracy: 0.8}
+	if err := CheckIntentThresholds(score, 0.9, 0.8); err != nil {
+		t.Fatalf("expected thresholds to pass: %v", err)
+	}
+	if err := CheckIntentThresholds(score, 0.91, -1); err == nil {
+		t.Fatal("expected overall threshold failure")
+	}
+	if err := CheckIntentThresholds(score, -1, 1.1); err == nil {
+		t.Fatal("expected invalid threshold failure")
+	}
+}

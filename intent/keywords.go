@@ -30,15 +30,15 @@ import "strings"
 var keywordMap = map[Intent][]string{
 	IntentBook: {
 		"预约", "预订", "订", "下单", "想约", "想去", "想剪", "想做",
-		"想烫", "想染", "想护", "可以约", "能约", "有空吗", "约一下",
+		"想烫", "想染", "想护", "染发", "可以约", "能约", "有空吗", "约一下",
 		"book", "appointment", "schedule",
 	},
 	IntentCancel: {
-		"取消", "退订", "退掉", "不要了", "不来了", "销约", "撤销",
+		"取消", "退订", "退掉", "预约不要了", "不要了", "不来了", "销约", "撤销",
 		"cancel",
 	},
 	IntentReschedule: {
-		"改时间", "改到", "换时间", "改一下", "改天", "改日", "改期",
+		"把预约改到", "改时间", "改到", "换个时间", "换时间", "改一下", "改天", "改日", "改期",
 		"换到", "改到周", "挪到", "推迟", "提前", "调时间",
 		"reschedule", "change time", "move to",
 	},
@@ -107,7 +107,10 @@ func keywordMatch(text string) (Intent, string, float64) {
 				continue
 			}
 			intentHits[intent]++
-			if earliest == nil || pos < earliest.pos {
+			// When two triggers start at the same position, prefer the longer,
+			// more specific phrase. For example, "预约不要了" must route to
+			// cancellation instead of the generic booking trigger "预约".
+			if earliest == nil || pos < earliest.pos || (pos == earliest.pos && len(w) > len(earliest.word)) {
 				earliest = &match{intent: intent, word: w, pos: pos}
 			}
 		}

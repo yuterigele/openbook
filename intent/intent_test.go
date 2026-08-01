@@ -26,6 +26,7 @@ func TestKeywordMatch_Book(t *testing.T) {
 		"我想预约明天下午 3 点",
 		"可以帮我订一下吗",
 		"想去剪头发",
+		"周末可以染发吗",
 		"I want to book an appointment",
 		"明天下午想去剪头发",
 	}
@@ -46,6 +47,7 @@ func TestKeywordMatch_Cancel(t *testing.T) {
 		"帮我取消",
 		"我不来了",
 		"帮我退掉",
+		"预约不要了",
 		"cancel my appointment",
 	}
 	for _, in := range tests {
@@ -59,6 +61,8 @@ func TestKeywordMatch_Cancel(t *testing.T) {
 func TestKeywordMatch_Reschedule(t *testing.T) {
 	tests := []string{
 		"帮我改到明天",
+		"把预约改到周六",
+		"我想换个时间",
 		"换时间可以吗",
 		"推迟到下周",
 		"提前到 3 点",

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"time"
 
@@ -87,6 +88,30 @@ type Rate struct {
 	Total    int     `json:"total"`
 	Correct  int     `json:"correct"`
 	Accuracy float64 `json:"accuracy"`
+}
+
+// CheckIntentThresholds verifies optional score gates. A negative threshold
+// disables that gate; enabled thresholds must fall within [0, 1].
+func CheckIntentThresholds(score IntentScore, minAccuracy, minCriticalAccuracy float64) error {
+	for _, threshold := range []struct {
+		name   string
+		value  float64
+		actual float64
+	}{
+		{name: "min accuracy", value: minAccuracy, actual: score.Accuracy},
+		{name: "min critical accuracy", value: minCriticalAccuracy, actual: score.CriticalAccuracy},
+	} {
+		if threshold.value < 0 {
+			continue
+		}
+		if math.IsNaN(threshold.value) || threshold.value > 1 {
+			return fmt.Errorf("%s must be within [0, 1] or negative to disable", threshold.name)
+		}
+		if threshold.actual < threshold.value {
+			return fmt.Errorf("%s %.4f is below required %.4f", threshold.name, threshold.actual, threshold.value)
+		}
+	}
+	return nil
 }
 
 // EvaluateIntent runs every case through classifier. The caller controls

@@ -26,7 +26,7 @@ OpenBook 不是通用聊天机器人，而是验证 Agent 如何在真实业务�
 
 ![OpenBook 企业微信预约演示](docs/assets/openbook-wecom-booking-demo.png)
 
-**快速查看：** [架构与安全边界](docs/架构说明.md) · [工程取舍与复盘](docs/engineering/工程问题复盘.md) · [压测口径](docs/benchmarks.md) · [本地启动](#快速开始)
+**快速查看：** [架构与安全边界](docs/架构说明.md) · [离线 Agent 评测](docs/evals/README.md) · [工程取舍与复盘](docs/engineering/工程问题复盘.md) · [压测口径](docs/benchmarks.md) · [本地启动](#快速开始)
 
 ## 项目定位
 
@@ -188,6 +188,7 @@ go test ./internal/agent ./server -count=1
 ## 文档
 
 - [benchmarks](docs/benchmarks.md) — 压测方案与记录模板
+- [离线 Agent 评测](docs/evals/README.md) — 版本化意图集、质量门禁与运行方式
 - [产品需求](docs/product/产品需求.md) — 预约场景与业务规则
 - [美业门店痛点分析](docs/product/美业门店痛点分析.md) — 目标用户与业务痛点
 - [架构说明](docs/架构说明.md) — 运行时链路与安全边界
