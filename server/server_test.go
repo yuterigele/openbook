@@ -699,6 +699,36 @@ func TestTrimHistory_BothLimitsApply(t *testing.T) {
 	}
 }
 
+func TestTrimHistoryDropsOrphanedToolResults(t *testing.T) {
+	callID := "call-1"
+	history := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{ID: callID, Function: schema.FunctionCall{Name: "list_barbers", Arguments: `{}`}}}},
+		{Role: schema.Tool, ToolCallID: callID, ToolName: "list_barbers", Content: `[]`},
+		mkMsg("下一条消息"),
+	}
+
+	// Keeping only the last two messages used to send a tool result without
+	// its required preceding assistant tool call to OpenAI.
+	out := trimHistory(history, 2, 10000)
+	if len(out) != 1 || out[0].Content != "下一条消息" {
+		t.Fatalf("trimmed history = %+v, want only the user message", out)
+	}
+}
+
+func TestTrimHistoryKeepsCompleteToolExchange(t *testing.T) {
+	callID := "call-1"
+	history := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{ID: callID, Function: schema.FunctionCall{Name: "list_barbers", Arguments: `{}`}}}},
+		{Role: schema.Tool, ToolCallID: callID, ToolName: "list_barbers", Content: `[]`},
+		mkMsg("下一条消息"),
+	}
+
+	out := trimHistory(history, 3, 10000)
+	if len(out) != 3 {
+		t.Fatalf("complete tool exchange was unexpectedly removed: %+v", out)
+	}
+}
+
 func TestTrimHistory_Empty(t *testing.T) {
 	out := trimHistory([]*schema.Message{}, 5, 100)
 	if len(out) != 0 {

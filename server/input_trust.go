@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -34,6 +35,14 @@ func assessUserInputTrust(input string) userInputTrustDecision {
 	if (containsAny(text, riskyInputTerms) || looksLikeGarbage(text)) &&
 		!containsAny(text, bookingTerms) && !containsAny(text, greetingTerms) {
 		return userInputTrustDecision{Allowed: false, Score: -3, Reason: "deterministic_risk"}
+	}
+	// Contact details are normal incomplete booking input. Check this after the
+	// deterministic risk gate so a phone number cannot be used to bypass an
+	// injection, command, advertisement, or garbage rejection. It also avoids
+	// an optional small model incorrectly classifying bare customer details as
+	// unrelated content.
+	if containsCustomerContact(text) {
+		return userInputTrustDecision{Allowed: true, Score: 2, Reason: "customer_contact"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -71,6 +80,17 @@ var bookingTerms = []string{
 	"师傅", "发型师", "档期", "空位", "时间", "今天", "明天", "后天",
 	"改约", "改时间", "取消", "预约号", "价格", "收费", "多少钱",
 	"营业", "几点", "地址", "门店", "店长", "投诉", "退款", "人工",
+}
+
+// mainlandPhonePattern recognizes a standalone mainland China mobile number.
+// A customer often provides their name and phone in a separate turn before
+// supplying the desired date or barber, so neither field is a reliable
+// keyword signal by itself. It must not be rejected as unrelated solely
+// because it lacks words such as "预约" or "时间".
+var mainlandPhonePattern = regexp.MustCompile(`(?:^|\D)1[3-9]\d{9}(?:$|\D)`)
+
+func containsCustomerContact(text string) bool {
+	return mainlandPhonePattern.MatchString(text)
 }
 
 var greetingTerms = []string{

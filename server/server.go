@@ -1524,6 +1524,59 @@ func trimHistory[M adk.MessageType](history []M, maxMessages, maxChars int) []M 
 		totalChars += n
 	}
 	_ = trimmed // 防止 unused；后续如果要加日志可读
+	return sanitizeToolHistory(out)
+}
+
+// sanitizeToolHistory keeps tool calls and tool results as complete protocol
+// units. History trimming can otherwise leave a tool result at the beginning
+// of the next model request after its preceding assistant tool_call was
+// removed. OpenAI-compatible APIs reject that sequence with HTTP 400.
+func sanitizeToolHistory[M adk.MessageType](history []M) []M {
+	out := make([]M, 0, len(history))
+	pending := map[string]struct{}(nil)
+	pendingStart := -1
+
+	discardPending := func() {
+		if pendingStart >= 0 {
+			out = out[:pendingStart]
+		}
+		pending = nil
+		pendingStart = -1
+	}
+
+	for _, msg := range history {
+		calls := msgops.ToolCalls(msg)
+		results := msgops.ToolResults(msg)
+		if len(calls) > 0 {
+			discardPending()
+			pending = make(map[string]struct{}, len(calls))
+			for _, call := range calls {
+				pending[call.ID] = struct{}{}
+			}
+			pendingStart = len(out)
+			out = append(out, msg)
+			continue
+		}
+		if len(results) > 0 {
+			if pending == nil {
+				continue // orphaned tool result
+			}
+			out = append(out, msg)
+			for _, result := range results {
+				delete(pending, result.ID)
+			}
+			if len(pending) == 0 {
+				pending = nil
+				pendingStart = -1
+			}
+			continue
+		}
+		if pending != nil {
+			discardPending()
+		}
+		out = append(out, msg)
+	}
+	discardPending()
 	return out
 }
 
