@@ -1,18 +1,16 @@
 package tools
 
-// barber_leave.go
+// barber_leave.go 查询理发师请假情况。
 //
-// 查询理发师请假情况（PRD §4.1 + §11.7 P4 顾客侧感知）
-//
-//   - 顾客场景："Tony 明天有空吗？" / "Kevin 后天请假吗？" / "师傅什么时候回来？"
+//   - 顾客场景：“Tony 明天有空吗？”、“Kevin 后天请假吗？”、“师傅什么时候回来？”
 //   - 与 query_schedule 区别：
-//     * query_schedule 查的是某师傅某天的可约时段（已自动扣除请假）
-//     * barber_leave 查的是某师傅某段时间的请假详情（原因 + 区间）
+//     * query_schedule 查询某师傅某天的可约时段（已扣除请假）。
+//     * barber_leave 查询某师傅某段时间的请假详情（原因和区间）。
 //
 // 设计：
-//   - 输入：barber_name 必填，date 可选（缺省 = 今天）
-//   - 输出：请假区间列表（"HH:MM-HH:MM（原因）"），无请假时明确说"无"
-//   - 友好兜底：barber 不存在 / 不在 active / 跨日请假的合并提示
+//   - 输入：理发师姓名必填，日期可选（默认为当天）。
+//   - 输出：请假区间列表；无请假时明确说明。
+//   - 对理发师不存在、停用及跨日请假返回友好提示。
 
 import (
 	"context"
@@ -102,7 +100,7 @@ func (t *BarberLeaveTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		return "", fmt.Errorf("barber_name 不能为空")
 	}
 
-	// 缺省日期 = 今天（Asia/Shanghai）
+	// 未传日期时使用当天（Asia/Shanghai）。
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	if loc == nil {
 		loc = time.FixedZone("CST", 8*3600)
@@ -112,7 +110,7 @@ func (t *BarberLeaveTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		params.Date = now.Format("2006-01-02")
 	}
 
-	// 查 barber（兼容多店）
+	// 查询理发师并兼容多门店。
 	barber, err := storage.GetBarberByName(params.BarberName)
 	if err != nil {
 		return "", fmt.Errorf("师傅 %s 不在店里呢（本店有 Tony、Kevin 两位），换个试试？", params.BarberName)
@@ -133,7 +131,7 @@ func (t *BarberLeaveTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 		return "", fmt.Errorf("查询请假记录失败，请稍后重试")
 	}
 
-	// 过滤：只保留 active 状态
+	// 仅保留有效状态的请假记录。
 	activeLeaves := make([]storage.BarberLeave, 0, len(leaves))
 	for _, l := range leaves {
 		if l.Status == storage.LeaveStatusActive {
@@ -146,16 +144,13 @@ func (t *BarberLeaveTool) InvokableRun(ctx context.Context, argumentsInJSON stri
 	}
 
 	// 渲染请假区间
-	// v4.13.0 隐私保护：内部 Reason 永远不返给 LLM
-	//   - Reason 是商户填的内部原因（"痔疮手术""陪老婆产检"等敏感信息）
-	//   - LLM 拿到任何具体原因都可能在回复时复述给顾客 → 硬编码"师傅临时有事"
-	//   - 真实原因商户在 admin 后台自己看，顾客端只看到一致的"临时有事"
+	// 保护隐私：内部原因可能含敏感信息，顾客侧统一显示“师傅临时有事”。
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("师傅 %s 在 %s 的请假安排：\n", params.BarberName, params.Date))
 	for i, l := range activeLeaves {
 		startHM := l.StartAt.In(loc).Format("15:04")
 		endHM := l.EndAt.In(loc).Format("15:04")
-		// 不暴露 l.Reason / l.CustomerFacingReason（v4.13.0 隐私保护）
+		// 不暴露内部请假原因。
 		sb.WriteString(fmt.Sprintf("  %d. %s-%s（师傅临时有事）\n", i+1, startHM, endHM))
 	}
 	// 主动建议

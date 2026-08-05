@@ -14,15 +14,11 @@
  * limitations under the License.
  */
 
-// Package agent builds the eino-ADK Agent for the booking assistant.
+// Package agent 构建预约助手的 eino-ADK Agent。
 //
-// Lives under internal/ so it's not part of the public API surface —
-// only main.go (and tests) import it.
+// 本包位于 internal 下，不属于公开 API；仅供 main.go 和测试引用。
 //
-// v4.17+ 关键改动：
-//   - chatmodel.NewModelWithFallback：DeepSeek → OpenAI → Ark 降级链
-//   - sensitive.SensitiveCheckTool：每轮先于 LLM 拦截
-//   - intent.ClassifyTool：双层意图分类
+// 核心能力：模型降级、敏感内容预过滤和意图分类。
 package agent
 
 import (
@@ -40,7 +36,7 @@ import (
 	"github.com/yuterigele/openbook/tools"
 )
 
-// buildAgentInstruction 构造精简版 system prompt。确定性校验由工具层负责。
+// buildAgentInstruction 构造精简版系统提示词。确定性校验由工具层负责。
 func buildAgentInstruction() string {
 	return `你是美发预约助手，只处理本店预约。
 
@@ -68,33 +64,12 @@ func buildAgentInstruction() string {
 - 默认服务为剪发；“3点”按 15:00 处理。`
 }
 
-// buildAgentTyped 构造美发预约助手 Agent
+// BuildTyped 构造美发预约助手 Agent，并注册预约业务工具、敏感内容检查和意图分类工具。
+// BuildTyped 构造预约助手 Agent。调用方传入 main.go 中创建的意图分类工具，
+// 使 Agent 能根据分类结果分流。
 //
-// 业务工具（必须）：
-//   - tools.QueryScheduleTool      查空闲时段
-//   - tools.CreateAppointmentTool  创建预约（含 Redis 分布式锁）
-//   - tools.CancelAppointmentTool   取消预约
-//   - tools.ListBarbersTool         列本店理发师（含请假标注）
-//   - tools.ListServicesTool        列本店服务项目
-//   - tools.BarberLeaveTool         查理发师请假详情（原因 + 区间）
-//   - tools.ListShopHolidaysTool    列本店节假日 + 营业时间（v4.16.2 加，避免 LLM 凭印象推日期）
-//   - tools.GetAppointmentTool   查询当前顾客自己的预约，用于改约前核验
-//   - tools.HandoffToHumanTool      MVP 第 5 项：转人工兜底（写埋点 + 提示）
-//
-// 辅助工具：
-//   - sensitive.SensitiveCheckTool  v4.17+：输入预过滤（政治/色情/暴力/广告/辱骂/违法）
-//     命中后 LLM 直接回 `reason` 字段给顾客，不重试、不改写
-//   - intent.ClassifyTool           v4.17+：双层意图分类（关键词白名单 + LLM 兜底），
-//     给 LLM 一个路由提示而不是硬规则
-//
-// 微信场景下 Agent 不需要 interrupt 审批（顾客发消息 → Agent 直接调工具 → 回复），
-// 所以不再挂 approvalMiddleware；只保留 SafeToolMiddleware 防止工具抛错卡死循环。
-// BuildTyped constructs the booking-assistant agent. The caller passes the
-// intent classification tool (built in main.go) so the agent can branch
-// on the LLM result.
-//
-// M is the eino MessageType — *schema.Message for chat, *schema.AgenticMessage
-// for tool-loop agents. The caller chooses at the boundary.
+// M 是 eino 的消息类型：聊天使用 *schema.Message，工具循环使用
+// *schema.AgenticMessage；调用方在边界处选择具体类型。
 func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool) (adk.TypedResumableAgent[M], error) {
 	cm, used, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
@@ -124,7 +99,7 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: []tool.BaseTool{
-					&sensitive.SensitiveCheckTool{}, // v4.17+：输入预过滤，命中后由 LLM 回 `reason` 给顾客
+					&sensitive.SensitiveCheckTool{}, // 输入预过滤；命中后直接返回原因。
 					intentTool,                      // v4.17+：双层意图分类
 					&tools.QueryScheduleTool{},
 					&tools.CreateAppointmentTool{},
@@ -132,8 +107,8 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 					&tools.ListBarbersTool{},
 					&tools.ListServicesTool{},
 					&tools.BarberLeaveTool{},
-					&tools.GetAppointmentTool{},   // v4.13.6：改时间前必调，防 leave 改派后用旧 barber
-					&tools.ListShopHolidaysTool{}, // v4.16.2：节假日拒绝时必调，拿完整清单避免 LLM 凭印象推日期
+					&tools.GetAppointmentTool{},   // 改时间前核验当前预约。
+					&tools.ListShopHolidaysTool{}, // 节假日推荐前获取完整休息日清单。
 					&tools.HandoffToHumanTool{},
 				},
 			},

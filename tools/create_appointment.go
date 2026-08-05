@@ -14,72 +14,52 @@ import (
 	"github.com/yuterigele/openbook/storage"
 )
 
-// ctxKeyShopID 注入 ctx 的 shop_id key
+// ctxKeyShopID 是上下文中门店 ID 的键。
 type ctxKeyShopID struct{}
 
-// ctxKeyOpenID 注入 ctx 的微信 openID（v4.8 给 CreateAppointmentFull 透传顾客档案用）
+// ctxKeyOpenID 是上下文中微信 openID 的键。
 type ctxKeyOpenID struct{}
 
-// ctxKeyExternalUserID 注入 ctx 的 external_user_id
-//
-// v4.9.3 加这个 key 的原因：
-//   - reminder / leave notify cron 都靠 customers.external_user_id 反查 wecom ID 发送消息
-//   - 之前只透传 openID，external_user_id 字段永远是空 → cron 全失败
-//   - 加这个 key 后，server.go 在处理 wecom 消息时同时注入 openID + externalUserID
-//   - 工具调 storage.CreateAppointmentFull 时透传，顾客档案完整
+// ctxKeyExternalUserID 是上下文中企业微信外部用户 ID 的键。
 type ctxKeyExternalUserID struct{}
 
-// WithShopID 把 shop_id 放进 ctx（Agent 工具从 ctx 拿）
+// WithShopID 将门店 ID 写入上下文，供 Agent 工具读取。
 func WithShopID(ctx context.Context, shopID string) context.Context {
 	return context.WithValue(ctx, ctxKeyShopID{}, shopID)
 }
 
-// ShopIDFromCtx 从 ctx 取 shop_id（取不到返回 ""）
+// ShopIDFromCtx 从上下文读取门店 ID；不存在时返回空字符串。
 func ShopIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyShopID{}).(string)
 	return v
 }
 
-// WithOpenID 把微信 openID 放进 ctx（v4.8 +）
+// WithOpenID 将微信 openID 写入上下文。
 func WithOpenID(ctx context.Context, openID string) context.Context {
 	return context.WithValue(ctx, ctxKeyOpenID{}, openID)
 }
 
-// OpenIDFromCtx 从 ctx 取微信 openID（取不到返回 ""）
+// OpenIDFromCtx 从上下文读取微信 openID；不存在时返回空字符串。
 func OpenIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyOpenID{}).(string)
 	return v
 }
 
-// WithExternalUserID 把 external_user_id 放进 ctx（v4.9.3 修 reminder cron 缺字段）
+// WithExternalUserID 将企业微信外部用户 ID 写入上下文。
 func WithExternalUserID(ctx context.Context, externalUserID string) context.Context {
 	return context.WithValue(ctx, ctxKeyExternalUserID{}, externalUserID)
 }
 
-// ExternalUserIDFromCtx 从 ctx 取 external_user_id（取不到返回 ""）
+// ExternalUserIDFromCtx 从上下文读取企业微信外部用户 ID；不存在时返回空字符串。
 func ExternalUserIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyExternalUserID{}).(string)
 	return v
 }
 
-// ValidatePhone 严格校验中国大陆手机号（v4.9.3）
-//
-// 业务背景：手机号是顾客档案最稳的查重键
-//   - 微信 openID 会随换设备/重装 app 变 → 不稳
-//   - external_user_id 主要用于客服消息 → 不通用
-//   - 姓名可能重 → 不可靠
-//   - 手机号：11 位数字，1 开头，几乎终身不变 → 唯一稳的标识
-//   - 所以预约链路必填手机号，写进 customers.phone，后续所有 cron（reminder /
-//     leave notify / 营销推送）都靠 phone 反查 wecom ID
-//
-// 规则：11 位数字、1 开头
-//   - 不接国际号码（+86 前缀）：工具不支持境外顾客，简化
-//   - 不接座机 / 400 / 800：业务场景全是个人手机
-//   - 拒绝空字符串：必填项，没收到让 LLM 回去问顾客
-//
-// 返回的 error 是 friendly 话术，LLM 看到后会直接转给顾客。
-//
-// 复用：cmd/fix-customers 也 import 这个函数，保证手动补 phone 和工具流程校验规则一致。
+// ValidatePhone 严格校验中国大陆手机号。
+// 手机号是顾客档案的稳定查重键。规则为 11 位数字且以 1 开头；不接受空值、
+// 国际号码、座机或服务号码。返回值是可直接提示顾客的友好错误信息。
+// 命令行修复工具也复用本函数，确保校验规则一致。
 func ValidatePhone(phone string) error {
 	if phone == "" {
 		return fmt.Errorf("手机号必填，请顾客提供 11 位手机号（如 13812345678）")
@@ -184,22 +164,20 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		return "", fmt.Errorf("时段 %s 太晚了，本店最晚 22:00，请换个时间", params.Time)
 	}
 
-	// 查 barber 拿 ID（用于 Redis 锁 key）
+	// 查询理发师并取得用于预约保护的 ID。
 	barber, err := storage.GetBarberByName(params.BarberName)
 	if err != nil {
 		return "", fmt.Errorf("师傅 %s 不在店里呢（本店现在有 Tony、Kevin 两位），换个试试？", params.BarberName)
 	}
 
-	// 节假日拦截（PRD #6）
+	// 拦截节假日预约。
 	shop, _ := storage.GetShopByID(ctx, barber.ShopID)
 	if storage.IsShopHoliday(shop, params.Date) {
 		return "", fmt.Errorf("%s 是本店休息日，麻烦换个日期试试", params.Date)
 	}
 
-	// Agent/模型供应商偶尔会在已经收到成功结果后重复同一个 tool call。
-	// 这不是新的预约意图；若直接继续创建，第二次会因 slot taken 失败，且失败
-	// 话术可能覆盖前一次的成功回复。用已验证的手机号 + 完整 slot + 服务项目
-	// 做精确幂等匹配，只把同一顾客的原预约作为成功结果返回。
+	// Agent 或模型供应商偶尔会在收到成功结果后重复调用工具。这不是新的预约意图；
+	// 使用已验证手机号、完整时段和服务项目做精确幂等匹配，返回原预约结果。
 	existing, err := storage.FindActiveAppointmentForCustomerSlot(
 		ctx, barber.ShopID, barber.ID, params.Phone, params.Date, params.Time, params.Service,
 	)
@@ -210,22 +188,15 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		return appointmentSuccessMessage(existing), nil
 	}
 
-	// P4 理发师请假拦截（PRD §11.7.4）：
-	//   - 在加锁之前检查，避免"预约成功→立即被请假处理流程取消"的体验事故
-	//   - 时区按 Asia/Shanghai，与 IsValidSlot / FindAppointmentsInRange 保持一致
+	// 在写入预约前检查理发师是否请假，时间语义遵循 Asia/Shanghai。
 	onLeave, leave, err := storage.IsBarberOnLeaveAt(ctx, barber.ID, appointmentAt)
 	if err != nil {
-		// DB 抖动不阻塞下单，但记一笔 log 便于排查（标准 log 包）
+		// 数据库短暂异常不阻塞下单，但记录日志以便排查。
 		fmt.Printf("[create_appointment] IsBarberOnLeaveAt query failed: %v\n", err)
 	}
 	if onLeave && leave != nil {
-		// v4.13.0 隐私保护：永远显示"临时有事"，不暴露 leave.Reason 内部原因
-		//   之前会把"痔疮手术""陪老婆产检"等敏感字眼直接拼到错误消息里
-		//   LLM 拿到后会复述给顾客 → 改 hardcode "临时有事"
-		//
-		// v4.13.6 区间裁剪：把 leave 区间裁到 params.Date 当天 [00:00, 23:59:59]，
-		//   避免跨日 leave 拼出"06-27 11:15"这种尾巴，LLM 拿到会口语化成"明天上午"
-		//   让只关心今天的顾客一脸懵。同日裁剪后只显示 HH:MM（不带日期）。
+		// 保护隐私：始终显示“临时有事”，不暴露内部请假原因。
+		// 将请假区间裁到预约当天，避免跨日信息造成歧义。
 		dispStart, dispEnd := clipLeaveToDate(leave.StartAt, leave.EndAt, params.Date, loc)
 		sameDay := isSameYMD(dispStart, dispEnd, loc)
 		var startStr, endStr string
@@ -271,9 +242,9 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		ShopIDFromCtx(ctx),
 		params.BarberName,
 		params.Customer,
-		params.Phone,               // v4.9.3: 手机号（已 ValidatePhone 校验）
-		OpenIDFromCtx(ctx),         // v4.8: 透传微信 openID，让 storage 自动建顾客档案
-		ExternalUserIDFromCtx(ctx), // v4.9.3: 透传 external_user_id，reminder cron 需要
+		params.Phone,               // 已通过手机号校验。
+		OpenIDFromCtx(ctx),         // 透传微信 openID，用于自动建立顾客档案。
+		ExternalUserIDFromCtx(ctx), // 透传企业微信外部用户 ID，用于消息通知。
 		params.Date,
 		params.Time,
 		params.Service,
@@ -328,19 +299,15 @@ func appointmentSuccessMessage(appointment *storage.Appointment) string {
 	)
 }
 
-// clipLeaveToDate 把 leave 区间裁到 date 当天 [00:00:00, 23:59:59.999999999]
-//
-//   - v4.13.6：顾客问"今天 14:00" → 错误消息只该显示今天的区间；
-//     否则 leave 跨日（如 10:15 今天 至 11:15 明天）会被 LLM 口语化成"明天上午"，
-//     顾客只关心今天，看到会一脸懵。
-//   - 调用方先用 isSameYMD 决定显示格式：同日显示 HH:MM，跨日才带 MM-DD。
+// clipLeaveToDate 将请假区间裁到指定日期的当天范围内。
+// 调用方用 isSameYMD 决定显示格式：同日显示时分，跨日才显示日期。
 func clipLeaveToDate(startAt, endAt time.Time, date string, loc *time.Location) (time.Time, time.Time) {
 	if loc == nil {
 		loc = time.FixedZone("CST", 8*3600)
 	}
 	dayStart, err := time.ParseInLocation("2006-01-02", date, loc)
 	if err != nil {
-		// date 解析失败兜底：原样返回，行为跟 v4.13.5 之前一致（不裁剪）
+		// 日期解析失败时原样返回。
 		return startAt, endAt
 	}
 	dayEnd := dayStart.Add(24 * time.Hour).Add(-time.Nanosecond)
@@ -355,10 +322,8 @@ func clipLeaveToDate(startAt, endAt time.Time, date string, loc *time.Location) 
 	return clippedStart, clippedEnd
 }
 
-// isSameYMD 判断两个时间是否在 loc 时区的同一天
-//
-//   - 给 create_appointment 错误消息用：同日 → "10:15-18:00"，跨日 → "10:15 至次日 11:15"
-//   - 用 In(loc) 后取 Y-M-D 比较，避开 time.Truncate 跨夏令时的坑
+// isSameYMD 判断两个时间在指定时区是否为同一天。
+// 预约错误消息中，同日只显示时分，跨日显示“次日”或日期。
 func isSameYMD(a, b time.Time, loc *time.Location) bool {
 	if loc == nil {
 		loc = time.FixedZone("CST", 8*3600)

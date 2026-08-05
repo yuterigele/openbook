@@ -1,24 +1,18 @@
 package tools
 
-// get_appointment.go
+// get_appointment.go 为 Agent 提供查询当前真实预约的能力。
 //
-// v4.13.6：给 Agent 一个"查当前真实预约"的能力。
-//
-// 业务背景（prod 复现）：
+// 业务背景（生产环境复现）：
 //   - 顾客约了老王 11:00
-//   - 老王请假，leave reschedule 把这条预约改派给 Tony（DB 真实 barber_name = Tony）
-//   - 顾客又来说"改成下午两点"
-//   - Agent 凭印象以为顾客约的是老王，create_appointment(barber_name=老王) 失败
-//   - Agent 看到 "老王 师傅在 06-26 10:15 至 06-27 11:15 临时有事" 一脸懵
+//   - 老王请假后，改约流程把该预约改派给 Tony。
+//   - 顾客随后要求改到下午两点，Agent 若使用历史中的老王创建预约会失败。
 //
-// 修法：让 Agent 在改/取消前先调 get_appointment 拿真实 barber_name，
-//   不要再凭 history 里的旧 barber_name 拼工具调用。
+// 改时间或取消前调用 get_appointment 获取当前真实理发师，
+// 不使用历史消息中的旧理发师信息构造工具调用。
 //
 // 关键设计：
-//   - 只支持按 appointment_id 查（精确），并强制绑定服务端验证过的顾客身份与店铺
-//   - 返回完整字段（barber_name / date / time / service / status），Agent 一次拿到全部
-//   - 隐私：customer 字段保留（Agent 已经知道是谁在对话），phone 字段**不**返回（Agent 不需要）
-//   - 跨店：GetAppointment 不带 shop_id 过滤——Agent 上下文里已经隐含了 shop，靠 appointment_id 唯一性保护
+//   - 仅支持按预约 ID 精确查询，并绑定服务端验证过的顾客身份与门店。
+//   - 返回理发师、日期、时间、服务和状态；不返回手机号。
 
 import (
 	"context"
@@ -75,8 +69,8 @@ func (t *GetAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		return "", fmt.Errorf("找不到属于您的预约，确认下预约号是否正确？")
 	}
 
-	// 故意不返回 phone 字段（Agent 不需要，避免越权）
-	// cancel_reason 保留：Agent 可能需要解释为啥被取消（admin 取消 / 顾客取消 / leave 改派失败）
+	// 不返回手机号，避免泄露不需要的个人信息。
+	// 保留取消原因，便于向顾客解释预约为何取消。
 	return fmt.Sprintf("预约号：%s\n当前状态：\n理发师：%s\n日期：%s\n时间：%s\n服务：%s\n状态：%s%s",
 		appointmentDisplayNumber(appt.ID),
 		appt.BarberName,
@@ -99,7 +93,7 @@ func currentCustomer(ctx context.Context) (*storage.Customer, error) {
 	return nil, fmt.Errorf("找不到当前顾客身份，无法处理该预约")
 }
 
-// formatCancelReason 拼接取消原因（如果有）
+// formatCancelReason 在有取消原因时拼接展示文本。
 func formatCancelReason(appt *storage.Appointment) string {
 	if appt.Status != "cancelled" {
 		return ""

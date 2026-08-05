@@ -1,14 +1,6 @@
 package tools
 
-// get_appointment_test.go
-//
-// 覆盖 v4.13.6 新工具的 4 类核心场景：
-//   1. 正常查：返回完整字段（barber_name / date / time / service / status）
-//   2. leave 改派后查：barber_name 已经是新师傅（v4.13.6 修这个场景的根因）
-//   3. 不存在的 ID：友好错误
-//   4. 取消过的预约：status=cancelled 带 cancel_reason
-//   5. phone 字段**不**返回（隐私）
-//   6. Info 描述里提到"改时间前必调"关键约束（防误删）
+// get_appointment_test.go 覆盖预约查询的正常、改派、不存在、取消和隐私场景。
 
 import (
 	"context"

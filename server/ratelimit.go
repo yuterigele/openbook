@@ -85,8 +85,7 @@ type RateLimiter struct {
 	ll  *list.List               // *list.Element 的值指向 entry
 	idx map[string]*list.Element // OpenID → LRU 节点
 
-	// Recently evicted keys restart cold when they re-enter. This prevents
-	// LRU eviction from resetting a customer's burst quota.
+	// 最近被淘汰的键再次进入时从冷桶开始，避免 LRU 淘汰重置顾客的突发额度。
 	evictedLL  *list.List
 	evictedIdx map[string]*list.Element
 }
@@ -229,8 +228,8 @@ func newCustomerLimiter(r rate.Limit, burst int, coldStart bool) *rate.Limiter {
 	return limiter
 }
 
-// rememberEvicted keeps a bounded tombstone set with the same capacity as the
-// active LRU. It is called while rl.mu is held.
+// rememberEvicted 维护与活动 LRU 容量相同且有上限的淘汰标记集合。
+// 调用本方法时必须持有 rl.mu。
 func (rl *RateLimiter) rememberEvicted(key string) {
 	if existing, ok := rl.evictedIdx[key]; ok {
 		rl.evictedLL.MoveToFront(existing)
@@ -246,8 +245,8 @@ func (rl *RateLimiter) rememberEvicted(key string) {
 	rl.evictedIdx[key] = rl.evictedLL.PushFront(key)
 }
 
-// takeEvicted reports whether key was recently evicted and removes its
-// tombstone. It is called while rl.mu is held.
+// takeEvicted 判断键是否最近被淘汰，并移除其淘汰标记。
+// 调用本方法时必须持有 rl.mu。
 func (rl *RateLimiter) takeEvicted(key string) bool {
 	el, ok := rl.evictedIdx[key]
 	if !ok {

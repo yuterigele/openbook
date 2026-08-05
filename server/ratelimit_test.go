@@ -40,8 +40,7 @@ func newTestRateLimiter(t *testing.T, r rate.Limit, burst, capacity int) *RateLi
 }
 
 func TestRateLimiter_FirstRequestAllowed(t *testing.T) {
-	// Burst of 5, sustained 1/sec. First request from a brand-new
-	// key must always succeed (it's a fresh bucket).
+	// 突发容量为 5、持续速率为每秒 1 条；新键的首次请求应始终通过。
 	rl := newTestRateLimiter(t, rate.Every(time.Second), 5, 100)
 	if !rl.Allow("user-A") {
 		t.Error("first request from a new key should be allowed")
@@ -49,8 +48,7 @@ func TestRateLimiter_FirstRequestAllowed(t *testing.T) {
 }
 
 func TestRateLimiter_BurstExhaustion(t *testing.T) {
-	// Burst of 3, sustained 100/sec (effectively infinite for this
-	// test). The first 3 should pass; the 4th should be throttled.
+	// 突发容量为 3、持续速率为每秒 100 条；前三次通过，第四次应被限流。
 	rl := newTestRateLimiter(t, rate.Every(10*time.Millisecond), 3, 100)
 	for i := 0; i < 3; i++ {
 		if !rl.Allow("user-A") {
@@ -63,7 +61,7 @@ func TestRateLimiter_BurstExhaustion(t *testing.T) {
 }
 
 func TestRateLimiter_IndependentKeys(t *testing.T) {
-	// user-A bursting does not affect user-B.
+	// user-A 的突发请求不影响 user-B。
 	rl := newTestRateLimiter(t, rate.Every(time.Second), 1, 100)
 
 	if !rl.Allow("user-A") {
@@ -78,8 +76,7 @@ func TestRateLimiter_IndependentKeys(t *testing.T) {
 }
 
 func TestRateLimiter_RefillOverTime(t *testing.T) {
-	// Burst 1, sustained 10/sec. After consuming, wait 200ms, should
-	// refill ~2 tokens and let one more through.
+	// 突发容量为 1、持续速率为每秒 10 条；消耗后等待 200 毫秒应补充约 2 个令牌。
 	rl := newTestRateLimiter(t, rate.Every(100*time.Millisecond), 1, 100)
 
 	if !rl.Allow("user-A") {
@@ -88,14 +85,14 @@ func TestRateLimiter_RefillOverTime(t *testing.T) {
 	if rl.Allow("user-A") {
 		t.Fatal("burst exhausted, should throttle")
 	}
-	time.Sleep(150 * time.Millisecond) // ~1.5 tokens refilled
+	time.Sleep(150 * time.Millisecond) // 约补充 1.5 个令牌。
 	if !rl.Allow("user-A") {
 		t.Error("after refill, request should pass")
 	}
 }
 
 func TestRateLimiter_LRUEviction(t *testing.T) {
-	// cap=2, fill with 2 keys, then add a 3rd → 1 key evicted.
+	// 容量为 2：填入两个键后再加入第三个键，应淘汰一个键。
 	rl := newTestRateLimiter(t, rate.Every(time.Second), 1, 2)
 	rl.Allow("a")
 	rl.Allow("b")
@@ -106,33 +103,29 @@ func TestRateLimiter_LRUEviction(t *testing.T) {
 	if rl.Size() != 2 {
 		t.Errorf("size after 3 inserts with cap=2 = %d, want 2", rl.Size())
 	}
-	// The oldest ("a") should be evicted. Recreating it must not
-	// replenish its burst quota.
+	// 最早的键“a”应被淘汰；重新创建时不得恢复突发额度。
 	if rl.Allow("a") {
 		t.Error("evicted key must restart cold instead of receiving a fresh burst")
 	}
 }
 
 func TestRateLimiter_LRUAccessRefreshes(t *testing.T) {
-	// Accessing a key promotes it to MRU. With cap=2 and 3 keys,
-	// the key that was accessed most recently before the overflow
-	// is the one that survives.
+	// 访问键会将其提升为最近使用项。容量为 2 时加入第三个键，应保留最近访问的键。
 	rl := newTestRateLimiter(t, rate.Every(time.Second), 1, 2)
 	rl.Allow("a")
 	rl.Allow("b")
-	// Promote "a" to MRU.
+	// 将“a”提升为最近使用项。
 	rl.Allow("a")
-	// Now insert "c" — "b" (LRU) should be evicted, "a" should
-	// remain.
+	// 插入“c”后，最久未使用的“b”应被淘汰，“a”应保留。
 	rl.Allow("c")
 	if rl.Size() != 2 {
 		t.Errorf("size = %d, want 2", rl.Size())
 	}
-	// "a" should still be in the LRU (and not get a fresh burst).
+	// “a”仍应在 LRU 中，且不得获得新的突发额度。
 	if rl.Allow("a") {
 		t.Error("a should still be tracked (burst already used)")
 	}
-	// "b" was evicted — it must not get a fresh burst when recreated.
+	// “b”已被淘汰，重新创建时不得获得新的突发额度。
 	if rl.Allow("b") {
 		t.Error("b should restart cold after eviction")
 	}
@@ -148,18 +141,17 @@ func TestRateLimiter_EvictedKeyDoesNotRegainBurst(t *testing.T) {
 	if rl.Allow("a") {
 		t.Fatal("a burst should be exhausted")
 	}
-	if !rl.Allow("b") { // Evicts a.
+	if !rl.Allow("b") { // 淘汰 a。
 		t.Fatal("fresh key b should receive its initial burst")
 	}
-	if rl.Allow("a") { // Recreates a from its tombstone.
+	if rl.Allow("a") { // 从 a 的淘汰标记重建。
 		t.Fatal("evicted key a must not regain a burst")
 	}
 }
 
 func TestRateLimiter_ConcurrentAccess(t *testing.T) {
-	// 100 goroutines hit Allow("k") concurrently. With burst=10,
-	// we expect ~10 to be allowed and ~90 to be throttled (within
-	// tolerance for refill races).
+	// 100 个 goroutine 并发调用 Allow("k")；突发容量为 10 时，预期约 10 次通过、
+	// 约 90 次被限流（允许令牌补充竞争带来的误差）。
 	rl := newTestRateLimiter(t, rate.Every(time.Hour), 10, 100)
 	const goroutines = 100
 
@@ -190,7 +182,7 @@ func TestRateLimitMetrics_CountsAllow(t *testing.T) {
 	rl := newTestRateLimiter(t, rate.Every(time.Hour), 2, 100)
 	rl.Allow("u1")
 	rl.Allow("u1")
-	rl.Allow("u1") // throttled
+	rl.Allow("u1") // 被限流。
 
 	snap := rl.Metrics().Snapshot()
 	if snap.Allowed != 2 {

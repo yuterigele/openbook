@@ -1,8 +1,6 @@
 package tools
 
-// barber_leave_test.go
-//
-// v4.4 补全测试 — PRD §4.1 barber_leave 工具
+// barber_leave_test.go 覆盖理发师请假查询工具。
 
 import (
 	"context"
@@ -24,13 +22,7 @@ func TestBarberLeave_InfoMentionsReason(t *testing.T) {
 	}
 }
 
-// TestBarberLeave_InfoMentionsUniqueSource 守住 v4.16.3 「本工具是师傅请假唯一源」约束
-//
-// 真实事故（v4.16.3）：Agent 没调本工具，凭印象对顾客说
-// 「老王 7-3 上午 10:15-11:15 请假一会儿」，商户后台查不到这条记录。
-//
-// 本测试确保工具描述明确告知 LLM：本工具是师傅请假信息的唯一可信来源，
-// 不调本工具就不能说"X 师傅 Y 时间在请假"。
+// TestBarberLeave_InfoMentionsUniqueSource 确保请假信息只信工具返回，防止编造。
 func TestBarberLeave_InfoMentionsUniqueSource(t *testing.T) {
 	c := &BarberLeaveTool{}
 	info, err := c.Info(context.Background())
