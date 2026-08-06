@@ -59,9 +59,12 @@ func SetupTestDB(t *testing.T) {
 		&Subscription{}, // v4.4 续费测试需要
 		&ShopAdmin{},
 		&EventLog{},
+		&AuditLog{},
+		&TraceSpan{},
+		&AuditOutbox{},
 		&BarberLeave{},
-		&Service{}, // v4.4 服务目录
-		&RolePermission{}, // v4.7 RBAC 权限表
+		&Service{},              // v4.4 服务目录
+		&RolePermission{},       // v4.7 RBAC 权限表
 		&CustomerNotification{}, // v4.10 leave notify 持久化
 		&APIKey{},               // v4.12.1 api_access feature
 		&KfSyncState{},          // v4.13.1 微信客服 sync cursor

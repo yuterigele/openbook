@@ -493,16 +493,16 @@ func TestParseWindow(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"", "month"},                   // 空 → 默认
-		{"   ", "month"},                // 仅空白 → 默认
-		{"today", "today"},              // 小写合法
-		{"TODAY", "today"},              // 大写自动 normalize
-		{"  month  ", "month"},          // trim + 小写
+		{"", "month"},          // 空 → 默认
+		{"   ", "month"},       // 仅空白 → 默认
+		{"today", "today"},     // 小写合法
+		{"TODAY", "today"},     // 大写自动 normalize
+		{"  month  ", "month"}, // trim + 小写
 		{"week", "week"},
-		{"year", ""},                    // 非法 → ""
-		{"daily", ""},                   // 非法 → ""
-		{"yesterday", ""},               // 非法 → ""
-		{"month;DROP TABLE", ""},        // 注入尝试 → ""
+		{"year", ""},             // 非法 → ""
+		{"daily", ""},            // 非法 → ""
+		{"yesterday", ""},        // 非法 → ""
+		{"month;DROP TABLE", ""}, // 注入尝试 → ""
 	}
 	for _, c := range cases {
 		got := parseWindow(c.in)
@@ -621,10 +621,9 @@ func TestBuildChainDashboard_WindowIsolation_TodayVsMonth(t *testing.T) {
 	if now.Day() > 10 {
 		// 安全：仅当 today 不是月初时才加这条 farPast
 		seedAppointment(t, "shop-1", "Mike", farPast, "10:00", "completed")
-	} else {
-		// 月初测试：farPast 改成 monthStart + 5 天 = 仍在本月内
-		earlyInMonth := monthStart.AddDate(0, 0, 5).Format("2006-01-02")
-		seedAppointment(t, "shop-1", "Mike", earlyInMonth, "10:00", "completed")
+	} else if now.Day() >= 3 {
+		// 月初时固定放在本月 1 日，确保不会与今天或昨天重合。
+		seedAppointment(t, "shop-1", "Mike", monthStart.Format("2006-01-02"), "10:00", "completed")
 	}
 
 	respToday := buildChainDashboard(t.Context(), "today")
@@ -634,10 +633,17 @@ func TestBuildChainDashboard_WindowIsolation_TodayVsMonth(t *testing.T) {
 
 	respMonth := buildChainDashboard(t.Context(), "month")
 	// month 应至少 3 单（today 2 + yesterday 1），可能 4（如果 farPast/earlyInMonth 在本月内）
-	if respMonth.ChainTotals.Total < 3 {
-		t.Errorf("month 总数 = %d, want >=3", respMonth.ChainTotals.Total)
+	wantMonthMin := 2
+	if now.Day() >= 2 {
+		wantMonthMin++
+	} // 昨天仍在本月。
+	if now.Day() >= 3 {
+		wantMonthMin++
+	} // 本月 1 日的额外样本。
+	if respMonth.ChainTotals.Total < wantMonthMin {
+		t.Errorf("month 总数 = %d, want >=%d", respMonth.ChainTotals.Total, wantMonthMin)
 	}
-	if respMonth.ChainTotals.Total <= respToday.ChainTotals.Total {
+	if wantMonthMin > 2 && respMonth.ChainTotals.Total <= respToday.ChainTotals.Total {
 		t.Errorf("month 应 >= today，got month=%d today=%d",
 			respMonth.ChainTotals.Total, respToday.ChainTotals.Total)
 	}

@@ -49,6 +49,14 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	auth.SetHasPermissionFunc(func(ctx context.Context, adminID uint64, perm string) (bool, error) {
 		return storage.AdminHasPermission(ctx, adminID, perm)
 	})
+	auth.SetAuthorizationFailureFunc(func(ctx context.Context, adminID uint64, shopID, required string) {
+		ctx = storage.EnsureTraceID(ctx)
+		_ = storage.WriteAudit(ctx, storage.AuditLog{
+			ShopID: shopID, ActorType: storage.AuditActorAdmin, ActorID: strconv.FormatUint(adminID, 10),
+			Action: "authorization.denied", ResourceType: "permission", ResourceID: required,
+			Outcome: storage.AuditOutcomeFailure, ErrorCode: "forbidden",
+		}, nil)
+	})
 
 	// v4.12 plan 过期：把 storage.IsPlanExpired 注入 auth 包
 	auth.SetPlanExpiredFunc(func(ctx context.Context, shopID string) (bool, int) {
@@ -107,6 +115,8 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.DELETE("/barber/:id/leave/:leaveID", auth.RequirePerm(storage.PermCreateBarberLeave), cancelBarberLeaveHandler)
 	protected.GET("/barbers", auth.RequirePerm(storage.PermViewBarbers), listBarbersHandler)
 	protected.GET("/events", auth.RequirePerm(storage.PermViewEvents), listEventsHandler)
+	protected.GET("/audits", auth.RequirePerm(storage.PermViewEvents), listAuditsHandler)
+	protected.GET("/audits/verify", auth.RequirePerm(storage.PermViewEvents), verifyAuditsHandler)
 
 	// 通知中心（v4.10.1）—— admin 后台看 leave notify 发送结果 + 补发失败
 	//   - GET 列：view:notifications
@@ -738,6 +748,16 @@ func shopFromClaims(c *app.RequestContext) string {
 	return cl.ShopID
 }
 
+func adminAuditContext(ctx context.Context, c *app.RequestContext, shopID string) context.Context {
+	ctx = storage.EnsureTraceID(ctx)
+	ctx = storage.WithAuditShop(ctx, shopID)
+	actorID := ""
+	if cl := auth.GetClaims(c); cl != nil {
+		actorID = strconv.FormatUint(cl.AdminID, 10)
+	}
+	return storage.WithAuditActor(ctx, storage.AuditActorAdmin, actorID)
+}
+
 func completeAppointmentHandler(ctx context.Context, c *app.RequestContext) {
 	shopID := shopFromClaims(c)
 	if shopID == "" {
@@ -761,6 +781,7 @@ func completeAppointmentHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的预约"})
 		return
 	}
+	ctx = adminAuditContext(ctx, c, shopID)
 	if err := storage.MarkAppointmentCompleted(ctx, req.AppointmentID); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -792,6 +813,7 @@ func uncompleteAppointmentHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的预约"})
 		return
 	}
+	ctx = adminAuditContext(ctx, c, shopID)
 	if err := storage.UncompleteAppointment(ctx, req.AppointmentID); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -822,6 +844,7 @@ func uncancelAppointmentHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的预约"})
 		return
 	}
+	ctx = adminAuditContext(ctx, c, shopID)
 	if err := storage.UncancelAppointment(ctx, req.AppointmentID); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -852,6 +875,7 @@ func adminCancelHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "无权操作其他店铺的预约"})
 		return
 	}
+	ctx = adminAuditContext(ctx, c, shopID)
 	// P3：admin 路径走策略接口（cancel_type=admin_cancel，不计 penalty）
 	res, err := storage.CancelAppointmentWithPolicy(ctx, req.AppointmentID, storage.CancelSourceAdmin, req.Reason)
 	if err != nil {

@@ -78,6 +78,7 @@ func RequirePerm(perm string) app.HandlerFunc {
 			return
 		}
 		if !ok {
+			recordAuthorizationFailure(ctx, cl, perm)
 			c.JSON(http.StatusForbidden, map[string]string{
 				"error":      "无权限: " + perm,
 				"permission": perm,
@@ -131,6 +132,7 @@ func RequireRole(allowedRoles ...string) app.HandlerFunc {
 		}
 		// 未命中
 		required := strings.Join(allowedRoles, ",")
+		recordAuthorizationFailure(ctx, cl, "role:"+required)
 		c.JSON(http.StatusForbidden, map[string]string{
 			"error":         "无权限: 需要 role 之一: " + required,
 			"required_role": required,
@@ -147,6 +149,17 @@ func RequireRole(allowedRoles ...string) app.HandlerFunc {
 // 真正的实现在 api/admin_features_v46.go 里通过 storage 包调用。
 // （注：这里用 interface{} 占位，下面会注入真正的实现）
 var hasPermissionFunc func(ctx context.Context, adminID uint64, perm string) (bool, error)
+var authorizationFailureFunc func(ctx context.Context, adminID uint64, shopID, required string)
+
+func recordAuthorizationFailure(ctx context.Context, claims *Claims, required string) {
+	if authorizationFailureFunc != nil && claims != nil {
+		authorizationFailureFunc(ctx, claims.AdminID, claims.ShopID, required)
+	}
+}
+
+func SetAuthorizationFailureFunc(fn func(ctx context.Context, adminID uint64, shopID, required string)) {
+	authorizationFailureFunc = fn
+}
 
 // HasPermission 公共入口（由 api 包在 init 时注入 storage.AdminHasPermission）
 func HasPermission(ctx context.Context, adminID uint64, perm string) (bool, error) {
@@ -258,7 +271,7 @@ func getPlanActiveCached(ctx context.Context, shopID string) (frozen bool, grace
 	frozen, graceDays = planExpiredFunc(ctx, shopID)
 	planActiveCache.Store(shopID, planActiveCacheEntry{
 		frozen:    frozen,
-		graceDays:  graceDays,
+		graceDays: graceDays,
 		cachedAt:  time.Now(),
 	})
 	return

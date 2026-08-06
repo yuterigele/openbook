@@ -260,6 +260,17 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		}
 	}
 
+	traceCleaner := cronpkg.NewTraceSpanCleaner()
+	if err := traceCleaner.Start(ctx); err != nil {
+		log.Printf("⚠️  启动 trace_span cleanup cron 失败: %v", err)
+	} else {
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = traceCleaner.Stop(stopCtx)
+		}()
+	}
+
 	// 启动 cron（PRD §11.1 P0 预约前 2h 提醒 + §11.2 P1 爽约扫描 + 续费漏斗）
 	if wecomClient != nil {
 		reminder := cronpkg.NewReminder(wecomClient)

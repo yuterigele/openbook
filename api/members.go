@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -72,8 +73,9 @@ type ResetPasswordRequest struct {
 // 后端再加一道防线
 //
 // v4.14 隐私修复：低权限（owner / staff）viewer 看不到 platform_admin 行。
-//   平台超管是跨店全局账号，跟 owner 没有业务关联，没必要显示在店主成员列表里。
-//   只 platform_admin 自己查看时才返 platform_admin 行。
+//
+//	平台超管是跨店全局账号，跟 owner 没有业务关联，没必要显示在店主成员列表里。
+//	只 platform_admin 自己查看时才返 platform_admin 行。
 func listMembersHandler(ctx context.Context, c *app.RequestContext) {
 	shopID := shopFromClaims(c)
 	if shopID == "" {
@@ -141,6 +143,7 @@ func effectiveStatus(s string) string {
 //   - last-owner 不影响创建（可以再建一个 owner）
 func createMemberHandler(ctx context.Context, c *app.RequestContext) {
 	shopID := shopFromClaims(c)
+	cl := auth.GetClaims(c)
 	if shopID == "" {
 		c.JSON(http.StatusUnauthorized, map[string]string{"error": "no shop in session"})
 		return
@@ -200,6 +203,7 @@ func createMemberHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	recordMemberAudit(ctx, cl, shopID, "member.create", admin.ID, map[string]any{"role": admin.Role})
 
 	c.JSON(http.StatusOK, MemberItem{
 		ID:        admin.ID,
@@ -297,6 +301,7 @@ func changeMemberRoleHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	recordMemberAudit(ctx, cl, shopID, "member.role_change", targetID, map[string]any{"old_role": target.Role, "new_role": newRole})
 	c.JSON(http.StatusOK, map[string]string{"status": "updated"})
 }
 
@@ -370,6 +375,7 @@ func resetMemberPasswordHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	recordMemberAudit(ctx, cl, shopID, "member.password_reset", targetID, map[string]any{"password_changed": true})
 	c.JSON(http.StatusOK, map[string]string{"status": "password_reset"})
 }
 
@@ -449,7 +455,25 @@ func disableMemberHandler(ctx context.Context, c *app.RequestContext) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	recordMemberAudit(ctx, cl, shopID, "member.disable", targetID, map[string]any{"old_status": target.Status, "new_status": "disabled"})
 	c.JSON(http.StatusOK, map[string]string{"status": "disabled"})
+}
+
+func recordMemberAudit(ctx context.Context, claims *auth.Claims, shopID, action string, targetID uint64, details map[string]any) {
+	ctx = storage.EnsureTraceID(ctx)
+	actorID := ""
+	if claims != nil {
+		actorID = strconv.FormatUint(claims.AdminID, 10)
+	}
+	ctx = storage.WithAuditActor(ctx, storage.AuditActorAdmin, actorID)
+	if err := storage.WriteAudit(ctx, storage.AuditLog{
+		ShopID: shopID, ActorType: storage.AuditActorAdmin, ActorID: actorID,
+		Action: action, ResourceType: "member", ResourceID: strconv.FormatUint(targetID, 10),
+		Outcome: storage.AuditOutcomeSuccess,
+	}, details); err != nil {
+		// 成员操作已提交，审计补写失败必须显式报警，不能伪装成已审计。
+		log.Printf("[audit] member audit write failed action=%s shop=%s target=%d: %v", action, shopID, targetID, err)
+	}
 }
 
 // ============================================================
@@ -481,8 +505,8 @@ func listRolesHandler(ctx context.Context, c *app.RequestContext) {
 		})
 	}
 	c.JSON(http.StatusOK, map[string]any{
-		"roles":             roles,
-		"all_permissions":  storage.AllPermissions,
+		"roles":           roles,
+		"all_permissions": storage.AllPermissions,
 	})
 }
 

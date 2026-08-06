@@ -371,6 +371,22 @@ func CreateAppointmentFullContext(ctx context.Context, shopID, barberName, custo
 			}
 			return err
 		}
+		if err := WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID:       appt.ShopID,
+			ActorType:    AuditActorAgent,
+			Action:       "appointment.create",
+			ResourceType: "appointment",
+			ResourceID:   appt.ID,
+			Outcome:      AuditOutcomeSuccess,
+		}, map[string]any{
+			"barber_id": appt.BarberID,
+			"date":      appt.Date,
+			"time":      appt.Time,
+			"service":   appt.Service,
+			"source":    appt.Source,
+		}); err != nil {
+			return err
+		}
 		// 看门狗发现锁丢失或业务超时后，必须在提交前回滚。
 		return ctx.Err()
 	})

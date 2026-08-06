@@ -1383,6 +1383,12 @@
         </svg>
         <span>事件日志</span>
       </a>
+      <a class="nav-item" data-view="audits" data-perm="view:events" href="#audits">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/>
+        </svg>
+        <span>审计日志</span>
+      </a>
       <div class="nav-section-divider">系统设置</div>
       <a class="nav-item" data-view="subscription" data-perm="view:subscription" href="#subscription">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -1536,6 +1542,7 @@ const App = (() => {
     upcoming: [],
     appointments: [],
     events: [],
+    audits: [],
     barbers: [],
     leaves: [],
     leavesByBarber: {},
@@ -1656,7 +1663,7 @@ const App = (() => {
     $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === v));
     const labels = {
       dashboard: '实时看板', appointments: '预约管理', barbers: '理发师',
-      leaves: '请假记录', events: '事件日志', chain: '多店看板',
+      leaves: '请假记录', events: '事件日志', audits: '审计日志', chain: '多店看板',
       handoffs: '转人工', customers: '顾客', services: '服务目录', cards: '卡管理',
       subscription: '订阅', shop: '店铺设置', weekly: '单店周报',
       'chain-weekly': '跨店周报',
@@ -1679,6 +1686,7 @@ const App = (() => {
     else if (state.view === 'barbers') c.innerHTML = renderBarbers();
     else if (state.view === 'leaves') c.innerHTML = renderLeaves();
     else if (state.view === 'events') c.innerHTML = renderEvents();
+    else if (state.view === 'audits') c.innerHTML = renderAudits();
     else if (state.view === 'chain') c.innerHTML = renderChain();
     else if (state.view === 'handoffs') c.innerHTML = renderHandoffs();
     else if (state.view === 'customers') c.innerHTML = renderCustomers();
@@ -2194,6 +2202,26 @@ return `<table class="table">
         </tr>
       `).join('')}</tbody>
     </table>`;
+  }
+
+  function renderAudits() {
+    return `<div class="view-head"><h1>审计日志</h1><p>关键业务操作、结果与防篡改校验</p></div>
+      <div class="filterbar">
+        <div class="field"><label>操作</label><input class="input" id="auditAction" placeholder="appointment.cancel"></div>
+        <div class="field"><label>Trace ID</label><input class="input text-mono" id="auditTrace" placeholder="精确匹配"></div>
+        <button class="btn btn-primary" onclick="App.loadAudits()">查询</button>
+        <button class="btn" onclick="App.verifyAudits()">校验哈希链</button>
+      </div>
+      <div class="card" style="overflow-x:auto;">${state.audits.length === 0 ? '<div style="padding:20px;">' + renderEmpty('暂无审计记录', null, 'activity') + '</div>' : renderAuditTable(state.audits)}</div>`;
+  }
+
+  function renderAuditTable(rows) {
+    return `<table class="table"><thead><tr><th>时间</th><th>结果</th><th>操作方</th><th>操作</th><th>资源</th><th>Trace</th><th>哈希</th></tr></thead><tbody>${rows.map(a => `<tr>
+      <td class="text-mono">${esc((a.created_at || '').slice(0,19).replace('T',' '))}</td>
+      <td><span class="badge">${esc(a.outcome)}</span></td><td>${esc(a.actor_type)} ${esc(a.actor_id || '')}</td>
+      <td class="text-mono">${esc(a.action)}</td><td class="text-mono">${esc(a.resource_type)}:${esc(a.resource_id)}</td>
+      <td class="text-mono" title="${esc(a.trace_id)}">${esc((a.trace_id || '').slice(0,12))}</td>
+      <td class="text-mono" title="${esc(a.record_hash)}">${esc((a.record_hash || '').slice(0,12))}</td></tr>`).join('')}</tbody></table>`;
   }
 
   // ---------- Chain view ----------
@@ -5506,6 +5534,21 @@ return `<table class="table">
     } catch (e) { showToast('事件加载失败：' + e.message, 'error'); }
   }
 
+  async function loadAudits() {
+    let url = '/api/admin/audits?limit=200';
+    const action = $('#auditAction')?.value?.trim() || '';
+    const trace = $('#auditTrace')?.value?.trim() || '';
+    if (action) url += '&action=' + encodeURIComponent(action);
+    if (trace) url += '&trace_id=' + encodeURIComponent(trace);
+    try { const data = await api(url); state.audits = data.items || []; render(); }
+    catch (e) { showToast('审计加载失败：' + e.message, 'error'); }
+  }
+
+  async function verifyAudits() {
+    try { const data = await api('/api/admin/audits/verify'); showToast(data.valid ? '审计哈希链校验通过' : '审计哈希链异常', data.valid ? 'success' : 'error'); }
+    catch (e) { showToast('审计哈希链校验失败：' + e.message, 'error'); }
+  }
+
   async function loadBarbers() {
     const includeInactive = $('#showInactive')?.checked ? 'true' : 'false';
     const card = $('#barbersCard');
@@ -6115,6 +6158,7 @@ return `<table class="table">
       setTimeout(() => {
         if (view === 'handoffs') loadHandoffs();
         else if (view === 'events') loadEvents();
+        else if (view === 'audits') loadAudits();
         else if (view === 'leaves') loadLeaves();
         else if (view === 'subscription') loadSubscription();
         else if (view === 'shop') loadShop();
@@ -6216,7 +6260,7 @@ return `<table class="table">
     stopAutoRefresh();
     state.token = ''; state.shopId = ''; state.user = null;
     state.dashboard = null; state.upcoming = []; state.appointments = [];
-    state.events = []; state.barbers = []; state.leavesByBarber = {};
+    state.events = []; state.audits = []; state.barbers = []; state.leavesByBarber = {};
     localStorage.removeItem('jwt_token'); localStorage.removeItem('shop_id');
     if (redirect) showLogin();
   }
@@ -7082,6 +7126,7 @@ return `<table class="table">
     else if (state.view === 'barbers') loadBarbers();
     else if (state.view === 'leaves') loadLeaves();
     else if (state.view === 'events') loadEvents();
+    else if (state.view === 'audits') loadAudits();
     else if (state.view === 'chain') loadChain();
     else if (state.view === 'handoffs') loadHandoffs();
     else if (state.view === 'shops') loadShops();
@@ -7113,6 +7158,7 @@ return `<table class="table">
       else if (v === 'barbers') loadBarbers();
       else if (v === 'leaves') loadLeaves();
       else if (v === 'events') loadEvents();
+      else if (v === 'audits') loadAudits();
       else if (v === 'chain') loadChain();
       else if (v === 'handoffs') loadHandoffs();
       else if (v === 'customers') loadCustomers();
@@ -7215,7 +7261,7 @@ return `<table class="table">
     resolveHandoff, switchChainWindow, toggleResolvedHandoffs,
     deleteBarber, activateBarber,
     cancelLeave,
-    loadAppointments, resetApptFilters, loadEvents, loadBarbers, loadLeaves, loadChain, loadShops,
+    loadAppointments, resetApptFilters, loadEvents, loadAudits, verifyAudits, loadBarbers, loadLeaves, loadChain, loadShops,
     loadHandoffs, loadCustomers, loadServices, loadSubscription, loadShop, loadMembers, loadPlans,
     loadWeekly, loadChainWeekly, resetWeekly, loadAlerts, drillDown,
     resetCustFilters,

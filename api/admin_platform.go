@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"gorm.io/gorm"
 
 	"github.com/yuterigele/openbook/auth"
 	"github.com/yuterigele/openbook/chatmodel"
@@ -518,14 +519,6 @@ func platformSetShopPlanHandler(ctx context.Context, c *app.RequestContext) {
 	now := time.Now()
 	expiresAt := now.AddDate(0, req.Months, 0)
 
-	// 1) 取消所有 active sub
-	if err := storage.DB.WithContext(ctx).Model(&storage.Subscription{}).
-		Where("shop_id = ? AND cancelled_at IS NULL", shopID).
-		Update("cancelled_at", now).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": "取消旧订阅失败: " + err.Error()})
-		return
-	}
-	// 2) 新建 subscription
 	sub := storage.Subscription{
 		ID:        newID(),
 		ShopID:    shopID,
@@ -536,34 +529,41 @@ func platformSetShopPlanHandler(ctx context.Context, c *app.RequestContext) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := storage.DB.WithContext(ctx).Create(&sub).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": "建新订阅失败: " + err.Error()})
-		return
-	}
-	// 3) 更新 shop.plan / shop.expires_at
-	if err := storage.DB.WithContext(ctx).Model(&storage.Shop{}).
-		Where("id = ?", shopID).
-		Updates(map[string]interface{}{
-			"plan":       req.Plan,
-			"expires_at": expiresAt,
-		}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": "更新 shop 失败: " + err.Error()})
-		return
-	}
-	// 4) 清 plan active cache
-	auth.InvalidatePlanActiveCache(shopID)
-
-	// 5) 写 audit log
 	adminID, adminUsername := auditAdminInfo(ctx, c)
-	storage.TrackEvent(ctx, shopID, "plan_changed_by_admin", sub.ID, map[string]any{
-		"old_plan":       oldPlan,
-		"new_plan":       req.Plan,
-		"months":         req.Months,
-		"expires_at":     expiresAt,
-		"admin_id":       adminID,
-		"admin_username": adminUsername,
-		"note":           req.Note,
+	ctx = storage.EnsureTraceID(ctx)
+	ctx = storage.WithAuditActor(ctx, storage.AuditActorAdmin, strconv.FormatUint(adminID, 10))
+	err = storage.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&storage.Subscription{}).Where("shop_id = ? AND cancelled_at IS NULL", shopID).
+			Update("cancelled_at", now).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&sub).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&storage.Shop{}).Where("id = ?", shopID).Updates(map[string]interface{}{
+			"plan": req.Plan, "expires_at": expiresAt,
+		}).Error; err != nil {
+			return err
+		}
+		eventMeta, _ := json.Marshal(map[string]any{
+			"old_plan": oldPlan, "new_plan": req.Plan, "months": req.Months,
+			"expires_at": expiresAt, "admin_id": adminID, "admin_username": adminUsername,
+			"note": req.Note,
+		})
+		if err := tx.Create(&storage.EventLog{ShopID: shopID, EventType: "plan_changed_by_admin", RefID: sub.ID, Meta: string(eventMeta), CreatedAt: now}).Error; err != nil {
+			return err
+		}
+		return storage.WriteAuditInTx(ctx, tx, storage.AuditLog{
+			ShopID: shopID, ActorType: storage.AuditActorAdmin, ActorID: strconv.FormatUint(adminID, 10),
+			Action: "subscription.plan_change", ResourceType: "shop", ResourceID: shopID,
+			Outcome: storage.AuditOutcomeSuccess,
+		}, map[string]any{"old_plan": oldPlan, "new_plan": req.Plan, "months": req.Months, "subscription_id": sub.ID, "note_present": strings.TrimSpace(req.Note) != ""})
 	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "更新套餐事务失败: " + err.Error()})
+		return
+	}
+	auth.InvalidatePlanActiveCache(shopID)
 
 	c.JSON(http.StatusOK, SetShopPlanResponse{
 		Status:         "ok",

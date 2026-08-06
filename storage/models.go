@@ -18,6 +18,9 @@ func (Subscription) TableName() string         { return "subscriptions" }
 func (WecomMessageLog) TableName() string      { return "wecom_message_logs" }
 func (ReminderLog) TableName() string          { return "reminder_logs" }
 func (EventLog) TableName() string             { return "event_logs" }
+func (AuditLog) TableName() string             { return "audit_logs" }
+func (TraceSpan) TableName() string            { return "trace_spans" }
+func (AuditOutbox) TableName() string          { return "audit_outbox" }
 func (BarberLeave) TableName() string          { return "barber_leaves" }
 func (Service) TableName() string              { return "services" }
 func (CustomerNotification) TableName() string { return "customer_notifications" }
@@ -273,6 +276,56 @@ type EventLog struct {
 	RefID      string    `gorm:"size:64" json:"ref_id"` // 关联 ID
 	Meta       string    `gorm:"size:2048" json:"meta"` // JSON 备注
 	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}
+
+// AuditLog 保存需要长期追溯的关键业务操作。
+//
+// 审计记录只保存服务端确认的身份与资源标识，不保存手机号、消息正文、模型提示词等敏感原文。
+// 成功记录应与对应业务变更处于同一数据库事务中。
+type AuditLog struct {
+	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraceID      string    `gorm:"size:64;index;not null" json:"trace_id"`
+	ShopID       string    `gorm:"size:64;index;index:idx_audit_shop_created,priority:1;not null" json:"shop_id"`
+	ActorType    string    `gorm:"size:32;index;not null" json:"actor_type"`
+	ActorID      string    `gorm:"size:64;index" json:"actor_id"`
+	Action       string    `gorm:"size:64;index;not null" json:"action"`
+	ResourceType string    `gorm:"size:32;index;index:idx_audit_resource,priority:1;not null" json:"resource_type"`
+	ResourceID   string    `gorm:"size:64;index;index:idx_audit_resource,priority:2;not null" json:"resource_id"`
+	Outcome      string    `gorm:"size:16;index;not null" json:"outcome"`
+	ErrorCode    string    `gorm:"size:64;index" json:"error_code"`
+	Details      string    `gorm:"type:text" json:"details"`
+	PrevHash     string    `gorm:"size:64" json:"prev_hash"`
+	RecordHash   string    `gorm:"size:64;uniqueIndex" json:"record_hash"`
+	CreatedAt    time.Time `gorm:"index;index:idx_audit_shop_created,priority:2;not null" json:"created_at"`
+}
+
+// TraceSpan 保存短周期技术链路数据，不作为业务事实来源。
+type TraceSpan struct {
+	ID         uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	TraceID    string     `gorm:"size:64;index:idx_trace_span,priority:1;not null" json:"trace_id"`
+	SpanID     string     `gorm:"size:32;uniqueIndex;not null" json:"span_id"`
+	ParentID   string     `gorm:"size:32;index" json:"parent_id"`
+	ShopID     string     `gorm:"size:64;index" json:"shop_id"`
+	Name       string     `gorm:"size:96;index;not null" json:"name"`
+	Kind       string     `gorm:"size:32;index" json:"kind"`
+	Status     string     `gorm:"size:16;index" json:"status"`
+	ErrorCode  string     `gorm:"size:64;index" json:"error_code"`
+	Attributes string     `gorm:"type:text" json:"attributes"`
+	StartedAt  time.Time  `gorm:"index:idx_trace_span,priority:2;not null" json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at"`
+	DurationMS int64      `json:"duration_ms"`
+}
+
+// AuditOutbox 为审计数据异步导出提供事务型出口。
+type AuditOutbox struct {
+	ID          uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	AuditLogID  uint64     `gorm:"uniqueIndex;not null" json:"audit_log_id"`
+	Payload     string     `gorm:"type:text;not null" json:"payload"`
+	Status      string     `gorm:"size:16;index;not null" json:"status"`
+	Attempts    int        `gorm:"not null;default:0" json:"attempts"`
+	NextRetryAt *time.Time `gorm:"index" json:"next_retry_at"`
+	PublishedAt *time.Time `json:"published_at"`
+	CreatedAt   time.Time  `gorm:"index;not null" json:"created_at"`
 }
 
 // BarberLeave 理发师请假记录（PRD §11.7 P4）

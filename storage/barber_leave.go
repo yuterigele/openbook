@@ -241,6 +241,21 @@ func CreateBarberLeave(ctx context.Context, leave BarberLeave, sender interface{
 						"reason":           "barber_leave:" + leave.Reason,
 						"leave_id":         leave.ID,
 					})
+					if err := WriteAuditInTx(ctx, tx, AuditLog{
+						ShopID:       appt.ShopID,
+						ActorType:    AuditActorAdmin,
+						Action:       "appointment.reschedule",
+						ResourceType: "appointment",
+						ResourceID:   appt.ID,
+						Outcome:      AuditOutcomeSuccess,
+					}, map[string]any{
+						"from_barber_id": leave.BarberID,
+						"to_barber_id":   newBarberID,
+						"leave_id":       leave.ID,
+						"source":         "barber_leave",
+					}); err != nil {
+						return err
+					}
 					result.RescheduledCount++
 				} else {
 					// 兜底取消

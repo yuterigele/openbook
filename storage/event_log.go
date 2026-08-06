@@ -279,7 +279,10 @@ func MarkAppointmentCompleted(ctx context.Context, apptID string) error {
 		if err := tx.Create(&rec).Error; err != nil {
 			return err
 		}
-		return nil
+		return WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID: appt.ShopID, ActorType: AuditActorAdmin, Action: "appointment.complete",
+			ResourceType: "appointment", ResourceID: appt.ID, Outcome: AuditOutcomeSuccess,
+		}, nil)
 	})
 }
 
@@ -329,7 +332,10 @@ func UncompleteAppointment(ctx context.Context, apptID string) error {
 				return err
 			}
 		}
-		return nil
+		return WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID: appt.ShopID, ActorType: AuditActorAdmin, Action: "appointment.uncomplete",
+			ResourceType: "appointment", ResourceID: appt.ID, Outcome: AuditOutcomeSuccess,
+		}, nil)
 	})
 }
 
@@ -372,6 +378,9 @@ func UncancelAppointment(ctx context.Context, apptID string) error {
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("appointment %s status changed, retry", apptID)
 		}
-		return nil
+		return WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID: appt.ShopID, ActorType: AuditActorAdmin, Action: "appointment.uncancel",
+			ResourceType: "appointment", ResourceID: appt.ID, Outcome: AuditOutcomeSuccess,
+		}, nil)
 	})
 }

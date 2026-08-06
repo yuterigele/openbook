@@ -76,6 +76,9 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&WecomMessageLog{},
 		&ReminderLog{},
 		&EventLog{},
+		&AuditLog{},
+		&TraceSpan{},
+		&AuditOutbox{},
 		&ShopAdmin{},
 		&BarberLeave{},          // P4 理发师请假（2026-06-21）
 		&Service{},              // v4.4 服务目录（2026-06-22）

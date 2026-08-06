@@ -643,7 +643,10 @@ func webSessionContext(sessionID string) context.Context {
 	identity := "web-session:" + sessionID
 	ctx := tools.WithShopID(context.Background(), "default")
 	ctx = tools.WithOpenID(ctx, identity)
-	return tools.WithExternalUserID(ctx, identity)
+	ctx = tools.WithExternalUserID(ctx, identity)
+	ctx = storage.EnsureTraceID(ctx)
+	ctx = storage.WithAuditShop(ctx, "default")
+	return storage.WithAuditActor(ctx, storage.AuditActorAgent, "")
 }
 
 // makeGenInput returns the GenInput callback. It builds agent messages from
@@ -1299,6 +1302,9 @@ func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client r
 	// v4.9.3: KF 来源的 external_userid == FromUserName（同一字段）
 	ctxWithUser := tools.WithOpenID(ctxWithShop, msg.FromUserName)
 	ctxWithExt := tools.WithExternalUserID(ctxWithUser, msg.FromUserName)
+	ctxWithExt = storage.EnsureTraceID(ctxWithExt)
+	ctxWithExt = storage.WithAuditShop(ctxWithExt, shopID)
+	ctxWithExt = storage.WithAuditActor(ctxWithExt, storage.AuditActorAgent, "")
 	reply := s.processAgentMessage(ctxWithExt, sess, msg.Content, shopID)
 	log.Printf("[wecom] Agent回复: %s", reply)
 
@@ -1308,7 +1314,7 @@ func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client r
 	//   必然 81013 user & party & tag all invalid，等于把真因掩盖了
 	//   真因可能是 95001（企业未认证 / 接待人员接管）/ 95018（session 状态无效）/
 	//   95002（48h 超时）等——必须让错误冒泡到日志，商户才好排查
-	sendReply(ctx, client, msg.FromUserName, openKfID, reply, shopID)
+	sendReply(ctxWithExt, client, msg.FromUserName, openKfID, reply, shopID)
 }
 
 // replySender 抽象 wecom.Client 的发送方法，便于单测 mock
@@ -1362,6 +1368,14 @@ func isKfRateLimited(err error) bool {
 //     demo 屏幕能展示完整业务流，不被企业微信配额限制
 //   - 默认 real（生产安全）
 func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, reply, shopID string) {
+	startedAt := time.Now()
+	status, errorCode := "ok", ""
+	defer func() {
+		storage.RecordTraceSpan(ctx, storage.TraceSpan{
+			ShopID: shopID, Name: "message.reply", Kind: "producer",
+			Status: status, ErrorCode: errorCode, StartedAt: startedAt,
+		}, map[string]any{"channel": map[bool]string{true: "wecom_kf", false: "wecom_app"}[openKfID != ""]})
+	}()
 	// mock 模式：跳过真实发送，写 event_logs + log
 	if IsMockReplyMode() {
 		logDemoReply(ctx, shopID, fromUser, openKfID, reply)
@@ -1388,6 +1402,7 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 			}
 			lastErr = err
 			if !isKfRateLimited(err) {
+				status, errorCode = "error", "wecom_send_failed"
 				// 非限流错误（95001 未认证 / 95018 真人接管 / 95002 48h 超时 等）：不重试
 				log.Printf("[wecom] ⚠️ 客服消息发送失败（顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
 					fromUser, openKfID, shopID, err)
@@ -1402,10 +1417,12 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 		// 重试 3 次仍限流
 		log.Printf("[wecom] ⚠️ 客服消息发送失败（限流重试 3 次仍失败，顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
 			fromUser, openKfID, shopID, lastErr)
+		status, errorCode = "error", "wecom_rate_limited"
 		return
 	}
 	// 非 KF 来源（admin API 路径，line 1247），走应用消息接口
 	if err := sender.SendTextMessage(ctx, fromUser, reply); err != nil {
+		status, errorCode = "error", "wecom_send_failed"
 		log.Printf("[wecom] 发送消息失败: %v", err)
 		return
 	}
@@ -1699,6 +1716,27 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M], userContent, shopID string) string {
+	// 每轮消息生成一个追踪标识，并将可信的 Agent 身份传递到工具和存储事务。
+	ctx = storage.EnsureTraceID(ctx)
+	ctx = storage.WithAuditActor(ctx, storage.AuditActorAgent, "")
+	ctx = storage.WithAuditShop(ctx, shopID)
+	traceID := storage.TraceIDFromContext(ctx)
+	rootSpanID := uuid.NewString()
+	rootSpanID = strings.ReplaceAll(rootSpanID, "-", "")[:16]
+	ctx = storage.WithSpanID(ctx, rootSpanID)
+	taskStartedAt := time.Now()
+	storage.RecordTraceSpan(ctx, storage.TraceSpan{
+		ShopID: shopID, Name: "message.receive", Kind: "consumer", Status: "ok", StartedAt: taskStartedAt,
+	}, map[string]any{"content_bytes": len(userContent)})
+	taskStatus := "error"
+	defer func() {
+		storage.RecordTraceSpan(ctx, storage.TraceSpan{
+			SpanID: rootSpanID, ShopID: shopID, Name: "agent.task", Kind: "internal",
+			Status: taskStatus, StartedAt: taskStartedAt,
+		}, nil)
+	}()
+	log.Printf("[agent] task started trace_id=%s shop=%s", traceID, shopID)
+	defer log.Printf("[agent] task finished trace_id=%s shop=%s", traceID, shopID)
 	if decision := assessUserInputTrust(userContent); !decision.Allowed {
 		log.Printf("[input_trust] rejected source=message shop=%s score=%d reason=%s", shopID, decision.Score, decision.Reason)
 		_ = sess.Append(msgops.NewUser[M](userContent))
@@ -1739,14 +1777,25 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 		Messages:        messages,
 		EnableStreaming: false,
 	}
+	modelStartedAt := time.Now()
 	events := s.cfg.Agent.Run(ctx, input)
 
 	// Drain events，提取最后的 assistant 文本回复
-	reply, completedWithoutError := s.drainAgentEvents(events)
+	reply, completedWithoutError := s.drainAgentEvents(ctx, shopID, events)
+	modelStatus := "ok"
+	if !completedWithoutError {
+		modelStatus = "error"
+	}
+	storage.RecordTraceSpan(ctx, storage.TraceSpan{
+		ShopID: shopID, Name: "model.generate", Kind: "client", Status: modelStatus, StartedAt: modelStartedAt,
+	}, nil)
 	if reply == "" {
 		reply = "抱歉，我暂时无法处理您的请求，请稍后再试。"
 	}
 	DefaultAgentMetrics.RecordTaskFinished(completedWithoutError && reply != "")
+	if completedWithoutError && reply != "" {
+		taskStatus = "ok"
+	}
 
 	// 保存消息到会话
 	sess.Append(msgops.NewUser[M](userContent))
@@ -1759,7 +1808,7 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 //
 // DeepAgent 的事件里既有最终 assistant 消息（Output.MessageOutput 非空），也有中间过程；
 // 我们取最后一个含非空文本的 assistant 消息作为回复。
-func (s *Server[M]) drainAgentEvents(events *adk.AsyncIterator[*adk.TypedAgentEvent[M]]) (string, bool) {
+func (s *Server[M]) drainAgentEvents(ctx context.Context, shopID string, events *adk.AsyncIterator[*adk.TypedAgentEvent[M]]) (string, bool) {
 	var lastText string
 	if events == nil {
 		return "", false
@@ -2103,6 +2152,9 @@ func (s *Server[M]) handleExternalContactMessage(ctx context.Context, client *we
 	//   - external_user_id: 真实 external ID（reminder 优先用这个）
 	ctxWithUser := tools.WithOpenID(ctxWithShop, employeeUserID)
 	ctxWithExt := tools.WithExternalUserID(ctxWithUser, externalUserID)
+	ctxWithExt = storage.EnsureTraceID(ctxWithExt)
+	ctxWithExt = storage.WithAuditShop(ctxWithExt, shopID)
+	ctxWithExt = storage.WithAuditActor(ctxWithExt, storage.AuditActorAgent, "")
 	reply := s.processAgentMessage(ctxWithExt, sess, userMsg.Content, shopID)
 	log.Printf("[external] Agent回复: %s", reply)
 
@@ -2116,9 +2168,12 @@ func (s *Server[M]) handleExternalContactMessage(ctx context.Context, client *we
 		EmployeeUserID: userMsg.EmployeeUserID,
 	}
 
-	if err := client.SendReply(ctx, replyReq); err != nil {
+	replyStartedAt := time.Now()
+	if err := client.SendReply(ctxWithExt, replyReq); err != nil {
+		storage.RecordTraceSpan(ctxWithExt, storage.TraceSpan{ShopID: shopID, Name: "message.reply", Kind: "producer", Status: "error", ErrorCode: "wecom_send_failed", StartedAt: replyStartedAt}, map[string]any{"channel": "external_contact"})
 		log.Printf("[external] 发送外部联系人回复失败: %v", err)
 	} else {
+		storage.RecordTraceSpan(ctxWithExt, storage.TraceSpan{ShopID: shopID, Name: "message.reply", Kind: "producer", Status: "ok", StartedAt: replyStartedAt}, map[string]any{"channel": "external_contact"})
 		log.Printf("[external] 回复成功: ExternalUserID=%s EmployeeUserID=%s", externalUserID, userMsg.EmployeeUserID)
 	}
 }

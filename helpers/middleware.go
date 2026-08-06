@@ -28,6 +28,8 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/yuterigele/openbook/storage"
 )
 
 // NewSafeToolMiddleware converts tool errors into error-message strings so that
@@ -49,6 +51,11 @@ func (m *safeToolMiddleware[M]) WrapInvokableToolCall(
 	tCtx *adk.ToolContext,
 ) (adk.InvokableToolCallEndpoint, error) {
 	return func(ctx context.Context, args string, opts ...tool.Option) (string, error) {
+		startedAt := time.Now()
+		toolName := "unknown"
+		if tCtx != nil && tCtx.Name != "" {
+			toolName = tCtx.Name
+		}
 		result, err := endpoint(ctx, args, opts...)
 		if err != nil && isRetryableReadTool(tCtx, err) {
 			// Read-only tools never mutate reservations. One short retry absorbs
@@ -65,10 +72,30 @@ func (m *safeToolMiddleware[M]) WrapInvokableToolCall(
 			if _, ok := compose.IsInterruptRerunError(err); ok {
 				return "", err
 			}
+			storage.RecordTraceSpan(ctx, storage.TraceSpan{
+				Name: "tool." + toolName, Kind: "internal", Status: "error",
+				ErrorCode: "tool_execution_failed", StartedAt: startedAt,
+			}, map[string]any{"arguments_bytes": len(args), "retried": isRetryableReadTool(tCtx, err)})
+			if action, ok := mutatingToolAuditActions[toolName]; ok {
+				_ = storage.WriteAudit(ctx, storage.AuditLog{
+					ShopID: storage.AuditShopFromContext(ctx), ActorType: storage.AuditActorAgent,
+					Action: action, ResourceType: "request", ResourceID: storage.TraceIDFromContext(ctx),
+					Outcome: storage.AuditOutcomeFailure, ErrorCode: "tool_execution_failed",
+				}, map[string]any{"tool": toolName, "arguments_bytes": len(args)})
+			}
 			return fmt.Sprintf("[tool error] %v", err), nil
 		}
+		storage.RecordTraceSpan(ctx, storage.TraceSpan{
+			Name: "tool." + toolName, Kind: "internal", Status: "ok", StartedAt: startedAt,
+		}, map[string]any{"arguments_bytes": len(args), "result_bytes": len(result)})
 		return result, nil
 	}, nil
+}
+
+var mutatingToolAuditActions = map[string]string{
+	"create_appointment": "appointment.create",
+	"cancel_appointment": "appointment.cancel",
+	"handoff_to_human":   "handoff.create",
 }
 
 func isRetryableReadTool(tCtx *adk.ToolContext, err error) bool {

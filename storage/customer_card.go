@@ -47,12 +47,12 @@ var ErrReasonRequired = errors.New("reason required for adjust operation")
 
 // SellCardToCustomerParams 售卡入参
 type SellCardToCustomerParams struct {
-	ShopID     string
-	CustomerID string
-	CardID     string // 已存在的 card 产品
-	OperatorID     uint64
-	OperatorName   string
-	Note       string // 顾客卡实例备注（"生日礼物"等），可选
+	ShopID       string
+	CustomerID   string
+	CardID       string // 已存在的 card 产品
+	OperatorID   uint64
+	OperatorName string
+	Note         string // 顾客卡实例备注（"生日礼物"等），可选
 }
 
 // SellCardToCustomer 售卡
@@ -60,8 +60,8 @@ type SellCardToCustomerParams struct {
 //   - 校验 Card 存在 + 同店 + active
 //   - 校验 Customer 存在（同店或全平台？简单做：顾客存在即可，不强求"曾在本店有预约"）
 //   - 创建 CustomerCard：
-//       储值：balance = Face + Bonus（首次充值），initial_balance 同
-//       次卡：remaining = TotalCount，initial_count 同
+//     储值：balance = Face + Bonus（首次充值），initial_balance 同
+//     次卡：remaining = TotalCount，initial_count 同
 //   - expires_at = now + ValidDays（ValidDays=0 时 nil = 永久）
 //   - 写一条 recharge 流水（delta = 初始余额/次数，balance_after = 初始余额/次数）
 //
@@ -97,20 +97,20 @@ func SellCardToCustomer(ctx context.Context, p SellCardToCustomerParams) (*Custo
 
 	now := time.Now()
 	cc := &CustomerCard{
-		ID:                 uuid.NewString(),
-		ShopID:             p.ShopID,
-		CustomerID:         p.CustomerID,
-		CardID:             card.ID,
-		CardName:           card.Name,
-		Type:               card.Type,
-		PriceCents:         card.PriceCents,
-		Status:             CustomerCardStatusActive,
-		Note:               strings.TrimSpace(p.Note),
-		PurchasedAt:        now,
-		ServiceID:          card.ServiceID,
-		ServiceName:        card.ServiceName,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:          uuid.NewString(),
+		ShopID:      p.ShopID,
+		CustomerID:  p.CustomerID,
+		CardID:      card.ID,
+		CardName:    card.Name,
+		Type:        card.Type,
+		PriceCents:  card.PriceCents,
+		Status:      CustomerCardStatusActive,
+		Note:        strings.TrimSpace(p.Note),
+		PurchasedAt: now,
+		ServiceID:   card.ServiceID,
+		ServiceName: card.ServiceName,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if card.Type == CardTypeStoredValue {
 		initial := card.FaceValueCents + card.BonusCents
@@ -147,7 +147,14 @@ func SellCardToCustomer(ctx context.Context, p SellCardToCustomerParams) (*Custo
 		if p.Note != "" {
 			txRow.Reason = "售卡 · " + p.Note
 		}
-		return tx.Create(&txRow).Error
+		if err := tx.Create(&txRow).Error; err != nil {
+			return err
+		}
+		return WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID: p.ShopID, ActorType: AuditActorAdmin, ActorID: fmt.Sprint(p.OperatorID),
+			Action: "customer_card.sell", ResourceType: "customer_card", ResourceID: cc.ID,
+			Outcome: AuditOutcomeSuccess,
+		}, map[string]any{"card_id": card.ID, "delta": txRow.Delta, "balance_after": txRow.BalanceAfter, "card_type": cc.Type})
 	})
 	if err != nil {
 		return nil, err
@@ -157,13 +164,13 @@ func SellCardToCustomer(ctx context.Context, p SellCardToCustomerParams) (*Custo
 
 // ConsumeCustomerCardParams 扣减入参
 type ConsumeCustomerCardParams struct {
-	ShopID        string
+	ShopID         string
 	CustomerCardID string
 	// 储值：amount_cents（正数，扣减额度）
 	// 次卡：amount_cents 忽略，永远扣 1 次
 	AmountCents   int
-	Reason        string    // "剪发 by 张师傅" / "染发" 等；可空
-	AppointmentID string    // 关联预约，可空
+	Reason        string // "剪发 by 张师傅" / "染发" 等；可空
+	AppointmentID string // 关联预约，可空
 	OperatorID    uint64
 	OperatorName  string
 }
@@ -254,7 +261,14 @@ func ConsumeCustomerCard(ctx context.Context, p ConsumeCustomerCardParams) (*Cus
 			OperatorName:   p.OperatorName,
 			CreatedAt:      now,
 		}
-		return tx.Create(&txRow).Error
+		if err := tx.Create(&txRow).Error; err != nil {
+			return err
+		}
+		return WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID: p.ShopID, ActorType: AuditActorAdmin, ActorID: fmt.Sprint(p.OperatorID),
+			Action: "customer_card.consume", ResourceType: "customer_card", ResourceID: cc.ID,
+			Outcome: AuditOutcomeSuccess,
+		}, map[string]any{"delta": delta, "balance_after": after, "card_type": cc.Type, "appointment_id": p.AppointmentID})
 	})
 	if err != nil {
 		return nil, err
@@ -386,7 +400,7 @@ func AdjustCustomerCard(ctx context.Context, p AdjustCustomerCardParams) (*Custo
 		}
 
 		// 写调账流水
-		return tx.Create(&CardTransaction{
+		txRow := CardTransaction{
 			ID:             uuid.NewString(),
 			ShopID:         p.ShopID,
 			CustomerID:     cc.CustomerID,
@@ -398,7 +412,15 @@ func AdjustCustomerCard(ctx context.Context, p AdjustCustomerCardParams) (*Custo
 			OperatorID:     p.OperatorID,
 			OperatorName:   p.OperatorName,
 			CreatedAt:      now,
-		}).Error
+		}
+		if err := tx.Create(&txRow).Error; err != nil {
+			return err
+		}
+		return WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID: p.ShopID, ActorType: AuditActorAdmin, ActorID: fmt.Sprint(p.OperatorID),
+			Action: "customer_card.adjust", ResourceType: "customer_card", ResourceID: cc.ID,
+			Outcome: AuditOutcomeSuccess,
+		}, map[string]any{"direction": p.Direction, "delta": delta, "balance_after": after, "card_type": cc.Type, "reason_present": true})
 	})
 	if err != nil {
 		return nil, err

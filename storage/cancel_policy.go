@@ -265,6 +265,27 @@ func cancelAppointmentWithPolicy(ctx context.Context, apptID, source, reason, sh
 		if err := tx.Create(&rec).Error; err != nil {
 			return err
 		}
+		actorType := AuditActorAgent
+		if source == CancelSourceAdmin {
+			actorType = AuditActorAdmin
+		} else if source == CancelSourceSystem {
+			actorType = AuditActorSystem
+		}
+		if err := WriteAuditInTx(ctx, tx, AuditLog{
+			ShopID:       appt.ShopID,
+			ActorType:    actorType,
+			Action:       "appointment.cancel",
+			ResourceType: "appointment",
+			ResourceID:   appt.ID,
+			Outcome:      AuditOutcomeSuccess,
+		}, map[string]any{
+			"cancel_type":     cancelType,
+			"source":          source,
+			"penalty_applied": res.PenaltyApplied,
+			"blacklisted":     res.Blacklisted,
+		}); err != nil {
+			return err
+		}
 
 		return nil
 	})
