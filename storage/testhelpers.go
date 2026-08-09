@@ -63,15 +63,16 @@ func SetupTestDB(t *testing.T) {
 		&TraceSpan{},
 		&AuditOutbox{},
 		&BarberLeave{},
-		&Service{},              // v4.4 服务目录
-		&RolePermission{},       // v4.7 RBAC 权限表
-		&CustomerNotification{}, // v4.10 leave notify 持久化
-		&APIKey{},               // v4.12.1 api_access feature
-		&KfSyncState{},          // v4.13.1 微信客服 sync cursor
-		&KfSeenMsg{},            // v4.13.1 微信客服 msgid 去重
-		&Card{},                 // v4.15 储值 / 次卡产品
-		&CustomerCard{},         // v4.15 顾客卡实例
-		&CardTransaction{},      // v4.15 卡流水
+		&Service{},               // v4.4 服务目录
+		&RolePermission{},        // v4.7 RBAC 权限表
+		&CustomerNotification{},  // v4.10 leave notify 持久化
+		&PhoneVerificationCode{}, // 测试模式短信验证码
+		&APIKey{},                // v4.12.1 api_access feature
+		&KfSyncState{},           // v4.13.1 微信客服 sync cursor
+		&KfSeenMsg{},             // v4.13.1 微信客服 msgid 去重
+		&Card{},                  // v4.15 储值 / 次卡产品
+		&CustomerCard{},          // v4.15 顾客卡实例
+		&CardTransaction{},       // v4.15 卡流水
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

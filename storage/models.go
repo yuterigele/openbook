@@ -10,24 +10,25 @@ import (
 
 // 所有模型显式声明表名，避免 GORM 默认复数化规则（EventLog → event_log vs event_logs）的歧义。
 
-func (Shop) TableName() string                 { return "shops" }
-func (Barber) TableName() string               { return "barbers" }
-func (Customer) TableName() string             { return "customers" }
-func (Appointment) TableName() string          { return "appointments" }
-func (Subscription) TableName() string         { return "subscriptions" }
-func (WecomMessageLog) TableName() string      { return "wecom_message_logs" }
-func (ReminderLog) TableName() string          { return "reminder_logs" }
-func (EventLog) TableName() string             { return "event_logs" }
-func (AuditLog) TableName() string             { return "audit_logs" }
-func (TraceSpan) TableName() string            { return "trace_spans" }
-func (AuditOutbox) TableName() string          { return "audit_outbox" }
-func (BarberLeave) TableName() string          { return "barber_leaves" }
-func (Service) TableName() string              { return "services" }
-func (CustomerNotification) TableName() string { return "customer_notifications" }
-func (APIKey) TableName() string               { return "api_keys" }          // v4.12.1 api_access
-func (Card) TableName() string                 { return "cards" }             // v4.15 储值/次卡产品
-func (CustomerCard) TableName() string         { return "customer_cards" }    // v4.15 顾客持有的卡实例
-func (CardTransaction) TableName() string      { return "card_transactions" } // v4.15 卡流水
+func (Shop) TableName() string                  { return "shops" }
+func (Barber) TableName() string                { return "barbers" }
+func (Customer) TableName() string              { return "customers" }
+func (Appointment) TableName() string           { return "appointments" }
+func (Subscription) TableName() string          { return "subscriptions" }
+func (WecomMessageLog) TableName() string       { return "wecom_message_logs" }
+func (ReminderLog) TableName() string           { return "reminder_logs" }
+func (EventLog) TableName() string              { return "event_logs" }
+func (AuditLog) TableName() string              { return "audit_logs" }
+func (TraceSpan) TableName() string             { return "trace_spans" }
+func (AuditOutbox) TableName() string           { return "audit_outbox" }
+func (BarberLeave) TableName() string           { return "barber_leaves" }
+func (Service) TableName() string               { return "services" }
+func (CustomerNotification) TableName() string  { return "customer_notifications" }
+func (PhoneVerificationCode) TableName() string { return "phone_verification_codes" }
+func (APIKey) TableName() string                { return "api_keys" }          // v4.12.1 api_access
+func (Card) TableName() string                  { return "cards" }             // v4.15 储值/次卡产品
+func (CustomerCard) TableName() string          { return "customer_cards" }    // v4.15 顾客持有的卡实例
+func (CardTransaction) TableName() string       { return "card_transactions" } // v4.15 卡流水
 
 // Shop 店铺（对应 PRD §11.4 Shop）
 //
@@ -107,6 +108,7 @@ type Customer struct {
 	WechatOpenID    string     `gorm:"size:128;uniqueIndex" json:"wechat_open_id"` // KF external_userid
 	ExternalUserID  string     `gorm:"size:128;index" json:"external_user_id"`     // 外部联系人 external_userid
 	Phone           string     `gorm:"size:32;index" json:"phone"`
+	PhoneVerifiedAt *time.Time `gorm:"index" json:"phone_verified_at,omitempty"`
 	Name            string     `gorm:"size:64" json:"name"`
 	Tags            string     `gorm:"size:256" json:"tags"` // VIP / 黑名单 等
 	TotalVisits     int        `gorm:"default:0" json:"total_visits"`
@@ -115,6 +117,17 @@ type Customer struct {
 	LastVisitAt     *time.Time `json:"last_visit_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// PhoneVerificationCode 仅在关闭真实短信发送的测试模式下保存明文验证码。
+// 生产发送模式不会写入该表。
+type PhoneVerificationCode struct {
+	ID        string    `gorm:"primaryKey;size:80" json:"id"`
+	ShopID    string    `gorm:"size:64;index;not null" json:"shop_id"`
+	Phone     string    `gorm:"size:32;index;not null" json:"phone"`
+	Code      string    `gorm:"size:6;not null" json:"code"`
+	ExpiresAt time.Time `gorm:"index;not null" json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Appointment 预约（对应 PRD §11.4 Appointment）

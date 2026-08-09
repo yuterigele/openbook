@@ -667,6 +667,76 @@ func GetCustomerByMessagingIdentity(ctx context.Context, openID, externalUserID 
 	return nil, ErrAppointmentForbidden
 }
 
+var ErrPhoneAlreadyBound = errors.New("phone already bound to another customer")
+
+// BindVerifiedPhone 将已经通过短信验证的手机号绑定到可信消息身份。
+// 该方法拒绝把两个已有身份的顾客档案自动合并。
+func BindVerifiedPhone(ctx context.Context, phone, openID, externalUserID string) error {
+	phone = strings.TrimSpace(phone)
+	openID = strings.TrimSpace(openID)
+	externalUserID = strings.TrimSpace(externalUserID)
+	if phone == "" || (openID == "" && externalUserID == "") {
+		return ErrCustomerIdentityRequired
+	}
+	return mustDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var identity Customer
+		identityFound := false
+		if externalUserID != "" {
+			err := tx.Where("external_user_id = ?", externalUserID).First(&identity).Error
+			if err == nil {
+				identityFound = true
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+		if !identityFound && openID != "" {
+			err := tx.Where("wechat_open_id = ?", openID).First(&identity).Error
+			if err == nil {
+				identityFound = true
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		var owner Customer
+		ownerFound := false
+		if err := tx.Where("phone = ?", phone).First(&owner).Error; err == nil {
+			ownerFound = true
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if identityFound && ownerFound && identity.ID != owner.ID {
+			return ErrPhoneAlreadyBound
+		}
+		if !identityFound && ownerFound {
+			if (owner.ExternalUserID != "" && owner.ExternalUserID != externalUserID) ||
+				(owner.WechatOpenID != "" && owner.WechatOpenID != openID) {
+				return ErrPhoneAlreadyBound
+			}
+			identity = owner
+			identityFound = true
+		}
+		if !identityFound {
+			now := time.Now()
+			identity = Customer{
+				ID: uuid.NewString(), Phone: phone, WechatOpenID: openID,
+				ExternalUserID: externalUserID, PhoneVerifiedAt: &now,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			return tx.Create(&identity).Error
+		}
+		now := time.Now()
+		updates := map[string]any{"phone": phone, "phone_verified_at": &now}
+		if identity.WechatOpenID == "" && openID != "" {
+			updates["wechat_open_id"] = openID
+		}
+		if identity.ExternalUserID == "" && externalUserID != "" {
+			updates["external_user_id"] = externalUserID
+		}
+		return tx.Model(&Customer{}).Where("id = ?", identity.ID).Updates(updates).Error
+	})
+}
+
 // GetAppointmentForCustomer scopes an appointment lookup to the current shop
 // and the transport-verified customer identity.
 func GetAppointmentForCustomer(ctx context.Context, appointmentID, shopID, customerID string) (*Appointment, error) {

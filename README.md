@@ -164,6 +164,7 @@ go run .
 - 管理端：修改 `DEFAULT_ADMIN_*`、`DEFAULT_PLATFORM_ADMIN_*` 和 `JWT_SECRET` 后再暴露服务。
 - 观测与告警：`LLM_TOKEN_ALERT_5M` 设置 5 分钟 Token 阈值；`FEISHU_ALERT_WEBHOOK_URL` 接收 Redis 健康和模型降级直连通知；Grafana 告警可经 `FEISHU_GRAFANA_WEBHOOK_URL` 转发。
 - 安全：不要在 README、日志或仓库中记录真实凭据。
+- 手机号验证：首次预约绑定手机号以及后续换号始终需要验证码，相同手机号的后续预约不重复验证。`SMS_VERIFICATION_ENABLED=1` 时通过腾讯云发送；设为 `0` 时不发送，验证码写入 `phone_verification_codes` 表供本地测试查询。生产环境必须启用真实发送并配置 `.env.example` 中的 `TENCENT_SMS_*` 参数。
 
 ### 性能分析
 

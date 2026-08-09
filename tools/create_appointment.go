@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/yuterigele/openbook/lock"
+	"github.com/yuterigele/openbook/smsverify"
 	"github.com/yuterigele/openbook/storage"
 )
 
@@ -87,6 +88,7 @@ func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 		Name: "create_appointment",
 		Desc: "创建预约；需理发师、顾客姓名、11 位手机号、日期和时间。\n" +
 			"调用前必须先用 query_schedule 确认空闲；相对日期换算为 YYYY-MM-DD，勿编造手机号。\n" +
+			"若工具提示验证码已生成或发送，向顾客询问验证码，再把验证码原样传入 phone_verification_code 重试。\n" +
 			"时段不可约、师傅请假、过去时间、22:00 后或节假日时按工具结果引导换时间或师傅。\n" +
 			"节假日推荐日期前先调 list_shop_holidays，再用 query_schedule 验证。\n" +
 			"成功后自然确认并告知预约号；失败时用友好话术，不展示工具错误。",
@@ -99,6 +101,9 @@ func (t *CreateAppointmentTool) Info(ctx context.Context) (*schema.ToolInfo, err
 			},
 			"phone": {
 				Type: "string", Desc: "顾客手机号，11 位数字、1 开头（用于后续到店提醒/通知）。**必填**——顾客没主动给时主动问一次。", Required: true,
+			},
+			"phone_verification_code": {
+				Type: "string", Desc: "短信验证码；仅在工具提示已发送验证码后填写，不得猜测或编造。", Required: false,
 			},
 			"date": {
 				Type: "string", Desc: "预约日期，格式：YYYY-MM-DD，例如：2026-06-20", Required: true,
@@ -125,6 +130,7 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		Time       string `json:"time"`
 		Service    string `json:"service"`
 		Phone      string `json:"phone"`
+		PhoneCode  string `json:"phone_verification_code"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &params); err != nil {
 		return "", FriendlyError(ctx, err, "参数解析失败", "create_appointment.unmarshal")
@@ -215,6 +221,40 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 		)
 	}
 
+	// 只有业务参数和可约状态均通过后才发送或校验验证码，避免无效预约消耗短信。
+	if smsverify.Required() {
+		openID, externalUserID := OpenIDFromCtx(ctx), ExternalUserIDFromCtx(ctx)
+		if openID == "" && externalUserID == "" {
+			return "", fmt.Errorf("手机号验证已配置，但当前会话缺少可信顾客身份，请联系门店处理")
+		}
+		customer, identityErr := storage.GetCustomerByMessagingIdentity(ctx, openID, externalUserID)
+		if identityErr != nil && !errors.Is(identityErr, storage.ErrAppointmentForbidden) {
+			return "", FriendlyError(ctx, identityErr, "读取顾客手机号失败，请稍后再试", "create_appointment.customer_identity")
+		}
+		needsVerification := identityErr != nil || customer.Phone != params.Phone || customer.PhoneVerifiedAt == nil
+		if needsVerification {
+			if err := smsverify.VerifyOrSend(ctx, ShopIDFromCtx(ctx), params.Phone, params.PhoneCode); err != nil {
+				switch {
+				case errors.Is(err, smsverify.ErrCodeRequired):
+					if !smsverify.DeliveryEnabled() {
+						return "", fmt.Errorf("测试验证码已生成，请顾客提供 6 位验证码后重试预约")
+					}
+					return "", fmt.Errorf("验证码已发送到手机号 %s，请顾客提供 6 位验证码后重试预约", maskPhone(params.Phone))
+				case errors.Is(err, smsverify.ErrCodeInvalid):
+					return "", fmt.Errorf("短信验证码不正确或已过期，请顾客核对；需要重新发送时再次提交空验证码")
+				default:
+					return "", fmt.Errorf("短信验证码服务暂不可用，请稍后再试")
+				}
+			}
+			if err := storage.BindVerifiedPhone(ctx, params.Phone, openID, externalUserID); err != nil {
+				if errors.Is(err, storage.ErrPhoneAlreadyBound) {
+					return "", fmt.Errorf("该手机号已绑定其他顾客，无法自动修改，请联系门店处理")
+				}
+				return "", FriendlyError(ctx, err, "手机号更新失败，请稍后重试", "create_appointment.bind_verified_phone")
+			}
+		}
+	}
+
 	// 加 Redis 分布式锁（PRD §3.3 防并发预约冲突）
 	lockCtx, cancel := context.WithTimeout(ctx, 5*1e9) // 5s
 	defer cancel()
@@ -286,6 +326,13 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	}
 
 	return appointmentSuccessMessage(persisted), nil
+}
+
+func maskPhone(phone string) string {
+	if len(phone) != 11 {
+		return "该手机号"
+	}
+	return phone[:3] + "****" + phone[7:]
 }
 
 func appointmentSuccessMessage(appointment *storage.Appointment) string {

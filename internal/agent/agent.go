@@ -46,7 +46,7 @@ func buildAgentInstruction() string {
 3. 相对日期严格使用紧邻用户消息的系统时间锚点；不得使用示例或历史日期。
 
 【工具流程】
-- 预约：确认师傅、日期、时间、服务；先 query_schedule，空闲后 create_appointment。
+- 预约：确认师傅、日期、时间、服务；先 query_schedule，空闲后 create_appointment。工具提示已生成或发送验证码时，只询问验证码；收到后原样传入 phone_verification_code 重试，不得猜测。
 - 取消/改约：优先从 history 找最近预约；顾客提供“OB-”开头的预约号时可直接传给 get_appointment。先获取真实状态，再依次取消旧预约、查新时段、创建新预约。
 - 节假日：先 list_shop_holidays，再 query_schedule 验证推荐日期。
 - 顾客问项目/价格用 list_services；问请假原因用 barber_leave。
