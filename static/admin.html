@@ -1318,6 +1318,13 @@
         <span>通知中心</span>
         <span class="badge badge-noshow" id="failedNotifsBadge" style="display:none;">0</span>
       </a>
+      <a class="nav-item" data-view="failed-messages" data-perm="view:failed_messages" href="#failed-messages">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.7 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/>
+        </svg>
+        <span>失败消息</span>
+        <span class="badge badge-noshow" id="failedMessagesBadge" style="display:none;">0</span>
+      </a>
       <a class="nav-item" data-view="barbers" data-perm="view:barbers" href="#barbers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
@@ -1547,6 +1554,8 @@ const App = (() => {
     leaves: [],
     leavesByBarber: {},
     notifications: [],     // v4.10.1 通知中心列表
+    failedMessages: [],    // 微信客服 inbox 重试 / 死信
+    failedMessageStatus: '',
     notifFilter: { status: '', type: '', leave_id: '' },
     chainData: null,
     shop: null,           // v4.4 店铺信息
@@ -1670,6 +1679,7 @@ const App = (() => {
       members: '成员管理',
       plans: '套餐与升级',
       notifications: '通知中心',
+      'failed-messages': '失败消息',
       'platform-overview': '平台总览',
       'platform-shops': '店铺管理',
       'platform-audit': '套餐审计',
@@ -1698,6 +1708,7 @@ const App = (() => {
     else if (state.view === 'weekly') c.innerHTML = renderWeekly();
     else if (state.view === 'chain-weekly') c.innerHTML = renderChainWeekly();
     else if (state.view === 'notifications') c.innerHTML = renderNotifications();
+    else if (state.view === 'failed-messages') c.innerHTML = renderFailedMessages();
     else if (state.view === 'members') c.innerHTML = renderMembers();
     else if (state.view === 'plans') c.innerHTML = renderPlans();
     else if (state.view === 'platform-overview') c.innerHTML = renderPlatformOverview();
@@ -4126,6 +4137,49 @@ return `<table class="table">
     </table>`;
   }
 
+  function renderFailedMessages() {
+    const rows = state.failedMessages || [];
+    const status = state.failedMessageStatus || '';
+    const statusBadge = s => s === 'dead_letter'
+      ? '<span class="badge badge-noshow">死信</span>'
+      : s === 'retry'
+        ? '<span class="badge badge-warning">等待重试</span>'
+        : '<span class="badge badge-info">处理中</span>';
+    return `
+      <div class="view-head">
+        <h1>失败消息</h1>
+        <p>微信客服消息已先落库；自动重试仍失败的消息可在这里人工重放</p>
+      </div>
+      <div class="filterbar">
+        <div class="field"><label>状态</label>
+          <select class="select" id="failedMessageStatus" onchange="App.loadFailedMessages()">
+            <option value="" ${status === '' ? 'selected' : ''}>重试和死信</option>
+            <option value="retry" ${status === 'retry' ? 'selected' : ''}>等待重试</option>
+            <option value="dead_letter" ${status === 'dead_letter' ? 'selected' : ''}>死信</option>
+            <option value="processing" ${status === 'processing' ? 'selected' : ''}>处理中</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="App.loadFailedMessages()">刷新</button>
+        <span class="text-muted" style="font-size:12px;">重放只负责重新入队，仍会经过原有幂等和并发保护</span>
+      </div>
+      <div class="card" style="overflow-x:auto;">
+        ${rows.length === 0 ? '<div style="padding:20px;">' + renderEmpty('暂无失败消息', '消息处理正常，或当前筛选没有记录', 'check') + '</div>' : `
+        <table class="table"><thead><tr>
+          <th>更新时间</th><th>状态</th><th>顾客消息</th><th>尝试</th><th>最后错误</th><th>消息 ID</th><th class="num">操作</th>
+        </tr></thead><tbody>${rows.map(m => `<tr class="${m.status === 'dead_letter' ? 'row-failed' : ''}">
+          <td class="text-mono" style="white-space:nowrap;">${esc((m.updated_at || '').slice(0,19).replace('T',' '))}</td>
+          <td>${statusBadge(m.status)}</td>
+          <td style="max-width:300px;line-height:1.5;">${esc((m.content || '').slice(0,160))}${(m.content || '').length > 160 ? '…' : ''}</td>
+          <td class="text-mono">${m.attempts || 0}</td>
+          <td class="text-muted" style="max-width:260px;font-size:12px;">${esc((m.last_error || '').slice(0,180))}</td>
+          <td class="text-mono" style="font-size:11px;">${esc(m.msg_id || '')}</td>
+          <td class="num">${m.status === 'retry' || m.status === 'dead_letter'
+            ? `<button class="btn btn-sm btn-warning" data-perm="retry:failed_messages" data-msg-id="${esc(m.msg_id)}" onclick="App.replayFailedMessage(this.dataset.msgId, this)">重新处理</button>`
+            : '<span class="text-muted">—</span>'}</td>
+        </tr>`).join('')}</tbody></table>`}
+      </div>`;
+  }
+
   // ---------- Icons ----------
   function icon(name, size = 18) {
     const s = size;
@@ -5108,6 +5162,7 @@ return `<table class="table">
     refreshTimer = setInterval(() => {
       if (state.view === 'dashboard') refreshAll(true);
       else if (state.view === 'handoffs') loadHandoffs();
+      else if (state.view === 'failed-messages') loadFailedMessages(true);
     }, 30 * 1000);
     upcomingTimer = setInterval(() => {
       if (state.view === 'dashboard') loadUpcoming(true);
@@ -5128,6 +5183,7 @@ return `<table class="table">
         loadLeavesBadge(),
         loadHandoffsBadge(),
         updateFailedNotifsBadge(),
+        updateFailedMessagesBadge(),
         loadAlerts(silent),
       ]);
     } finally { state.loading = false; }
@@ -5734,6 +5790,44 @@ return `<table class="table">
     } catch (_) { /* silent */ }
   }
 
+  async function loadFailedMessages(silent = false) {
+    state.failedMessageStatus = $('#failedMessageStatus')?.value || state.failedMessageStatus || '';
+    try {
+      const params = new URLSearchParams({ limit: '200' });
+      if (state.failedMessageStatus) params.set('status', state.failedMessageStatus);
+      const data = await api('/api/admin/failed-messages?' + params.toString());
+      state.failedMessages = data.items || [];
+      const badge = $('#failedMessagesBadge');
+      const deadCount = state.failedMessages.filter(m => m.status === 'dead_letter').length;
+      if (badge) { badge.textContent = deadCount; badge.style.display = deadCount > 0 ? '' : 'none'; }
+      if (state.view === 'failed-messages') render();
+    } catch (e) {
+      if (!silent) showToast('失败消息加载失败：' + e.message, 'error');
+    }
+  }
+
+  async function updateFailedMessagesBadge() {
+    try {
+      const data = await api('/api/admin/failed-messages?status=dead_letter&limit=500');
+      const n = (data.items || []).length;
+      const badge = $('#failedMessagesBadge');
+      if (badge) { badge.textContent = n; badge.style.display = n > 0 ? '' : 'none'; }
+    } catch (_) { /* 当前角色无权限时静默 */ }
+  }
+
+  async function replayFailedMessage(msgID, btn) {
+    if (!confirm('确认重新处理这条顾客消息？')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '已入队…'; }
+    try {
+      await api(`/api/admin/failed-messages/${encodeURIComponent(msgID)}/replay`, { method: 'POST' });
+      showToast('已进入重试队列', 'success');
+      await loadFailedMessages();
+    } catch (e) {
+      showToast('重新处理失败：' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '重新处理'; }
+    }
+  }
+
   // v4.4 新增 loader
   async function loadHandoffs() {
     if (state.view === 'handoffs') render();
@@ -6165,6 +6259,7 @@ return `<table class="table">
         else if (view === 'appointments') loadAppointments();
         else if (view === 'customers') loadCustomers();
         else if (view === 'notifications') loadNotifications();
+        else if (view === 'failed-messages') loadFailedMessages();
         // v4.13.0: 平台超管 3 个 view 也要拉数据（之前漏了 → KPI 卡片跳进来卡骨架屏）
         else if (view === 'platform-overview') loadPlatformOverview();
         else if (view === 'platform-shops') loadPlatformShops();
@@ -7138,6 +7233,7 @@ return `<table class="table">
     else if (state.view === 'weekly') loadWeekly();
     else if (state.view === 'chain-weekly') loadChainWeekly();
     else if (state.view === 'notifications') loadNotifications();
+    else if (state.view === 'failed-messages') loadFailedMessages();
     else if (state.view === 'members') loadMembers();
     else if (state.view === 'plans') loadPlans();
     else if (state.view === 'platform-overview') loadPlatformOverview();
@@ -7169,6 +7265,7 @@ return `<table class="table">
       else if (v === 'weekly') loadWeekly();
       else if (v === 'chain-weekly') loadChainWeekly();
       else if (v === 'notifications') loadNotifications();
+      else if (v === 'failed-messages') loadFailedMessages();
       else if (v === 'members') loadMembers();
       else if (v === 'plans') loadPlans();
       else if (v === 'platform-overview') loadPlatformOverview();
@@ -7267,6 +7364,7 @@ return `<table class="table">
     resetCustFilters,
     refreshCurrent,
     loadNotifications, retryOneNotification, retryAllFailedNotifications,
+    loadFailedMessages, replayFailedMessage,
     // v4.13.0 平台超管（onclick / oninput / onchange 直接调，必须挂到 App）
     loadPlatformOverview, loadPlatformShops, loadPlatformAudit,
     filterPlatformShops, filterPlatformAudit,

@@ -292,6 +292,7 @@ func (s *Server[M]) Spin() {
 	// 企业微信回调接口
 	if s.cfg.WeComRouter != nil {
 		s.registerWeComCallback(h)
+		go s.runKfInboxWorker(context.Background())
 	}
 
 	h.Spin()
@@ -1281,17 +1282,16 @@ func (s *Server[M]) handleWeComMessage(ctx context.Context, client *wecom.Client
 //
 // v4.13.1：参数 client 改成 replySender interface（*wecom.Client 自动满足），便于 handleKfCallback
 // 把 syncMsgFetcher mock 同时当 replySender mock 传进来——单测只需要一个 mock 对象。
-func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client replySender, msg *wecom.MessageXML, openKfID, shopID string) {
+func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client replySender, msg *wecom.MessageXML, openKfID, shopID string) error {
 	if decision := s.cfg.RateLimiter.AllowDecision(customerRateLimitKey(shopID, msg.FromUserName)); !decision.Allowed {
 		log.Printf("[ratelimit] rejected reason=%s source=wecom shop=%s user=%s", decision.Reason, shopID, msg.FromUserName)
-		sendReply(ctx, client, msg.FromUserName, openKfID, rateLimitReply, shopID)
-		return
+		return sendReply(ctx, client, msg.FromUserName, openKfID, rateLimitReply, shopID)
 	}
 	sessionID := "wecom_" + shopID + "_" + msg.FromUserName // 加 shopID 防止多店用户串号
 	sess, err := s.cfg.Store.GetOrCreate(sessionID)
 	if err != nil {
 		log.Printf("[wecom] 获取会话失败: %v", err)
-		return
+		return fmt.Errorf("获取会话失败: %w", err)
 	}
 
 	log.Printf("[wecom] 处理消息: session=%s shop=%s msg=%s history=%d", sessionID, shopID, msg.Content, len(sess.GetMessages()))
@@ -1314,7 +1314,7 @@ func (s *Server[M]) handleWeComMessageWithOpenKfID(ctx context.Context, client r
 	//   必然 81013 user & party & tag all invalid，等于把真因掩盖了
 	//   真因可能是 95001（企业未认证 / 接待人员接管）/ 95018（session 状态无效）/
 	//   95002（48h 超时）等——必须让错误冒泡到日志，商户才好排查
-	sendReply(ctxWithExt, client, msg.FromUserName, openKfID, reply, shopID)
+	return sendReply(ctxWithExt, client, msg.FromUserName, openKfID, reply, shopID)
 }
 
 // replySender 抽象 wecom.Client 的发送方法，便于单测 mock
@@ -1367,7 +1367,7 @@ func isKfRateLimited(err error) bool {
 //   - 用途：企业未认证 / 接待人员接管时，agent 推理 + DB 写入仍然全跑通，
 //     demo 屏幕能展示完整业务流，不被企业微信配额限制
 //   - 默认 real（生产安全）
-func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, reply, shopID string) {
+func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, reply, shopID string) error {
 	startedAt := time.Now()
 	status, errorCode := "ok", ""
 	defer func() {
@@ -1379,7 +1379,7 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 	// mock 模式：跳过真实发送，写 event_logs + log
 	if IsMockReplyMode() {
 		logDemoReply(ctx, shopID, fromUser, openKfID, reply)
-		return
+		return nil
 	}
 
 	if openKfID != "" {
@@ -1398,7 +1398,7 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 			if err == nil {
 				log.Printf("[wecom] 客服回复成功: to=%s openKfID=%s shop=%s (attempt=%d)",
 					fromUser, openKfID, shopID, attempt)
-				return
+				return nil
 			}
 			lastErr = err
 			if !isKfRateLimited(err) {
@@ -1406,7 +1406,7 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 				// 非限流错误（95001 未认证 / 95018 真人接管 / 95002 48h 超时 等）：不重试
 				log.Printf("[wecom] ⚠️ 客服消息发送失败（顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
 					fromUser, openKfID, shopID, err)
-				return
+				return err
 			}
 			// 限流：递增退避
 			backoff := time.Duration(attempt) * 500 * time.Millisecond
@@ -1418,15 +1418,16 @@ func sendReply(ctx context.Context, sender replySender, fromUser, openKfID, repl
 		log.Printf("[wecom] ⚠️ 客服消息发送失败（限流重试 3 次仍失败，顾客没收到回复）: to=%s openKfID=%s shop=%s err=%v",
 			fromUser, openKfID, shopID, lastErr)
 		status, errorCode = "error", "wecom_rate_limited"
-		return
+		return lastErr
 	}
 	// 非 KF 来源（admin API 路径，line 1247），走应用消息接口
 	if err := sender.SendTextMessage(ctx, fromUser, reply); err != nil {
 		status, errorCode = "error", "wecom_send_failed"
 		log.Printf("[wecom] 发送消息失败: %v", err)
-		return
+		return err
 	}
 	log.Printf("[wecom] 发送回复成功: to=%s shop=%s", fromUser, shopID)
+	return nil
 }
 
 // buildTodayContext 返回按北京时间生成的动态日期上下文。
@@ -1948,14 +1949,6 @@ func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher
 		return
 	}
 
-	// v4.13.1：立刻把 next_cursor 写回 storage（持久化）
-	// 即使中途 panic，下一次 sync_msg 也能从持久化 cursor 续上，不会丢消息也不会重复拉
-	if result.NextCursor != "" {
-		if setErr := storage.SetKfCursor(openKfID, result.NextCursor); setErr != nil {
-			log.Printf("[kf] ⚠️ 持久化 cursor 失败（下次可能重复处理）: %v", setErr)
-		}
-	}
-
 	log.Printf("[kf] 拉取到 %d 条消息, has_more=%d next_cursor=%s",
 		len(result.MsgList), result.HasMore, result.NextCursor)
 
@@ -1971,65 +1964,27 @@ func (s *Server[M]) handleKfCallback(ctx context.Context, fetcher syncMsgFetcher
 		log.Printf("[kf] 首次拉取 (cursor 为空)，按 48h 窗口过滤后 %d 条文本消息", len(textMsgs))
 	}
 
-	processed := 0
+	inputs := make([]storage.KfInboxInput, 0, len(textMsgs))
 	for _, kfMsg := range textMsgs {
-		// v4.13.1：从 storage 去重
-		seen, seenErr := storage.IsKfMsgSeen(kfMsg.Msgid)
-		if seenErr != nil {
-			log.Printf("[kf] ⚠️ 查 msgid seen 失败（放过，可能重复）: %v", seenErr)
-		} else if seen {
-			log.Printf("[kf] 重复消息跳过: msgid=%s", kfMsg.Msgid)
-			continue
-		}
-
-		// 先标 seen 再处理（防止并发 race 重复处理；如果处理失败，下次 sync_msg 会再拉一次，
-		// 由 IsKfMsgSeen 再挡一次——但 seen 表写已经发生，所以"最多处理一次"，正好）
-		if markErr := storage.MarkKfMsgSeen(kfMsg.Msgid); markErr != nil {
-			log.Printf("[kf] ⚠️ 标 seen 失败（可能重复）: %v", markErr)
-		}
-
-		log.Printf("[kf] 处理: user=%s msg=%s msgid=%s",
-			kfMsg.ExternalUserid, kfMsg.Text.Content, kfMsg.Msgid)
-
-		// v4.13.3：把消息塞进 per-session debounce 队列，1.5 秒内无新消息 →
-		// 合并 N 条消息成 1 次 agent 推理 + 1 条回复。详见 server/kf_debounce.go。
-		//
-		// 不再用 v4.13.2 的"for-loop 同步串行"——那能让 4 条消息不混乱，但
-		// 还是会触发 4 次 agent 推理 + 4 条回复，触发限流（v4.13.2 已修）和
-		// 用户感知的"agent 太啰嗦"问题。
-		//
-		// 关键：seen 标的是"已经收到"（同步），debounce 的是"何时处理"（异步）。
-		// 哪怕 debounce 期间服务挂了，下次 sync_msg 也会用 cursor + seen 跳过这些消息。
-		sessionID := "wecom_" + shopID + "_" + kfMsg.ExternalUserid
-		kfDebounceEnqueue(sessionID, &kfMsg, func(merged []*wecom.KfMsgItem) {
-			// 合并 N 条消息成 1 个 user message（用换行分隔，LLM 能识别"用户连发"）
-			var combined string
-			for i, m := range merged {
-				if i > 0 {
-					combined += "\n"
-				}
-				combined += m.Text.Content
-			}
-			msg := &wecom.MessageXML{
-				FromUserName: merged[0].ExternalUserid,
-				OpenKfId:     merged[0].OpenKfid,
-				MsgType:      "text",
-				Content:      combined,
-			}
-			// try-catch 隔离：一条消息 panic 不影响整个 batch
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[kf] ⚠️ debounce batch 处理 panic: count=%d err=%v", len(merged), r)
-					}
-				}()
-				s.handleWeComMessageWithOpenKfID(ctx, fetcher, msg, merged[0].OpenKfid, shopID)
-			}()
+		inputs = append(inputs, storage.KfInboxInput{
+			MsgID: kfMsg.Msgid, ShopID: shopID, OpenKfID: openKfID,
+			ExternalUserID: kfMsg.ExternalUserid, Content: kfMsg.Text.Content, SendTime: kfMsg.SendTime,
 		})
-		processed++
 	}
 
-	log.Printf("[kf] 完成: 总%d条 文本%d条 入队%d条（debounce 中）", len(result.MsgList), len(textMsgs), processed)
+	// cursor 和消息必须同一事务提交。事务失败时保留旧 cursor，企业微信下次回调
+	// 会重新拉取；msg_id 主键保证重复拉取不会产生两条 inbox 记录。
+	if err := storage.SaveKfInboxBatchAndCursor(ctx, openKfID, result.NextCursor, inputs); err != nil {
+		log.Printf("[kf] ⚠️ inbox/cursor 持久化失败，保留旧 cursor 等待重拉: %v", err)
+		return
+	}
+	claimed, err := storage.ClaimKfInboxDue(ctx, openKfID, 50, kfInboxLease())
+	if err != nil {
+		log.Printf("[kf] ⚠️ 领取 inbox 消息失败，后台 worker 将重试: %v", err)
+		return
+	}
+	s.enqueueKfInboxRows(context.WithoutCancel(ctx), fetcher, claimed)
+	log.Printf("[kf] 完成: 总%d条 文本%d条 inbox领取%d条（debounce 中）", len(result.MsgList), len(textMsgs), len(claimed))
 }
 
 // handleAddExternalContact 处理外部联系人添加事件（add_external_contact）

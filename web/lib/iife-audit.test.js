@@ -29,6 +29,8 @@ const adminHtml = readFileSync(adminHtmlPath, 'utf-8');
 // 然后找 `};\n})();` 找终点（IIFE 收尾的标志）
 // 这样不会被函数体里其他 `return { ... }` 干扰（v4.13.0 调试踩过这个坑）
 function extractReturnBlock(src) {
+  // Windows 工作区通常是 CRLF，先统一换行，避免结构检查只在 Linux CI 通过。
+  src = src.replace(/\r\n/g, '\n');
   // 起点：`// expose public API` 注释后面的 `return {`
   const anchorIdx = src.indexOf('// expose public API');
   if (anchorIdx < 0) {

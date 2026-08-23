@@ -270,6 +270,28 @@ type KfSeenMsg struct {
 	SeenAt time.Time `gorm:"index" json:"seen_at"`
 }
 
+// KfInboxMessage 保存已经从微信客服拉取、但尚未确认处理完成的顾客文本消息。
+// 消息先与 sync cursor 在同一事务落库，再由 worker 领取，避免进程在 debounce
+// 或 Agent 执行期间退出后永久丢消息。
+type KfInboxMessage struct {
+	MsgID          string     `gorm:"primaryKey;size:64" json:"msg_id"`
+	ShopID         string     `gorm:"size:64;index;index:idx_kf_inbox_due,priority:3;not null" json:"shop_id"`
+	OpenKfID       string     `gorm:"size:64;index;not null" json:"open_kf_id"`
+	ExternalUserID string     `gorm:"size:128;index;not null" json:"external_user_id"`
+	Content        string     `gorm:"type:text;not null" json:"content"`
+	SendTime       int64      `gorm:"index" json:"send_time"`
+	Status         string     `gorm:"size:24;index;index:idx_kf_inbox_due,priority:1;not null" json:"status"`
+	Attempts       int        `gorm:"default:0" json:"attempts"`
+	NextRetryAt    *time.Time `gorm:"index;index:idx_kf_inbox_due,priority:2" json:"next_retry_at,omitempty"`
+	LeaseUntil     *time.Time `gorm:"index" json:"lease_until,omitempty"`
+	LeaseToken     string     `gorm:"size:64" json:"-"`
+	LastError      string     `gorm:"size:1000" json:"last_error,omitempty"`
+	ProcessedAt    *time.Time `gorm:"index" json:"processed_at,omitempty"`
+	ReplayedAt     *time.Time `json:"replayed_at,omitempty"`
+	CreatedAt      time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
 // EventLog 续费转化漏斗埋点（PRD §11.2）
 //
 // 关键节点（按 §8.2 续费动作链）：

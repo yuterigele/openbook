@@ -88,6 +88,7 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&APIKey{},                // v4.12.1 api_access feature 实战
 		&KfSyncState{},           // v4.13.1 微信客服 sync cursor 持久化
 		&KfSeenMsg{},             // v4.13.1 微信客服 msgid 去重持久化
+		&KfInboxMessage{},        // 微信客服可靠 inbox / retry / dead-letter
 		&Card{},                  // v4.15 储值 / 次卡产品（2026-06-26）
 		&CustomerCard{},          // v4.15 顾客持有的卡实例
 		&CardTransaction{},       // v4.15 卡流水

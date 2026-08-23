@@ -280,6 +280,9 @@ type KfMsgItem struct {
 	Text           *struct {
 		Content string `json:"content"`
 	} `json:"text,omitempty"`
+	// 以下字段只在服务内部把 inbox 租约带入 debounce batch，不参与企微 JSON。
+	InboxLeaseToken string `json:"-"`
+	InboxAttempts   int    `json:"-"`
 }
 
 // SyncKfMsgResult 拉取消息结果

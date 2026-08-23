@@ -35,5 +35,8 @@ docker compose --env-file .env.production.local -f docker-compose.yml up -d --bu
 1. development 使用 `docker compose --env-file <目标文件> -f docker-compose.yml -f docker-compose.dev-ports.yml config -q`；staging/production 使用 `docker compose --env-file <目标文件> -f docker-compose.yml config -q`。
 2. `AGENT_REPLY_MODE=real` 仅允许生产或已批准的预发布验证。未认证企业主体也可以接入并使用企业微信能力，但会受人数上限、对外名片“未认证”标识及部分企业权益限制；应按当前企微后台已开通的能力和额度配置灰度范围。
 3. `LLM_DEBUG_LOG=0`、`FEISHU_ALERT_TEST=0`。
-4. HTTPS 反向代理只将企业微信回调与必要业务入口暴露公网；MySQL、Redis、Prometheus、Loki、Grafana、pprof 维持内网或本机访问。
-5. 完成数据库备份、恢复演练和回滚镜像验证后再切换流量。
+4. `KF_INBOX_MAX_ATTEMPTS`、`KF_INBOX_LEASE_SECONDS` 和 `KF_INBOX_POLL_SECONDS` 已随 Compose 注入；后台“失败消息”页面可正常查询，测试消息重放后能离开 dead-letter。
+5. HTTPS 反向代理只将企业微信回调与必要业务入口暴露公网；MySQL、Redis、Prometheus、Loki、Grafana、pprof 维持内网或本机访问。
+6. 完成数据库备份、恢复演练和回滚镜像验证后再切换流量。
+
+仓库 CI 会执行完整 Go 测试、`go vet`、前端 Vitest、development/production Compose 配置校验和可部署镜像构建。发布提交必须先通过这些门禁。

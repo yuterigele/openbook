@@ -125,6 +125,8 @@ func RegisterRoutes(h *hserver.Hertz, cfg AdminConfig) {
 	protected.GET("/notifications", auth.RequirePerm(storage.PermViewNotifications), listNotificationsHandler)
 	protected.POST("/notifications/:id/retry", auth.RequirePerm(storage.PermRetryNotifications), retryNotificationHandler)
 	protected.POST("/notifications/retry-batch", auth.RequirePerm(storage.PermRetryNotifications), retryAllFailedNotificationsHandler)
+	protected.GET("/failed-messages", auth.RequirePerm(storage.PermViewFailedMessages), listFailedMessagesHandler)
+	protected.POST("/failed-messages/:id/replay", auth.RequirePerm(storage.PermRetryFailedMessages), replayFailedMessageHandler)
 
 	// ===== owner-only =====
 	// 师傅管理：staff 只看不能改（避免误删活师傅）

@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,6 +110,20 @@ func waitForCalls(t *testing.T, fetcher *fakeFetcher, expected int32, timeout ti
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for kfCalls=%d (got %d)", expected, atomic.LoadInt32(&fetcher.kfCalls))
+}
+
+func waitForInboxStatus(t *testing.T, msgID, want string, timeout time.Duration) storage.KfInboxMessage {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var row storage.KfInboxMessage
+		if err := storage.DB.Where("msg_id = ?", msgID).First(&row).Error; err == nil && row.Status == want {
+			return row
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for inbox msg=%s status=%s", msgID, want)
+	return storage.KfInboxMessage{}
 }
 
 // ===================== filterKfMsgsByWindow 纯函数测试 =====================
@@ -230,6 +245,30 @@ func TestHandleKfCallback_FirstPull_WritesCursorAndSeen(t *testing.T) {
 	// 3) sendReply 链路跑通
 	if atomic.LoadInt32(&fetcher.kfCalls) != 1 {
 		t.Errorf("SendKfTextMessage 应被调 1 次，got %d", atomic.LoadInt32(&fetcher.kfCalls))
+	}
+	waitForInboxStatus(t, "msg-first-1", storage.KfInboxSucceeded, time.Second)
+}
+
+func TestHandleKfCallback_SendFailureSchedulesInboxRetry(t *testing.T) {
+	storage.SetupTestDB(t)
+	kfDebounceReset()
+	SetReplyMode("real")
+	t.Cleanup(func() { SetReplyMode("real"); kfDebounceReset() })
+	now := time.Now()
+	fetcher := &fakeFetcher{
+		results: []*wecom.SyncKfMsgResult{{
+			NextCursor: "cursor-failed",
+			MsgList:    []wecom.KfMsgItem{mkTestMsg("msg-send-failed", "ext-failed", now.Unix())},
+		}},
+		kfErr: errors.New("95018 session status invalid"),
+	}
+	srv := newTestSrvWithAgent(t)
+	srv.handleKfCallback(context.Background(), fetcher,
+		&wecom.MessageXML{OpenKfId: "wk-send-failed", Token: "tok"}, "shop-1")
+	waitForCalls(t, fetcher, 1, 3*time.Second)
+	row := waitForInboxStatus(t, "msg-send-failed", storage.KfInboxRetry, time.Second)
+	if row.Attempts != 1 || row.NextRetryAt == nil || row.LastError == "" {
+		t.Fatalf("unexpected retry row: %+v", row)
 	}
 }
 

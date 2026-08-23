@@ -63,7 +63,7 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 ## 核心实现
 
-- 正式入口为微信客服：好友添加事件只发送客服链接；客服消息经验签、解密、多店路由、持久化去重和 debounce 后进入 Agent。
+- 正式入口为微信客服：好友添加事件只发送客服链接；客服消息经验签、解密、多店路由后，正文与 cursor 原子写入 MySQL inbox，再由带租约的 worker 经 debounce 进入 Agent。失败按指数退避重试，达到上限进入后台“失败消息”供人工重放。
 - Agent 仅可调用白名单预约工具；门店、顾客身份与北京时间由服务端上下文注入，并在工具层校验门店隔离和预约归属。
 - 创建预约依次经过幂等检查、Redis 时段锁、MySQL 事务/活跃时段约束和提交后复核；无法确认结果时不回复成功。
 - 请求先经过每顾客限流（默认 `1 req/s`、突发 `5`）和进程全局限流（默认 `100 req/s`、突发 `200`）。当前没有门店聚合总量限流。
@@ -161,6 +161,7 @@ go run .
 - 数据：本地进程使用 `MYSQL_DSN` 或 `MYSQL_*`、`REDIS_*`；Compose 会覆盖应用的数据库地址并使用 `MYSQL_APP_PASSWORD` 创建受限账号。
 - Agent：`AGENT_REPLY_MODE=mock` 禁止真实企微发送；`AGENT_MAX_EXECUTION_SECONDS`、`USER_INPUT_TRUST_THRESHOLD` 控制执行和输入保护；`SMALL_MODEL_ENABLED` 和 `SENSITIVE_LLM_FALLBACK` 分别控制可选意图分类和敏感语义复核。
 - 企业微信：同一企业下的门店共用 `.env` 中的 `WECOM_CORP_ID`、`WECOM_AGENT_ID`、`WECOM_SECRET`、`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`；`WECOM_KF_LINK` 是顾客进入微信客服的公开链接。门店级 `open_kf_id` 等路由信息保存在 `shops` 表；单店部署可在首次客服回调时自动路由。全自动 Agent 客服可设置 `WECOM_KF_AUTO_TAKEOVER=1`，在 95018 时将会话从人工切回智能助手并重试一次；有人工作业的账号必须保持关闭。修改环境变量后需重启应用。
+- 可靠消息：`KF_INBOX_MAX_ATTEMPTS` 控制自动处理上限（默认 5），`KF_INBOX_LEASE_SECONDS` 控制 worker 租约（默认 120 秒），`KF_INBOX_POLL_SECONDS` 控制恢复轮询（默认 5 秒）。本店管理员可在后台查看 retry/dead-letter 记录并人工重放，不能跨店操作。
 - 管理端：修改 `DEFAULT_ADMIN_*`、`DEFAULT_PLATFORM_ADMIN_*` 和 `JWT_SECRET` 后再暴露服务。
 - 观测与告警：`LLM_TOKEN_ALERT_5M` 设置 5 分钟 Token 阈值；`FEISHU_ALERT_WEBHOOK_URL` 接收 Redis 健康和模型降级直连通知；Grafana 告警可经 `FEISHU_GRAFANA_WEBHOOK_URL` 转发。
 - 安全：不要在 README、日志或仓库中记录真实凭据。

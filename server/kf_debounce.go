@@ -20,10 +20,10 @@ package server
 //   - 5 条阈值是经验值：用户正常连发 2-3 条，5 条时已属异常场景
 //   - batch 处理 callback 同步执行（agent 推理 1-3 秒），期间新消息开新 batch
 //
-// 不影响：
-//   - msgid seen 去重（仍然在 handleKfCallback 主循环立即标 seen，防重拉）
-//   - cursor 持久化（仍然在主循环立即写）
-//   - sendReply 限流重试（v4.13.2 修复，与本 debounce 解耦）
+// 与可靠 inbox 的关系：
+//   - msgid 去重、正文和 cursor 已在进入 debounce 前原子落库
+//   - callback 完成后才把整个 batch 标记 succeeded；失败则 retry/dead-letter
+//   - sendReply 限流重试（v4.13.2 修复）仍与 debounce 解耦
 
 import (
 	"log"
@@ -54,11 +54,11 @@ const (
 //   - callback 跑完检查 state 还在不在（防止误清理新 batch）
 type kfDebounceState struct {
 	mu         sync.Mutex
-	batchID    int64             // 自增 ID，callback 跑完用 batchID 验证状态
+	batchID    int64              // 自增 ID，callback 跑完用 batchID 验证状态
 	msgs       []*wecom.KfMsgItem // 累积待处理消息
-	timer      *time.Timer       // debounce timer
-	enqueuedAt time.Time         // 首条消息入队时间（用于调试日志）
-	processing bool              // callback 在跑，新消息开新 batch
+	timer      *time.Timer        // debounce timer
+	enqueuedAt time.Time          // 首条消息入队时间（用于调试日志）
+	processing bool               // callback 在跑，新消息开新 batch
 }
 
 var (

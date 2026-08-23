@@ -54,7 +54,7 @@ const (
 	PermViewEvents = "view:events"
 
 	// 报表
-	PermViewWeeklyReport   = "view:weekly_report"  // 单店周报
+	PermViewWeeklyReport   = "view:weekly_report"   // 单店周报
 	PermViewChainDashboard = "view:chain_dashboard" // 跨店看板（v4.0）
 
 	// 店铺设置
@@ -84,8 +84,12 @@ const (
 	// 通知中心（v4.10.1 admin 后台"通知中心"页面）
 	//   - view: 看通知发送记录（sent/failed/skipped/pending）
 	//   - retry: 补发失败/跳过的通知（避免重复打扰已 sent 顾客）
-	PermViewNotifications    = "view:notifications"
-	PermRetryNotifications   = "retry:notifications"
+	PermViewNotifications  = "view:notifications"
+	PermRetryNotifications = "retry:notifications"
+
+	// 失败消息：只查看本店 inbox 失败记录，并触发安全重放。
+	PermViewFailedMessages  = "view:failed_messages"
+	PermRetryFailedMessages = "retry:failed_messages"
 
 	// 平台超管跨店管理（v4.13.0）：列全平台店铺 / 改任意店套餐 / 看 audit log
 	//   - 只给 platform_admin（owner / staff 都不该有——避免单店店主管到其他店）
@@ -118,8 +122,9 @@ var AllPermissions = []string{
 	PermManageMembers,
 	PermChangeOwnPassword,
 	PermViewNotifications, PermRetryNotifications,
+	PermViewFailedMessages, PermRetryFailedMessages,
 	PermViewPlan,
-	PermManagePlatform, // v4.13.0: 平台超管跨店管理（仅 platform_admin）
+	PermManagePlatform,             // v4.13.0: 平台超管跨店管理（仅 platform_admin）
 	PermViewCards, PermManageCards, // v4.15 储值 / 次卡
 }
 
@@ -196,7 +201,8 @@ var DefaultRolePermissions = map[string][]string{
 		PermManageMembers,
 		PermChangeOwnPassword,
 		PermViewNotifications, PermRetryNotifications,
-		PermViewPlan, // v4.12: 升级决策需要看自己 plan 元数据
+		PermViewFailedMessages, PermRetryFailedMessages,
+		PermViewPlan,                   // v4.12: 升级决策需要看自己 plan 元数据
 		PermViewCards, PermManageCards, // v4.15 储值 / 次卡
 	},
 	RoleStaff: {
@@ -209,6 +215,7 @@ var DefaultRolePermissions = map[string][]string{
 		PermViewEvents,
 		PermViewServices,
 		PermViewNotifications, PermRetryNotifications, // 店员也能补发通知（避免漏通知）
+		PermViewFailedMessages, PermRetryFailedMessages,
 		PermChangeOwnPassword,
 		PermViewCards, PermManageCards, // v4.15: 店员日常扣次扣额、售卡都需要
 	},
@@ -356,8 +363,8 @@ func SeedDefaultRolePermissions(ctx context.Context) error {
 
 // ReconcileRolePermissionsResult reconcile 结果报告
 type ReconcileRolePermissionsResult struct {
-	Inserted  int      // 实际新增的 (role, perm) 条数
-	Skipped   int      // 已存在、跳过的条数
+	Inserted     int      // 实际新增的 (role, perm) 条数
+	Skipped      int      // 已存在、跳过的条数
 	InsertedList []string // 新增的 (role, perm) 描述（log 用，格式 "role=owner perm=view:foo"）
 }
 
@@ -367,8 +374,8 @@ type ReconcileRolePermissionsResult struct {
 //     Seed 只在表为空时跑一次（保护运营调整），但**新加的权限**老店铺永远拿不到
 //     Reconcile 每次启动都跑，对比 DefaultRolePermissions + 已存在记录，**只补缺失、不删任何记录**
 //   - 关键安全约束：绝不 Delete 任何 row
-//     - 运营在线调过的（比如"staff 禁掉 view:dashboard"）会完整保留
-//     - 真正"删 perm"的操作只应该走 SetRolePermissions（替换整组），不走 reconcile
+//   - 运营在线调过的（比如"staff 禁掉 view:dashboard"）会完整保留
+//   - 真正"删 perm"的操作只应该走 SetRolePermissions（替换整组），不走 reconcile
 //   - 调用方：InitDB 末尾、运维 CLI（应急）
 //
 // 行为示例（假设加了 PermViewNotifications + PermRetryNotifications 两个新 perm）：

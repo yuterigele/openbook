@@ -101,6 +101,9 @@ services:
       # Default to a safe local demonstration mode: replies are recorded instead
       # of being sent to a real enterprise-WeChat account.
       AGENT_REPLY_MODE: ${AGENT_REPLY_MODE:-mock}
+      KF_INBOX_MAX_ATTEMPTS: ${KF_INBOX_MAX_ATTEMPTS:-5}
+      KF_INBOX_LEASE_SECONDS: ${KF_INBOX_LEASE_SECONDS:-120}
+      KF_INBOX_POLL_SECONDS: ${KF_INBOX_POLL_SECONDS:-5}
       APP_ENV: ${APP_ENV:-development}
       REDIS_REQUIRED: ${REDIS_REQUIRED:-0}
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
