@@ -80,6 +80,35 @@ func TestApplicationReadToolsUseTrustedLocation(t *testing.T) {
 	}
 }
 
+func TestApplicationListMyBookingsUsesTrustedCustomerIdentity(t *testing.T) {
+	var capturedShopID, capturedOpenID string
+	app := &Application{
+		resolveCustomer: func(context.Context, v1alpha1.ExecutionContext) (CustomerIdentity, error) {
+			return CustomerIdentity{OpenID: "openid-trusted", ExternalUserID: "external-trusted"}, nil
+		},
+		listMyBookings: func(ctx context.Context, arguments string) (string, error) {
+			capturedShopID = tools.ShopIDFromCtx(ctx)
+			capturedOpenID = tools.OpenIDFromCtx(ctx)
+			if arguments != `{}` {
+				t.Fatalf("unexpected list arguments: %s", arguments)
+			}
+			return "您目前有 1 个未来预约：", nil
+		},
+	}
+	response, err := app.Execute(context.Background(), validWriteContext(), v1alpha1.Call{
+		Operation: v1alpha1.OperationListMyBookings, Parameters: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("list my bookings failed: %v", err)
+	}
+	if capturedShopID != "location-trusted" || capturedOpenID != "openid-trusted" {
+		t.Fatalf("trusted customer context was not injected: shop=%q open=%q", capturedShopID, capturedOpenID)
+	}
+	if !strings.Contains(string(response.Data), "booking.listed") {
+		t.Fatalf("list result missing stable code: %s", response.Data)
+	}
+}
+
 func TestApplicationCreateOverridesModelCustomerIdentity(t *testing.T) {
 	var captured map[string]string
 	var capturedOpenID string

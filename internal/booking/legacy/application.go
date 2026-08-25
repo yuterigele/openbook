@@ -42,6 +42,7 @@ type Application struct {
 	cancelBooking   createRunner
 	listServices    readRunner
 	listStaff       readRunner
+	listMyBookings  readRunner
 }
 
 // NewApplication 创建接入现有工具实现的适配器。
@@ -62,6 +63,9 @@ func NewApplication(resolveCustomer CustomerResolver) *Application {
 		},
 		listStaff: func(ctx context.Context, arguments string) (string, error) {
 			return (&tools.ListBarbersTool{}).InvokableRun(ctx, arguments)
+		},
+		listMyBookings: func(ctx context.Context, arguments string) (string, error) {
+			return (&tools.ListMyBookingsTool{}).InvokableRun(ctx, arguments)
 		},
 	}
 }
@@ -107,6 +111,9 @@ func (a *Application) Execute(ctx context.Context, trusted v1alpha1.ExecutionCon
 	case v1alpha1.OperationListStaff:
 		return a.executeRead(ctx, trusted, call, response, a.listStaff, "staff.listed")
 
+	case v1alpha1.OperationListMyBookings:
+		return a.executeCustomerRead(ctx, trusted, call, response, a.listMyBookings, "booking.listed")
+
 	case v1alpha1.OperationCreateBooking:
 		return a.executeCreate(ctx, trusted, call, response)
 
@@ -147,6 +154,30 @@ func (a *Application) executeRead(ctx context.Context, trusted v1alpha1.Executio
 		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "legacy read adapter is not configured"))
 	}
 	toolContext := tools.WithShopID(ctx, trusted.LocationID)
+	output, err := runner(toolContext, string(call.Parameters))
+	if err != nil {
+		return withLegacyError(response, err)
+	}
+	return withToolResult(response, toolkit.NewOK(code, output, map[string]any{"message": output}))
+}
+
+func (a *Application) executeCustomerRead(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response, runner readRunner, code string) (v1alpha1.Response, error) {
+	if runner == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "customer read adapter is not configured"))
+	}
+	if a.resolveCustomer == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "customer resolver is required"))
+	}
+	identity, err := a.resolveCustomer(ctx, trusted)
+	if err != nil {
+		return withErrorResult(response, normalizeLegacyError(err))
+	}
+	if identity.OpenID == "" && identity.ExternalUserID == "" {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "trusted customer identity is incomplete"))
+	}
+	toolContext := tools.WithShopID(ctx, trusted.LocationID)
+	toolContext = tools.WithOpenID(toolContext, identity.OpenID)
+	toolContext = tools.WithExternalUserID(toolContext, identity.ExternalUserID)
 	output, err := runner(toolContext, string(call.Parameters))
 	if err != nil {
 		return withLegacyError(response, err)

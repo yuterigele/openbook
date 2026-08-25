@@ -21,8 +21,8 @@ func TestNewToolCatalogUsesExplicitAllowlist(t *testing.T) {
 
 	wantNames := []string{
 		"barber_leave", "cancel_appointment", "classify_intent", "create_appointment",
-		"get_appointment", "handoff_to_human", "list_barbers", "list_services",
-		"list_shop_holidays", "query_schedule", "sensitive_check",
+		"get_appointment", "handoff_to_human", "list_barbers", "list_my_bookings",
+		"list_services", "list_shop_holidays", "query_schedule", "sensitive_check",
 	}
 	got := catalog.Tools()
 	if len(got) != len(wantNames) {

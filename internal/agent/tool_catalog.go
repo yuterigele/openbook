@@ -65,6 +65,7 @@ func newToolCatalog(intentTool tool.BaseTool) (*toolCatalog, error) {
 		{readDescriptor("list_services", "查询本店服务项目和价格", v1alpha1.OperationListServices), &tools.ListServicesTool{}},
 		{readDescriptor("barber_leave", "查询理发师请假信息", v1alpha1.OperationQueryStaffLeave), &tools.BarberLeaveTool{}},
 		{readDescriptor("get_appointment", "查询顾客自己的预约", v1alpha1.OperationListMyBookings), &tools.GetAppointmentTool{}},
+		{readDescriptor("list_my_bookings", "查询顾客未来的有效预约", v1alpha1.OperationListMyBookings), &tools.ListMyBookingsTool{}},
 		{readDescriptor("list_shop_holidays", "查询本店休息日", v1alpha1.OperationListShopHolidays), &tools.ListShopHolidaysTool{}},
 		{writeDescriptor("handoff_to_human", "将顾客请求转交人工客服", v1alpha1.OperationHandoffToHuman), &tools.HandoffToHumanTool{}},
 	}
