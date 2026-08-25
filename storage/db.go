@@ -80,18 +80,19 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&TraceSpan{},
 		&AuditOutbox{},
 		&ShopAdmin{},
-		&BarberLeave{},           // P4 理发师请假（2026-06-21）
-		&Service{},               // v4.4 服务目录（2026-06-22）
-		&RolePermission{},        // v4.7 RBAC：role → permission 映射表
-		&CustomerNotification{},  // v4.10 leave notify 持久化（2026-06-23）
-		&PhoneVerificationCode{}, // 测试模式短信验证码
-		&APIKey{},                // v4.12.1 api_access feature 实战
-		&KfSyncState{},           // v4.13.1 微信客服 sync cursor 持久化
-		&KfSeenMsg{},             // v4.13.1 微信客服 msgid 去重持久化
-		&KfInboxMessage{},        // 微信客服可靠 inbox / retry / dead-letter
-		&Card{},                  // v4.15 储值 / 次卡产品（2026-06-26）
-		&CustomerCard{},          // v4.15 顾客持有的卡实例
-		&CardTransaction{},       // v4.15 卡流水
+		&BarberLeave{},            // P4 理发师请假（2026-06-21）
+		&Service{},                // v4.4 服务目录（2026-06-22）
+		&RolePermission{},         // v4.7 RBAC：role → permission 映射表
+		&CustomerNotification{},   // v4.10 leave notify 持久化（2026-06-23）
+		&PhoneVerificationCode{},  // 测试模式短信验证码
+		&APIKey{},                 // v4.12.1 api_access feature 实战
+		&KfSyncState{},            // v4.13.1 微信客服 sync cursor 持久化
+		&KfSeenMsg{},              // v4.13.1 微信客服 msgid 去重持久化
+		&KfInboxMessage{},         // 微信客服可靠 inbox / retry / dead-letter
+		&Card{},                   // v4.15 储值 / 次卡产品（2026-06-26）
+		&CustomerCard{},           // v4.15 顾客持有的卡实例
+		&CardTransaction{},        // v4.15 卡流水
+		&OperationOutcomeRecord{}, // Agent 写操作结果与幂等记录
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
