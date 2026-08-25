@@ -11,7 +11,6 @@ import (
 	"github.com/yuterigele/openbook/intent"
 	"github.com/yuterigele/openbook/sdk/booking/v1alpha1"
 	"github.com/yuterigele/openbook/sdk/toolkit"
-	"github.com/yuterigele/openbook/tools"
 )
 
 func TestNewToolCatalogUsesExplicitAllowlist(t *testing.T) {
@@ -55,21 +54,41 @@ func TestToolCatalogRejectsRuntimeNameMismatchAndDuplicate(t *testing.T) {
 		tools:       make(map[string]tool.BaseTool),
 	}
 	descriptor := readDescriptor("list_services", "查询服务", v1alpha1.OperationListServices)
-	if err := catalog.register(descriptor, &fakeBaseTool{name: "other_tool"}); err == nil {
+	if err := catalog.register(descriptor, &fakeInvokableTool{name: "other_tool"}); err == nil {
 		t.Fatal("runtime metadata name mismatch should be rejected")
 	}
-	if err := catalog.register(descriptor, &tools.ListServicesTool{}); err != nil {
+	if err := catalog.register(descriptor, &fakeInvokableTool{name: "list_services", output: "ok"}); err != nil {
 		t.Fatalf("valid runtime tool rejected: %v", err)
 	}
-	if err := catalog.register(descriptor, &tools.ListServicesTool{}); !errors.Is(err, toolkit.ErrDuplicateTool) {
+	if err := catalog.register(descriptor, &fakeInvokableTool{name: "list_services", output: "ok"}); !errors.Is(err, toolkit.ErrDuplicateTool) {
 		t.Fatalf("duplicate runtime tool should be rejected, got %v", err)
+	}
+
+	wrapped := catalog.tools["list_services"].(tool.InvokableTool)
+	if _, err := wrapped.InvokableRun(context.Background(), `{}`); v1alpha1.CodeOf(err) != v1alpha1.ErrorCodeInvalidContext {
+		t.Fatalf("missing trusted context should be rejected, got %v", err)
+	}
+	trusted := v1alpha1.WithExecutionContext(context.Background(), v1alpha1.ExecutionContext{
+		MerchantID:  "merchant-1",
+		LocationID:  "location-1",
+		TraceID:     "trace-1",
+		Permissions: []v1alpha1.Permission{v1alpha1.PermissionBookingRead},
+	})
+	output, err := wrapped.InvokableRun(trusted, `{}`)
+	if err != nil || output != "ok" {
+		t.Fatalf("trusted invocation failed: output=%q err=%v", output, err)
 	}
 }
 
-type fakeBaseTool struct {
-	name string
+type fakeInvokableTool struct {
+	name   string
+	output string
 }
 
-func (t *fakeBaseTool) Info(context.Context) (*schema.ToolInfo, error) {
+func (t *fakeInvokableTool) Info(context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{Name: t.name}, nil
+}
+
+func (t *fakeInvokableTool) InvokableRun(context.Context, string, ...tool.Option) (string, error) {
+	return t.output, nil
 }

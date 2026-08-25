@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 
 	"github.com/yuterigele/openbook/sdk/booking/v1alpha1"
 	"github.com/yuterigele/openbook/sdk/toolkit"
@@ -16,6 +17,30 @@ import (
 type toolCatalog struct {
 	descriptors *toolkit.DescriptorRegistry
 	tools       map[string]tool.BaseTool
+}
+
+// catalogTool 在进入旧工具前校验 Host 注入的基础上下文和声明权限。
+type catalogTool struct {
+	descriptor toolkit.Descriptor
+	runtime    tool.InvokableTool
+}
+
+func (t *catalogTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return t.runtime.Info(ctx)
+}
+
+func (t *catalogTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	executionContext, ok := v1alpha1.ExecutionContextFromContext(ctx)
+	if !ok {
+		return "", v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "trusted execution context is required")
+	}
+	if err := executionContext.Validate(); err != nil {
+		return "", err
+	}
+	if !executionContext.HasPermission(t.descriptor.Permission) {
+		return "", v1alpha1.NewError(v1alpha1.ErrorCodeForbidden, "tool permission is required")
+	}
+	return t.runtime.InvokableRun(ctx, argumentsInJSON, opts...)
 }
 
 // newToolCatalog 创建当前 Agent 允许使用的工具集合。
@@ -62,10 +87,14 @@ func (c *toolCatalog) register(descriptor toolkit.Descriptor, runtimeTool tool.B
 	if info == nil || info.Name != descriptor.Name {
 		return fmt.Errorf("tool %q metadata name mismatch", descriptor.Name)
 	}
+	runtime, ok := runtimeTool.(tool.InvokableTool)
+	if !ok {
+		return fmt.Errorf("tool %q is not invokable", descriptor.Name)
+	}
 	if err := c.descriptors.Register(descriptor); err != nil {
 		return err
 	}
-	c.tools[descriptor.Name] = runtimeTool
+	c.tools[descriptor.Name] = &catalogTool{descriptor: descriptor, runtime: runtime}
 	return nil
 }
 

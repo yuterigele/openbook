@@ -27,6 +27,7 @@ Host 必须从已验签、已认证的渠道会话构造 `ExecutionContext`。�
 
 - 只读工具使用 `booking:read`，默认最多执行两次；写工具使用 `booking:write`，注册时强制最多执行一次。
 - 未注册、权限不足、上下文不完整或结果 Envelope 不合格的调用都会失败；返回模型前统一映射为安全结果，不暴露 Handler 的原始错误。
+- Eino Catalog 的运行时包装器会在进入旧工具前检查 `ExecutionContext` 和声明权限；没有 Host Carrier 的直接工具调用不会落到业务层。
 - Registry 只接收公开业务参数和 Host 注入的 `ExecutionContext`；Handler 不得从参数中读取或覆盖可信身份字段。
 
 ## 调整规则
