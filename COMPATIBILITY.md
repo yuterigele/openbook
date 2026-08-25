@@ -6,7 +6,7 @@
 
 当前只冻结以下内容：
 
-- 操作名称：`list_services`、`list_staff`、`query_availability`、`create_booking`、`list_my_bookings`、`cancel_booking`、`reschedule_booking`。
+- 操作名称：`list_services`、`list_staff`、`query_availability`、`query_staff_leave`、`list_shop_holidays`、`sensitive_check`、`classify_intent`、`create_booking`、`list_my_bookings`、`cancel_booking`、`reschedule_booking`、`handoff_to_human`。
 - `ExecutionContext` 的可信字段：`merchant_id`、`location_id`、`customer_id`、`principal_id`、`permissions`、`trace_id` 和写操作的 `idempotency_key`。
 - 应用错误的稳定前缀：`booking.*`。
 - 模型工具结果外层：`tool.result.v1` 的 `schema_version`、`status`、`code`、`summary`、`facts` 和 `suggested_actions`。

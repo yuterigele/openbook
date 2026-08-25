@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/yuterigele/openbook/sdk/booking/v1alpha1"
 )
@@ -151,38 +150,11 @@ func (r *Registry) Invoke(ctx context.Context, executionContext v1alpha1.Executi
 }
 
 func validateToolSpec(spec ToolSpec) error {
-	if !validToolName(spec.Name) {
-		return fmt.Errorf("%w: name must be lower snake case", ErrInvalidToolSpec)
-	}
-	if strings.TrimSpace(spec.Description) == "" {
-		return fmt.Errorf("%w: description is required", ErrInvalidToolSpec)
-	}
-	if !spec.Operation.IsValid() {
-		return fmt.Errorf("%w: unsupported operation %q", ErrInvalidToolSpec, spec.Operation)
+	if err := DescriptorFromSpec(spec).Validate(); err != nil {
+		return err
 	}
 	if spec.Handler == nil {
 		return fmt.Errorf("%w: handler is required", ErrInvalidToolSpec)
-	}
-	switch spec.Mode {
-	case ModeRead:
-		if spec.Permission != v1alpha1.PermissionBookingRead {
-			return fmt.Errorf("%w: read tools require %q", ErrInvalidToolSpec, v1alpha1.PermissionBookingRead)
-		}
-	case ModeWrite:
-		if spec.Permission != v1alpha1.PermissionBookingWrite {
-			return fmt.Errorf("%w: write tools require %q", ErrInvalidToolSpec, v1alpha1.PermissionBookingWrite)
-		}
-		if spec.Retry.MaxAttempts != 1 {
-			return fmt.Errorf("%w: write tools must allow exactly one attempt", ErrInvalidToolSpec)
-		}
-	default:
-		return fmt.Errorf("%w: unsupported mode %q", ErrInvalidToolSpec, spec.Mode)
-	}
-	if spec.Retry.MaxAttempts < 1 {
-		return fmt.Errorf("%w: max attempts must be positive", ErrInvalidToolSpec)
-	}
-	if spec.Mode == ModeRead && spec.Retry.MaxAttempts > 3 {
-		return fmt.Errorf("%w: read tools may use at most three attempts", ErrInvalidToolSpec)
 	}
 	return nil
 }

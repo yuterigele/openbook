@@ -28,3 +28,11 @@ func TestIsRetryableReadTool(t *testing.T) {
 		})
 	}
 }
+
+func TestCustomRetryPolicyStillProtectsWriteTools(t *testing.T) {
+	if isRetryableTool(&adk.ToolContext{Name: "create_appointment"}, errors.New("i/o timeout"), map[string]int{
+		"create_appointment": 3,
+	}) {
+		t.Fatal("write tools must not become retryable through a custom policy")
+	}
+}

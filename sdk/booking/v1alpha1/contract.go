@@ -18,10 +18,15 @@ const (
 	OperationListServices      Operation = "list_services"
 	OperationListStaff         Operation = "list_staff"
 	OperationQueryAvailability Operation = "query_availability"
+	OperationQueryStaffLeave   Operation = "query_staff_leave"
+	OperationListShopHolidays  Operation = "list_shop_holidays"
+	OperationSensitiveCheck    Operation = "sensitive_check"
+	OperationClassifyIntent    Operation = "classify_intent"
 	OperationCreateBooking     Operation = "create_booking"
 	OperationListMyBookings    Operation = "list_my_bookings"
 	OperationCancelBooking     Operation = "cancel_booking"
 	OperationRescheduleBooking Operation = "reschedule_booking"
+	OperationHandoffToHuman    Operation = "handoff_to_human"
 )
 
 // AllOperations 返回当前契约支持的操作名称，调用方可以用它构建白名单。
@@ -30,10 +35,15 @@ func AllOperations() []Operation {
 		OperationListServices,
 		OperationListStaff,
 		OperationQueryAvailability,
+		OperationQueryStaffLeave,
+		OperationListShopHolidays,
+		OperationSensitiveCheck,
+		OperationClassifyIntent,
 		OperationCreateBooking,
 		OperationListMyBookings,
 		OperationCancelBooking,
 		OperationRescheduleBooking,
+		OperationHandoffToHuman,
 	}
 }
 

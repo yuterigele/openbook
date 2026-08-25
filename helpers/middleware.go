@@ -36,13 +36,20 @@ import (
 // a non-zero exit code or mid-stream failure is returned to the model as a
 // readable tool result instead of aborting the agent pipeline.
 func NewSafeToolMiddleware[M adk.MessageType]() adk.TypedChatModelAgentMiddleware[M] {
+	return NewSafeToolMiddlewareWithRetryPolicy[M](defaultRetryAttempts)
+}
+
+// NewSafeToolMiddlewareWithRetryPolicy 使用工具注册表提供的重试策略。
+func NewSafeToolMiddlewareWithRetryPolicy[M adk.MessageType](retryAttempts map[string]int) adk.TypedChatModelAgentMiddleware[M] {
 	return &safeToolMiddleware[M]{
 		TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[M]{},
+		retryAttempts:                     cloneRetryAttempts(retryAttempts),
 	}
 }
 
 type safeToolMiddleware[M adk.MessageType] struct {
 	*adk.TypedBaseChatModelAgentMiddleware[M]
+	retryAttempts map[string]int
 }
 
 func (m *safeToolMiddleware[M]) WrapInvokableToolCall(
@@ -57,16 +64,17 @@ func (m *safeToolMiddleware[M]) WrapInvokableToolCall(
 			toolName = tCtx.Name
 		}
 		result, err := endpoint(ctx, args, opts...)
-		if err != nil && isRetryableReadTool(tCtx, err) {
-			// Read-only tools never mutate reservations. One short retry absorbs
-			// transient DB/Redis/network blips without risking a duplicate write.
+		maxAttempts := m.retryAttempts[toolName]
+		for attempt := 1; err != nil && attempt < maxAttempts && isRetryableTool(tCtx, err, m.retryAttempts); attempt++ {
+			// 只读工具不会改变预约状态，短暂故障可以按注册策略重试。
 			select {
 			case <-ctx.Done():
 			case <-time.After(100 * time.Millisecond):
 			}
-			if ctx.Err() == nil {
-				result, err = endpoint(ctx, args, opts...)
+			if ctx.Err() != nil {
+				break
 			}
+			result, err = endpoint(ctx, args, opts...)
 		}
 		if err != nil {
 			if _, ok := compose.IsInterruptRerunError(err); ok {
@@ -99,7 +107,11 @@ var mutatingToolAuditActions = map[string]string{
 }
 
 func isRetryableReadTool(tCtx *adk.ToolContext, err error) bool {
-	if tCtx == nil || err == nil || !readOnlyToolNames[tCtx.Name] {
+	return isRetryableTool(tCtx, err, defaultRetryAttempts)
+}
+
+func isRetryableTool(tCtx *adk.ToolContext, err error, retryAttempts map[string]int) bool {
+	if tCtx == nil || err == nil || retryAttempts[tCtx.Name] <= 1 || nonRetryableToolNames[tCtx.Name] {
 		return false
 	}
 	message := strings.ToLower(err.Error())
@@ -114,15 +126,29 @@ func isRetryableReadTool(tCtx *adk.ToolContext, err error) bool {
 	return false
 }
 
-var readOnlyToolNames = map[string]bool{
-	"sensitive_check":    true,
-	"classify_intent":    true,
-	"query_schedule":     true,
-	"list_barbers":       true,
-	"list_services":      true,
-	"barber_leave":       true,
-	"get_appointment":    true,
-	"list_shop_holidays": true,
+var defaultRetryAttempts = map[string]int{
+	"sensitive_check":    2,
+	"classify_intent":    2,
+	"query_schedule":     2,
+	"list_barbers":       2,
+	"list_services":      2,
+	"barber_leave":       2,
+	"get_appointment":    2,
+	"list_shop_holidays": 2,
+}
+
+var nonRetryableToolNames = map[string]bool{
+	"create_appointment": true,
+	"cancel_appointment": true,
+	"handoff_to_human":   true,
+}
+
+func cloneRetryAttempts(source map[string]int) map[string]int {
+	clone := make(map[string]int, len(source))
+	for name, attempts := range source {
+		clone[name] = attempts
+	}
+	return clone
 }
 
 func (m *safeToolMiddleware[M]) WrapStreamableToolCall(

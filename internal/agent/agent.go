@@ -32,8 +32,6 @@ import (
 
 	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/helpers"
-	"github.com/yuterigele/openbook/sensitive"
-	"github.com/yuterigele/openbook/tools"
 )
 
 // buildAgentInstruction 构造精简版系统提示词。确定性校验由工具层负责。
@@ -83,8 +81,12 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 		}
 	}
 
+	catalog, err := newToolCatalog(intentTool)
+	if err != nil {
+		return nil, err
+	}
 	handlers := []adk.TypedChatModelAgentMiddleware[M]{
-		helpers.NewSafeToolMiddleware[M](),
+		helpers.NewSafeToolMiddlewareWithRetryPolicy[M](catalog.RetryAttempts()),
 	}
 
 	cfg := &deep.TypedConfig[M]{
@@ -98,19 +100,7 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 		Handlers:               handlers,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools: []tool.BaseTool{
-					&sensitive.SensitiveCheckTool{}, // 输入预过滤；命中后直接返回原因。
-					intentTool,                      // v4.17+：双层意图分类
-					&tools.QueryScheduleTool{},
-					&tools.CreateAppointmentTool{},
-					&tools.CancelAppointmentTool{},
-					&tools.ListBarbersTool{},
-					&tools.ListServicesTool{},
-					&tools.BarberLeaveTool{},
-					&tools.GetAppointmentTool{},   // 改时间前核验当前预约。
-					&tools.ListShopHolidaysTool{}, // 节假日推荐前获取完整休息日清单。
-					&tools.HandoffToHumanTool{},
-				},
+				Tools: catalog.Tools(),
 			},
 		},
 	}
