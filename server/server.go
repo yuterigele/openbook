@@ -653,14 +653,14 @@ func webSessionContext(sessionID string) context.Context {
 }
 
 // withAgentExecutionContext 把旧系统的 shop_id 映射到 v1alpha1 的租户和门店字段。
-// 当前旧模型没有独立 merchant_id；顾客身份和幂等键由后续应用层在写操作前补齐。
+// 当前旧模型没有独立 merchant_id；本轮消息的 TraceID 同时作为写操作幂等键。
 func withAgentExecutionContext(ctx context.Context, shopID string) context.Context {
 	executionContext := v1alpha1.ExecutionContext{
 		MerchantID:  shopID,
 		LocationID:  shopID,
 		PrincipalID: storage.AuditActorAgent,
 		Permissions: []v1alpha1.Permission{v1alpha1.PermissionBookingRead, v1alpha1.PermissionBookingWrite},
-		TraceID:     storage.TraceIDFromContext(ctx),
+		TraceID:     storage.TraceIDFromContext(ctx), IdempotencyKey: storage.TraceIDFromContext(ctx),
 	}
 	if storage.IsReady() {
 		if customer, err := storage.GetCustomerByMessagingIdentity(ctx, tools.OpenIDFromCtx(ctx), tools.ExternalUserIDFromCtx(ctx)); err == nil {
