@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yuterigele/openbook/internal/booking/domain"
 	"github.com/yuterigele/openbook/lock"
+	"github.com/yuterigele/openbook/sdk/events"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -137,16 +137,16 @@ func CreateBookingWithAllocations(ctx context.Context, booking domain.Booking, a
 					return err
 				}
 			}
-			payload, err := json.Marshal(map[string]string{
-				"booking_id": created.ID, "merchant_id": created.MerchantID, "location_id": created.LocationID,
-				"customer_id": created.CustomerID, "service_id": created.ServiceID, "staff_id": created.StaffID,
-			})
+			eventID := uuid.NewString()
+			payload, err := events.Marshal(eventID, events.BookingCreated, created.ID, created.MerchantID, created.LocationID, events.BookingCreatedData{
+				CustomerID: created.CustomerID, ServiceID: created.ServiceID, StaffID: created.StaffID,
+			}, time.Now())
 			if err != nil {
 				return err
 			}
 			return tx.WithContext(operationCtx).Create(&BookingOutboxRecord{
-				ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: created.ID,
-				MerchantID: created.MerchantID, LocationID: created.LocationID, EventType: "booking.created",
+				ID: uuid.NewString(), EventID: eventID, BookingID: created.ID,
+				MerchantID: created.MerchantID, LocationID: created.LocationID, EventType: string(events.BookingCreated),
 				Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
 			}).Error
 		})
@@ -255,15 +255,16 @@ func CancelBookingForCustomer(ctx context.Context, merchantID, locationID, custo
 				return ErrBookingNotCancellable
 			}
 			cancelled.Status = string(domain.BookingCancelled)
-			payload, err := json.Marshal(map[string]string{
-				"booking_id": bookingID, "merchant_id": merchantID, "location_id": locationID, "customer_id": customerID,
-			})
+			eventID := uuid.NewString()
+			payload, err := events.Marshal(eventID, events.BookingCancelled, bookingID, merchantID, locationID, events.BookingCancelledData{
+				CustomerID: customerID,
+			}, time.Now())
 			if err != nil {
 				return err
 			}
 			return tx.WithContext(operationCtx).Create(&BookingOutboxRecord{
-				ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: bookingID,
-				MerchantID: merchantID, LocationID: locationID, EventType: "booking.cancelled",
+				ID: uuid.NewString(), EventID: eventID, BookingID: bookingID,
+				MerchantID: merchantID, LocationID: locationID, EventType: string(events.BookingCancelled),
 				Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
 			}).Error
 		})
@@ -386,16 +387,16 @@ func RescheduleBookingForCustomer(ctx context.Context, merchantID, locationID, c
 					return err
 				}
 			}
-			payload, err := json.Marshal(map[string]string{
-				"old_booking_id": oldBookingID, "new_booking_id": created.ID, "merchant_id": merchantID,
-				"location_id": locationID, "customer_id": customerID,
-			})
+			eventID := uuid.NewString()
+			payload, err := events.Marshal(eventID, events.BookingRescheduled, created.ID, merchantID, locationID, events.BookingRescheduledData{
+				OldBookingID: oldBookingID, NewBookingID: created.ID, CustomerID: customerID,
+			}, time.Now())
 			if err != nil {
 				return err
 			}
 			return tx.WithContext(operationCtx).Create(&BookingOutboxRecord{
-				ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: created.ID,
-				MerchantID: merchantID, LocationID: locationID, EventType: "booking.rescheduled",
+				ID: uuid.NewString(), EventID: eventID, BookingID: created.ID,
+				MerchantID: merchantID, LocationID: locationID, EventType: string(events.BookingRescheduled),
 				Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
 			}).Error
 		})
