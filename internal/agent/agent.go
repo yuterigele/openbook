@@ -23,10 +23,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/prebuilt/deep"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 
@@ -82,6 +84,16 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 		}
 	}
 
+	return buildTypedWithModel(ctx, intentTool, cm, used, applications...)
+}
+
+// buildTypedWithModel 使用调用方提供的模型组装 Agent。
+// 生产入口仍由 BuildTyped 负责创建降级链；该内部构造器让契约测试可以使用脚本模型，
+// 在不连接外部模型的情况下覆盖“模型工具调用 → Application → 最终回复”循环。
+func buildTypedWithModel[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool, cm einomodel.BaseModel[M], used chatmodel.Provider, applications ...v1alpha1.Application) (adk.TypedResumableAgent[M], error) {
+	if cm == nil {
+		return nil, fmt.Errorf("chat model is required")
+	}
 	catalog, err := newToolCatalog(intentTool, applications...)
 	if err != nil {
 		return nil, err
