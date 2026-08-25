@@ -7,6 +7,7 @@ import (
 
 	"github.com/yuterigele/openbook/internal/booking/domain"
 	"github.com/yuterigele/openbook/lock"
+	"gorm.io/gorm"
 )
 
 // bookingLockKeys 返回本次预约涉及的员工和资源锁，并由锁包统一排序去重。
@@ -30,6 +31,26 @@ func bookingRecordLockKeys(record BookingRecord, allocations []BookingAllocation
 	return lock.OrderedLockKeys(keys)
 }
 
+func loadBookingLockKeys(ctx context.Context, merchantID, locationID, customerID, bookingID string) ([]string, error) {
+	var record BookingRecord
+	err := DB.WithContext(ctx).
+		Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ?", bookingID, merchantID, locationID, customerID).
+		First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var allocations []BookingAllocationRecord
+	if err := DB.WithContext(ctx).
+		Where("booking_id = ? AND merchant_id = ? AND location_id = ?", record.ID, record.MerchantID, record.LocationID).
+		Find(&allocations).Error; err != nil {
+		return nil, err
+	}
+	return bookingRecordLockKeys(record, allocations), nil
+}
+
 func bookingLockKey(merchantID, locationID, kind, id string) string {
 	return fmt.Sprintf("lock:booking:%s:%s:%s:%s", merchantID, locationID, kind, id)
 }
@@ -46,9 +67,7 @@ func withBookingLocks(ctx context.Context, keys []string, fn func(context.Contex
 	unlockErr := set.Unlock(context.Background())
 	cancel()
 	if lockErr != nil || unlockErr != nil {
-		if operationErr == nil || errors.Is(operationErr, context.Canceled) || errors.Is(operationErr, context.DeadlineExceeded) {
-			return ErrBookingOutcomeUnknown
-		}
+		return ErrBookingOutcomeUnknown
 	}
 	return operationErr
 }
