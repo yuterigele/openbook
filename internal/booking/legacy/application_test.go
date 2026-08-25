@@ -41,6 +41,45 @@ func TestApplicationQueryUsesTrustedLocationAndReturnsEnvelope(t *testing.T) {
 	}
 }
 
+func TestApplicationReadToolsUseTrustedLocation(t *testing.T) {
+	var serviceShopID, staffShopID string
+	app := &Application{
+		listServices: func(ctx context.Context, arguments string) (string, error) {
+			serviceShopID = tools.ShopIDFromCtx(ctx)
+			if arguments != `{}` {
+				t.Fatalf("unexpected service arguments: %s", arguments)
+			}
+			return "剪发 30 分钟", nil
+		},
+		listStaff: func(ctx context.Context, arguments string) (string, error) {
+			staffShopID = tools.ShopIDFromCtx(ctx)
+			if arguments != `{}` {
+				t.Fatalf("unexpected staff arguments: %s", arguments)
+			}
+			return "Tony、Kevin", nil
+		},
+	}
+
+	for _, operation := range []v1alpha1.Operation{v1alpha1.OperationListServices, v1alpha1.OperationListStaff} {
+		response, err := app.Execute(context.Background(), validReadContext(), v1alpha1.Call{
+			Operation: operation, Parameters: json.RawMessage(`{}`),
+		})
+		if err != nil {
+			t.Fatalf("%s failed: %v", operation, err)
+		}
+		var result toolkit.Result
+		if err := json.Unmarshal(response.Data, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != toolkit.StatusOK {
+			t.Fatalf("%s returned unexpected result: %+v", operation, result)
+		}
+	}
+	if serviceShopID != "location-trusted" || staffShopID != "location-trusted" {
+		t.Fatalf("read tools did not receive trusted location: services=%q staff=%q", serviceShopID, staffShopID)
+	}
+}
+
 func TestApplicationCreateOverridesModelCustomerIdentity(t *testing.T) {
 	var captured map[string]string
 	var capturedOpenID string

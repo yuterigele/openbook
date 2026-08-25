@@ -32,12 +32,15 @@ type CustomerResolver func(context.Context, v1alpha1.ExecutionContext) (Customer
 
 type queryRunner func(context.Context, string) (string, error)
 type createRunner func(context.Context, string) (string, error)
+type readRunner func(context.Context, string) (string, error)
 
 // Application 是迁移期旧工具应用适配器。
 type Application struct {
 	resolveCustomer CustomerResolver
 	querySchedule   queryRunner
 	createBooking   createRunner
+	listServices    readRunner
+	listStaff       readRunner
 }
 
 // NewApplication 创建接入现有工具实现的适配器。
@@ -49,6 +52,12 @@ func NewApplication(resolveCustomer CustomerResolver) *Application {
 		},
 		createBooking: func(ctx context.Context, arguments string) (string, error) {
 			return (&tools.CreateAppointmentTool{}).InvokableRun(ctx, arguments)
+		},
+		listServices: func(ctx context.Context, arguments string) (string, error) {
+			return (&tools.ListServicesTool{}).InvokableRun(ctx, arguments)
+		},
+		listStaff: func(ctx context.Context, arguments string) (string, error) {
+			return (&tools.ListBarbersTool{}).InvokableRun(ctx, arguments)
 		},
 	}
 }
@@ -88,11 +97,29 @@ func (a *Application) Execute(ctx context.Context, trusted v1alpha1.ExecutionCon
 		}
 		return withToolResult(response, toolkit.NewOK(code, output, map[string]any{"message": output}))
 
+	case v1alpha1.OperationListServices:
+		return a.executeRead(ctx, trusted, call, response, a.listServices, "services.listed")
+
+	case v1alpha1.OperationListStaff:
+		return a.executeRead(ctx, trusted, call, response, a.listStaff, "staff.listed")
+
 	case v1alpha1.OperationCreateBooking:
 		return a.executeCreate(ctx, trusted, call, response)
 	default:
 		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidOperation, "legacy adapter only supports availability and create booking"))
 	}
+}
+
+func (a *Application) executeRead(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response, runner readRunner, code string) (v1alpha1.Response, error) {
+	if runner == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "legacy read adapter is not configured"))
+	}
+	toolContext := tools.WithShopID(ctx, trusted.LocationID)
+	output, err := runner(toolContext, string(call.Parameters))
+	if err != nil {
+		return withLegacyError(response, err)
+	}
+	return withToolResult(response, toolkit.NewOK(code, output, map[string]any{"message": output}))
 }
 
 func (a *Application) executeCreate(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response) (v1alpha1.Response, error) {
