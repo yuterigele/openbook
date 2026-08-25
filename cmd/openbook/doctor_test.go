@@ -94,3 +94,50 @@ func TestRunMigrateAndSeedDryRunDoNotRequireDatabase(t *testing.T) {
 		t.Fatalf("seed dry-run failed: code=%d output=%s", code, output.String())
 	}
 }
+
+func TestBackupAndRestoreDryRunProtectSecretsAndDestructiveActions(t *testing.T) {
+	env := map[string]string{
+		"MYSQL_DSN": "user:super-secret@tcp(127.0.0.1:3306)/booking?parseTime=true",
+		"APP_ENV":   "development",
+	}
+	lookup := func(key string) string { return env[key] }
+	var output bytes.Buffer
+	if code := runBackup(&output, []string{"-dry-run"}, lookup); code != 0 {
+		t.Fatalf("backup dry-run failed: %d %s", code, output.String())
+	}
+	if strings.Contains(output.String(), "super-secret") {
+		t.Fatalf("backup output leaked password: %s", output.String())
+	}
+	output.Reset()
+	if code := runRestore(&output, []string{"-dry-run", "-file", filepath.Join(t.TempDir(), "backup.sql")}, lookup); code != 1 || !strings.Contains(output.String(), "不可读") {
+		t.Fatalf("restore should reject missing file: %d %s", code, output.String())
+	}
+	file := filepath.Join(t.TempDir(), "backup.sql")
+	if err := os.WriteFile(file, []byte("-- test backup\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if code := runRestore(&output, []string{"-dry-run", "-file", file}, lookup); code != 0 || !strings.Contains(output.String(), "不会执行 mysql") {
+		t.Fatalf("restore dry-run failed: %d %s", code, output.String())
+	}
+	output.Reset()
+	if code := runRestore(&output, []string{"-file", file}, lookup); code != 2 || !strings.Contains(output.String(), "-yes") {
+		t.Fatalf("restore should require confirmation: %d %s", code, output.String())
+	}
+}
+
+func TestBackupAndRestoreRequireExplicitDatabaseConfiguration(t *testing.T) {
+	lookup := func(string) string { return "" }
+	var output bytes.Buffer
+	if code := runBackup(&output, []string{"-dry-run"}, lookup); code != 1 || !strings.Contains(output.String(), "需要 MYSQL_DSN") {
+		t.Fatalf("backup should reject implicit database defaults: %d %s", code, output.String())
+	}
+	file := filepath.Join(t.TempDir(), "backup.sql")
+	if err := os.WriteFile(file, []byte("-- test backup\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if code := runRestore(&output, []string{"-dry-run", "-file", file}, lookup); code != 1 || !strings.Contains(output.String(), "需要 MYSQL_DSN") {
+		t.Fatalf("restore should reject implicit database defaults: %d %s", code, output.String())
+	}
+}

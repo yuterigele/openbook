@@ -28,6 +28,10 @@ func main() {
 		os.Exit(RunMigrate(os.Stdout, os.Args[2:]))
 	case "seed":
 		os.Exit(RunSeed(os.Stdout, os.Args[2:]))
+	case "backup":
+		os.Exit(RunBackup(os.Stdout, os.Args[2:]))
+	case "restore":
+		os.Exit(RunRestore(os.Stdout, os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "未知命令: %s\n", os.Args[1])
 		printUsage(os.Stderr)
@@ -36,5 +40,5 @@ func main() {
 }
 
 func printUsage(writer io.Writer) {
-	_, _ = io.WriteString(writer, "用法: openbook <version|doctor|init|migrate|seed>\n")
+	_, _ = io.WriteString(writer, "用法: openbook <version|doctor|init|migrate|seed|backup|restore>\n")
 }

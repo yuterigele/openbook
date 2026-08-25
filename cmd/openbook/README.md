@@ -1,6 +1,6 @@
 # `openbook` 运维入口
 
-当前提供三个运维命令：
+当前提供以下运维命令：
 
 ```bash
 go run ./cmd/openbook version
@@ -8,6 +8,8 @@ go run ./cmd/openbook doctor
 go run ./cmd/openbook init
 go run ./cmd/openbook migrate
 go run ./cmd/openbook seed -shop-only
+go run ./cmd/openbook backup -dir ./backups
+go run ./cmd/openbook restore -file ./backups/openbook-YYYYMMDD-HHMMSS.sql -yes
 ```
 
 `version` 输出版本、提交和构建时间；发布构建可以通过 `-ldflags` 注入：
@@ -29,3 +31,5 @@ go build -ldflags "-X main.version=v1.0.0 -X main.commit=$(git rev-parse --short
 `migrate` 执行应用启动期的幂等 AutoMigrate、默认数据和顾客档案回填；先用 `-dry-run` 查看范围。需要历史版本的单步选择时继续使用 `go run ./cmd/migrate -only=...`。
 
 `seed` 调用现有演示数据生成器，支持 `-shop-only`、`-skip-appointments`、`-clean` 和 `-dry-run`。清理只针对 `[DEMO]` 店铺，生产环境不要把它当作数据删除工具。
+
+`backup` 调用 `mysqldump`，密码通过 `MYSQL_PWD` 传给子进程，不出现在命令行和日志中；先用 `-dry-run` 查看目标。`restore` 默认拒绝执行，必须指定 `-yes`；`APP_ENV=production` 还必须指定 `-force-prod`。恢复前应确认备份文件、数据库目标和回滚窗口。
