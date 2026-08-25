@@ -60,3 +60,29 @@ jobs:
         run: docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.dev-ports.yml config -q
       - name: Build deployable images
         run: docker compose --env-file .env.example -f docker-compose.yml build app feishu-alert-bridge
+      - name: Start Compose smoke stack
+        env:
+          OPENBOOK_LLM_CHAIN: stub
+          AGENT_REPLY_MODE: mock
+        run: docker compose --env-file .env.example -f docker-compose.yml up -d --build mysql redis db-bootstrap app
+      - name: Verify Compose smoke stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.example -f docker-compose.yml ps
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error http://127.0.0.1:38080/ >/dev/null; then
+              echo "OpenBook HTTP health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "OpenBook HTTP health check timed out" >&2
+          docker compose --env-file .env.example -f docker-compose.yml ps >&2
+          exit 1
+      - name: Dump Compose logs on failure
+        if: failure()
+        run: docker compose --env-file .env.example -f docker-compose.yml logs --no-color mysql redis db-bootstrap app
+      - name: Stop Compose smoke stack
+        if: always()
+        run: docker compose --env-file .env.example -f docker-compose.yml down -v
