@@ -131,6 +131,28 @@ func TransitionOperationOutcome(ctx context.Context, id string, expected, next d
 	return &updated, nil
 }
 
+// ListOperationOutcomesForReconciliation 只读列出需要对账的结果记录。
+// unknown 结果立即进入候选；pending 只有超过等待窗口后才进入候选。
+func ListOperationOutcomesForReconciliation(ctx context.Context, now time.Time, pendingTimeout time.Duration, limit int) ([]OperationOutcomeRecord, error) {
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	if now.IsZero() || pendingTimeout <= 0 || limit <= 0 {
+		return nil, fmt.Errorf("%w: reconciliation query parameters are invalid", domain.ErrInvalidOutcome)
+	}
+	cutoff := now.Add(-pendingTimeout)
+	records := make([]OperationOutcomeRecord, 0)
+	err := DB.WithContext(ctx).
+		Where("status = ? OR (status = ? AND last_checked_at <= ?)", domain.OutcomeUnknown, domain.OutcomePending, cutoff).
+		Order("last_checked_at ASC, id ASC").
+		Limit(limit).
+		Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 func (r OperationOutcomeRecord) toDomain() (domain.OperationOutcome, error) {
 	outcome := domain.OperationOutcome{
 		ID:             r.ID,

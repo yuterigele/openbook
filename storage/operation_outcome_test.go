@@ -62,3 +62,41 @@ func TestOperationOutcomeRejectsInvalidInitialState(t *testing.T) {
 		t.Fatalf("non-pending initial outcome should be rejected, got %v", err)
 	}
 }
+
+func TestListOperationOutcomesForReconciliationIsReadOnlyAndBounded(t *testing.T) {
+	SetupTestDB(t)
+	zone := time.FixedZone("CST", 8*60*60)
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, zone)
+	create := func(id, key string, checkedAt time.Time) {
+		t.Helper()
+		outcome, err := domain.NewPendingOutcome(id, "merchant-1", "location-1", "customer-1", "create_booking", key, checkedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := CreatePendingOperationOutcome(context.Background(), outcome); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create("op-old", "idem-old", now.Add(-20*time.Minute))
+	create("op-fresh", "idem-fresh", now.Add(-time.Minute))
+	create("op-unknown", "idem-unknown", now)
+	if _, err := TransitionOperationOutcome(context.Background(), "op-unknown", domain.OutcomePending, domain.OutcomeUnknown, "", now.Add(-2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := ListOperationOutcomesForReconciliation(context.Background(), now, 5*time.Minute, 10)
+	if err != nil {
+		t.Fatalf("list reconciliation candidates failed: %v", err)
+	}
+	if len(records) != 2 || records[0].ID != "op-old" || records[1].ID != "op-unknown" {
+		t.Fatalf("unexpected reconciliation candidates: %+v", records)
+	}
+	limited, err := ListOperationOutcomesForReconciliation(context.Background(), now, 5*time.Minute, 1)
+	if err != nil || len(limited) != 1 || limited[0].ID != "op-old" {
+		t.Fatalf("reconciliation limit/order failed: records=%+v err=%v", limited, err)
+	}
+	fresh, err := GetOperationOutcomeByScopeAndKey(context.Background(), "merchant-1", "location-1", "customer-1", "create_booking", "idem-fresh")
+	if err != nil || fresh.Status != string(domain.OutcomePending) {
+		t.Fatalf("read-only candidate query changed fresh pending record: record=%+v err=%v", fresh, err)
+	}
+}
