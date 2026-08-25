@@ -80,64 +80,78 @@ func CreateBookingWithAllocations(ctx context.Context, booking domain.Booking, a
 
 	var created BookingRecord
 	idempotentReplay := false
-	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing BookingRecord
-		lookupErr := tx.WithContext(ctx).
-			Where("merchant_id = ? AND location_id = ? AND customer_id = ? AND idempotency_key = ?", booking.MerchantID, booking.LocationID, booking.CustomerID, booking.IdempotencyKey).
-			First(&existing).Error
-		if lookupErr == nil {
-			if !sameBookingRequest(existing, booking) {
-				return ErrBookingIdempotencyConflict
+	err := withBookingLocks(ctx, bookingLockKeys(booking, allocations), func(operationCtx context.Context) error {
+		err := DB.WithContext(operationCtx).Transaction(func(tx *gorm.DB) error {
+			var existing BookingRecord
+			lookupErr := tx.WithContext(operationCtx).
+				Where("merchant_id = ? AND location_id = ? AND customer_id = ? AND idempotency_key = ?", booking.MerchantID, booking.LocationID, booking.CustomerID, booking.IdempotencyKey).
+				First(&existing).Error
+			if lookupErr == nil {
+				if !sameBookingRequest(existing, booking) {
+					return ErrBookingIdempotencyConflict
+				}
+				created = existing
+				idempotentReplay = true
+				return nil
 			}
-			created = existing
-			idempotentReplay = true
-			return nil
-		}
-		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
-			return lookupErr
-		}
-
-		occupied, err := lockedOccupiedBookings(ctx, tx, booking)
-		if err != nil {
-			return err
-		}
-		candidate, err := domain.NewOccupancy(booking, persistedResourceIDs(allocations))
-		if err != nil {
-			return err
-		}
-		conflicts, err := domain.FindConflicts(candidate, occupied)
-		if err != nil {
-			return err
-		}
-		if len(conflicts) > 0 {
-			return ErrBookingConflict
-		}
-
-		created = bookingRecordFromDomain(booking)
-		if err := tx.WithContext(ctx).Create(&created).Error; err != nil {
-			return err
-		}
-		for _, allocation := range allocations {
-			record := BookingAllocationRecord{
-				ID: allocation.ID, BookingID: allocation.BookingID, MerchantID: allocation.MerchantID,
-				LocationID: allocation.LocationID, StaffID: allocation.StaffID, ResourceID: allocation.ResourceID,
+			if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+				return lookupErr
 			}
-			if err := tx.WithContext(ctx).Create(&record).Error; err != nil {
+
+			occupied, err := lockedOccupiedBookings(operationCtx, tx, booking)
+			if err != nil {
 				return err
 			}
-		}
-		payload, err := json.Marshal(map[string]string{
-			"booking_id": created.ID, "merchant_id": created.MerchantID, "location_id": created.LocationID,
-			"customer_id": created.CustomerID, "service_id": created.ServiceID, "staff_id": created.StaffID,
+			candidate, err := domain.NewOccupancy(booking, persistedResourceIDs(allocations))
+			if err != nil {
+				return err
+			}
+			conflicts, err := domain.FindConflicts(candidate, occupied)
+			if err != nil {
+				return err
+			}
+			if len(conflicts) > 0 {
+				return ErrBookingConflict
+			}
+
+			created = bookingRecordFromDomain(booking)
+			if err := tx.WithContext(operationCtx).Create(&created).Error; err != nil {
+				return err
+			}
+			for _, allocation := range allocations {
+				record := BookingAllocationRecord{
+					ID: allocation.ID, BookingID: allocation.BookingID, MerchantID: allocation.MerchantID,
+					LocationID: allocation.LocationID, StaffID: allocation.StaffID, ResourceID: allocation.ResourceID,
+				}
+				if err := tx.WithContext(operationCtx).Create(&record).Error; err != nil {
+					return err
+				}
+			}
+			payload, err := json.Marshal(map[string]string{
+				"booking_id": created.ID, "merchant_id": created.MerchantID, "location_id": created.LocationID,
+				"customer_id": created.CustomerID, "service_id": created.ServiceID, "staff_id": created.StaffID,
+			})
+			if err != nil {
+				return err
+			}
+			return tx.WithContext(operationCtx).Create(&BookingOutboxRecord{
+				ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: created.ID,
+				MerchantID: created.MerchantID, LocationID: created.LocationID, EventType: "booking.created",
+				Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
+			}).Error
 		})
 		if err != nil {
 			return err
 		}
-		return tx.WithContext(ctx).Create(&BookingOutboxRecord{
-			ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: created.ID,
-			MerchantID: created.MerchantID, LocationID: created.LocationID, EventType: "booking.created",
-			Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
-		}).Error
+		if idempotentReplay {
+			return nil
+		}
+		verified, err := GetBookingForCustomer(operationCtx, booking.MerchantID, booking.LocationID, booking.CustomerID, created.ID)
+		if err != nil || !sameBookingRequest(*verified, booking) || verified.Status != string(domain.BookingPending) {
+			return ErrBookingOutcomeUnknown
+		}
+		created = *verified
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -145,11 +159,7 @@ func CreateBookingWithAllocations(ctx context.Context, booking domain.Booking, a
 	if idempotentReplay {
 		return &created, nil
 	}
-	verified, err := GetBookingForCustomer(ctx, booking.MerchantID, booking.LocationID, booking.CustomerID, created.ID)
-	if err != nil || !sameBookingRequest(*verified, booking) || verified.Status != string(domain.BookingPending) {
-		return nil, ErrBookingOutcomeUnknown
-	}
-	return verified, nil
+	return &created, nil
 }
 
 // GetBookingForCustomer 按商户、门店和顾客读取预约主记录，防止跨顾客访问。
