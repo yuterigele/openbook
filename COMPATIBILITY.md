@@ -13,6 +13,7 @@
 - 预约事件外层：`sdk/events` 的 `booking.event.v1` 信封、事件 ID、事件类型和租户范围字段。
 - 工具注册元数据：`sdk/toolkit.Registry` 只允许显式注册；每个工具必须声明预约操作、读写模式、权限、结果预算和 Handler。
 - Profile 使用 `sdk/profile` 定义并通过显式 Registry 注册；Hair、Beauty、Nail、Fitness Coach 参考实现位于 `profiles/`。
+- 渠道消息外层：`sdk/channel` 的 `channel.message.v1`、消息 ID、会话 ID、渠道类型、正文和接收时间；可信身份通过独立的 `v1alpha1.ExecutionContext` 传入 Handler。
 
 业务请求和响应的内部字段仍是不稳定字段，阶段 2 的通用领域模型完成后才进行 v1 契约评审。
 
@@ -30,6 +31,12 @@ Host 必须从已验签、已认证的渠道会话构造 `ExecutionContext`。�
 - 未注册、权限不足、上下文不完整或结果 Envelope 不合格的调用都会失败；返回模型前统一映射为安全结果，不暴露 Handler 的原始错误。
 - Eino Catalog 的运行时包装器会在进入旧工具前检查 `ExecutionContext` 和声明权限；没有 Host Carrier 的直接工具调用不会落到业务层。
 - Registry 只接收公开业务参数和 Host 注入的 `ExecutionContext`；Handler 不得从参数中读取或覆盖可信身份字段。
+
+渠道适配器还必须满足以下边界：
+
+- 先完成渠道验签和入站去重，再构造 `sdk/channel.InboundMessage`；供应商签名、游标和发送凭据不进入 SDK 消息对象。
+- `message_id` 用于重放保护，`session_id` 用于会话串联；正文限制为 8000 个 Unicode 字符，单条回复限制为 6000 个 Unicode 字符。
+- `Handler` 接收独立的可信 `ExecutionContext`，不得从消息正文、渠道元数据或模型参数补写商户、门店、顾客和权限字段。
 
 ## 调整规则
 
