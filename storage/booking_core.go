@@ -165,6 +165,24 @@ func GetBookingForCustomer(ctx context.Context, merchantID, locationID, customer
 	return &record, nil
 }
 
+// ListBookingsForCustomer 读取顾客在当前门店的未来有效预约。
+func ListBookingsForCustomer(ctx context.Context, merchantID, locationID, customerID string, now time.Time, limit int) ([]BookingRecord, error) {
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	if merchantID == "" || locationID == "" || customerID == "" || now.IsZero() || limit <= 0 {
+		return nil, domain.ErrInvalidOutcome
+	}
+	records := make([]BookingRecord, 0)
+	err := DB.WithContext(ctx).
+		Where("merchant_id = ? AND location_id = ? AND customer_id = ? AND status IN ? AND end_at > ?", merchantID, locationID, customerID, []string{string(domain.BookingPending), string(domain.BookingConfirmed)}, now).
+		Order("start_at ASC, id ASC").Limit(limit).Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 // CancelBookingForCustomer 在事务内取消属于可信顾客的预约，并记录幂等结果。
 func CancelBookingForCustomer(ctx context.Context, merchantID, locationID, customerID, bookingID, idempotencyKey string) (*BookingRecord, error) {
 	if DB == nil {
