@@ -214,53 +214,70 @@ func CancelBookingForCustomer(ctx context.Context, merchantID, locationID, custo
 		}
 		return replayCancelledOutcome(ctx, merchantID, locationID, customerID, idempotencyKey)
 	}
-
-	var cancelled BookingRecord
-	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ?", bookingID, merchantID, locationID, customerID).
-			First(&cancelled).Error; err != nil {
-			return err
-		}
-		if cancelled.Status != string(domain.BookingPending) && cancelled.Status != string(domain.BookingConfirmed) {
-			return ErrBookingNotCancellable
-		}
-		result := tx.WithContext(ctx).Model(&BookingRecord{}).
-			Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ? AND status IN ?", bookingID, merchantID, locationID, customerID, []string{string(domain.BookingPending), string(domain.BookingConfirmed)}).
-			Updates(map[string]any{"status": string(domain.BookingCancelled), "updated_at": time.Now()})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrBookingNotCancellable
-		}
-		cancelled.Status = string(domain.BookingCancelled)
-		payload, err := json.Marshal(map[string]string{
-			"booking_id": bookingID, "merchant_id": merchantID, "location_id": locationID, "customer_id": customerID,
-		})
-		if err != nil {
-			return err
-		}
-		return tx.WithContext(ctx).Create(&BookingOutboxRecord{
-			ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: bookingID,
-			MerchantID: merchantID, LocationID: locationID, EventType: "booking.cancelled",
-			Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
-		}).Error
-	})
+	lockKeys, err := loadBookingLockKeys(ctx, merchantID, locationID, customerID, bookingID)
 	if err != nil {
 		if transitionErr := transitionCancellationFailure(ctx, outcomeRecord.ID, err, now); transitionErr != nil {
 			return nil, transitionErr
 		}
 		return nil, err
 	}
-	if _, err := TransitionOperationOutcome(ctx, outcomeRecord.ID, domain.OutcomePending, domain.OutcomeConfirmed, bookingID, time.Now()); err != nil {
-		return nil, ErrBookingOutcomeUnknown
+
+	var cancelled BookingRecord
+	err = withBookingLocks(ctx, lockKeys, func(operationCtx context.Context) error {
+		err := DB.WithContext(operationCtx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.WithContext(operationCtx).Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ?", bookingID, merchantID, locationID, customerID).
+				First(&cancelled).Error; err != nil {
+				return err
+			}
+			if cancelled.Status != string(domain.BookingPending) && cancelled.Status != string(domain.BookingConfirmed) {
+				return ErrBookingNotCancellable
+			}
+			result := tx.WithContext(operationCtx).Model(&BookingRecord{}).
+				Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ? AND status IN ?", bookingID, merchantID, locationID, customerID, []string{string(domain.BookingPending), string(domain.BookingConfirmed)}).
+				Updates(map[string]any{"status": string(domain.BookingCancelled), "updated_at": time.Now()})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrBookingNotCancellable
+			}
+			cancelled.Status = string(domain.BookingCancelled)
+			payload, err := json.Marshal(map[string]string{
+				"booking_id": bookingID, "merchant_id": merchantID, "location_id": locationID, "customer_id": customerID,
+			})
+			if err != nil {
+				return err
+			}
+			return tx.WithContext(operationCtx).Create(&BookingOutboxRecord{
+				ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: bookingID,
+				MerchantID: merchantID, LocationID: locationID, EventType: "booking.cancelled",
+				Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
+			}).Error
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := TransitionOperationOutcome(operationCtx, outcomeRecord.ID, domain.OutcomePending, domain.OutcomeConfirmed, bookingID, time.Now()); err != nil {
+			return ErrBookingOutcomeUnknown
+		}
+		verified, err := GetBookingForCustomer(operationCtx, merchantID, locationID, customerID, bookingID)
+		if err != nil || verified.Status != string(domain.BookingCancelled) {
+			return ErrBookingOutcomeUnknown
+		}
+		cancelled = *verified
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrBookingOutcomeUnknown) || errors.Is(err, lock.ErrRedisUnavailable) {
+			return nil, err
+		}
+		if transitionErr := transitionCancellationFailure(ctx, outcomeRecord.ID, err, now); transitionErr != nil {
+			return nil, transitionErr
+		}
+		return nil, err
 	}
-	verified, err := GetBookingForCustomer(ctx, merchantID, locationID, customerID, bookingID)
-	if err != nil || verified.Status != string(domain.BookingCancelled) {
-		return nil, ErrBookingOutcomeUnknown
-	}
-	return verified, nil
+	return &cancelled, nil
 }
 
 // RescheduleBookingForCustomer 在同一事务内创建新预约并取消旧预约。
