@@ -55,7 +55,7 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 - `main.go`、`server/`：应用启动、HTTP 接口、会话处理、限流与回复流程。
 - `internal/agent/`、`tools/`：Agent 编排及受限的预约业务工具。
-- `sdk/`、`profiles/`：版本化扩展契约与 Hair/Beauty 参考 Profile。
+- `sdk/`、`profiles/`：版本化扩展契约与 Hair/Beauty/Nail/Fitness Coach 参考 Profile。
 - `internal/booking/`：预约领域规则和迁移期应用适配器。
 - `storage/`、`lock/`：MySQL 持久化、Redis 锁、事务与租户/归属校验。
 - `chatmodel/`、`intent/`、`sensitive/`：模型适配与降级、意图识别、输入保护。

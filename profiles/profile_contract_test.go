@@ -7,7 +7,9 @@ import (
 	"github.com/yuterigele/openbook/internal/booking/domain"
 	"github.com/yuterigele/openbook/profiles"
 	"github.com/yuterigele/openbook/profiles/beauty"
+	"github.com/yuterigele/openbook/profiles/fitness_coach"
 	"github.com/yuterigele/openbook/profiles/hair"
+	"github.com/yuterigele/openbook/profiles/nail"
 	"github.com/yuterigele/openbook/sdk/profile"
 )
 
@@ -17,7 +19,7 @@ func TestReferenceRegistryContainsValidatedProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := registry.List()
-	if len(got) != 2 || got[0].ID != "beauty" || got[1].ID != "hair" {
+	if len(got) != 4 || got[0].ID != "beauty" || got[1].ID != "fitness_coach" || got[2].ID != "hair" || got[3].ID != "nail" {
 		t.Fatalf("reference profiles = %+v", got)
 	}
 	for _, definition := range got {
@@ -27,6 +29,19 @@ func TestReferenceRegistryContainsValidatedProfiles(t *testing.T) {
 		if len(definition.RequiredCustomerFields) == 0 || len(definition.ReplyTemplates) == 0 {
 			t.Errorf("profile %s is missing customer fields or templates", definition.ID)
 		}
+	}
+}
+
+func TestNailAndFitnessProfilesDeclareJointResources(t *testing.T) {
+	nailDefinition := nail.Definition()
+	nailServices := serviceMap(nailDefinition.Services)
+	if len(nailServices["gel_nail"].RequiredResources) != 2 {
+		t.Fatalf("gel nail should require station and lamp: %+v", nailServices["gel_nail"].RequiredResources)
+	}
+	fitnessDefinition := fitness_coach.Definition()
+	fitnessServices := serviceMap(fitnessDefinition.Services)
+	if fitnessServices["strength_program"].Duration != 90*time.Minute || len(fitnessServices["strength_program"].RequiredResources) != 2 {
+		t.Fatalf("strength program should require a longer joint-resource session: %+v", fitnessServices["strength_program"])
 	}
 }
 
