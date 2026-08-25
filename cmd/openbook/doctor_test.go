@@ -83,3 +83,14 @@ func TestInitializeEnvFileGeneratesLocalSecretsWithoutPrintingThem(t *testing.T)
 		t.Fatalf("existing config should be protected: code=%d output=%s", code, output.String())
 	}
 }
+
+func TestRunMigrateAndSeedDryRunDoNotRequireDatabase(t *testing.T) {
+	var output bytes.Buffer
+	if code := RunMigrate(&output, []string{"-dry-run"}); code != 0 || !strings.Contains(output.String(), "不会连接") {
+		t.Fatalf("migrate dry-run failed: code=%d output=%s", code, output.String())
+	}
+	output.Reset()
+	if code := RunSeed(&output, []string{"-dry-run", "-shop-only"}); code != 0 || !strings.Contains(output.String(), "skip_appointments=false") {
+		t.Fatalf("seed dry-run failed: code=%d output=%s", code, output.String())
+	}
+}
