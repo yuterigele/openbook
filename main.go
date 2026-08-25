@@ -449,8 +449,12 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	})
 
 	log.Printf("starting server on http://localhost:%s", port)
-	log.Printf("商户后台: http://localhost:%s/admin (默认 admin/admin123，首次登录后请改密码)", port)
+	log.Print(adminAccessLog(port))
 	srv.Spin()
+}
+
+func adminAccessLog(port string) string {
+	return fmt.Sprintf("商户后台: http://localhost:%s/admin（账号和密码由 DEFAULT_ADMIN_USERNAME/DEFAULT_ADMIN_PASSWORD 配置，密码不输出）", port)
 }
 
 func startPprofServer() {
