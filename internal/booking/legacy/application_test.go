@@ -109,6 +109,67 @@ func TestApplicationListMyBookingsUsesTrustedCustomerIdentity(t *testing.T) {
 	}
 }
 
+func TestApplicationRescheduleVerifiesCancelsAndCreatesWithTrustedIdentity(t *testing.T) {
+	var calls []string
+	app := &Application{
+		resolveCustomer: func(context.Context, v1alpha1.ExecutionContext) (CustomerIdentity, error) {
+			return CustomerIdentity{
+				Name: "可信顾客", Phone: "13800000001", OpenID: "openid-trusted", ExternalUserID: "external-trusted",
+			}, nil
+		},
+		getAppointment: func(ctx context.Context, arguments string) (string, error) {
+			calls = append(calls, "get:"+tools.ShopIDFromCtx(ctx)+":"+arguments)
+			return "当前预约真实状态", nil
+		},
+		cancelBooking: func(ctx context.Context, arguments string) (string, error) {
+			calls = append(calls, "cancel:"+tools.OpenIDFromCtx(ctx)+":"+arguments)
+			return "旧预约已取消", nil
+		},
+		createBooking: func(ctx context.Context, arguments string) (string, error) {
+			calls = append(calls, "create:"+tools.ExternalUserIDFromCtx(ctx)+":"+arguments)
+			return "新预约创建成功，预约号：OB-NEW", nil
+		},
+	}
+
+	response, err := app.Execute(context.Background(), validWriteContext(), v1alpha1.Call{
+		Operation:  v1alpha1.OperationRescheduleBooking,
+		Parameters: json.RawMessage(`{"appointment_id":"appt-old","barber_name":"Kevin","date":"2026-08-29","time":"15:00","service":"剪发","customer":"模型顾客","phone":"13800000002"}`),
+	})
+	if err != nil {
+		t.Fatalf("reschedule failed: %v", err)
+	}
+	if len(calls) != 3 || !strings.HasPrefix(calls[0], "get:location-trusted:") || !strings.HasPrefix(calls[1], "cancel:openid-trusted:") || !strings.HasPrefix(calls[2], "create:external-trusted:") {
+		t.Fatalf("unexpected reschedule call chain: %#v", calls)
+	}
+	if !strings.Contains(calls[2], `"customer":"可信顾客"`) || !strings.Contains(calls[2], `"phone":"13800000001"`) {
+		t.Fatalf("create step did not use trusted identity: %s", calls[2])
+	}
+	if !strings.Contains(string(response.Data), "booking.rescheduled") {
+		t.Fatalf("reschedule result missing stable code: %s", response.Data)
+	}
+}
+
+func TestApplicationRescheduleDoesNotClaimSuccessAfterCreateFailure(t *testing.T) {
+	app := &Application{
+		resolveCustomer: func(context.Context, v1alpha1.ExecutionContext) (CustomerIdentity, error) {
+			return CustomerIdentity{Name: "可信顾客", Phone: "13800000001", OpenID: "openid-trusted"}, nil
+		},
+		getAppointment: func(context.Context, string) (string, error) { return "ok", nil },
+		cancelBooking:  func(context.Context, string) (string, error) { return "cancelled", nil },
+		createBooking:  func(context.Context, string) (string, error) { return "", context.DeadlineExceeded },
+	}
+	response, err := app.Execute(context.Background(), validWriteContext(), v1alpha1.Call{
+		Operation:  v1alpha1.OperationRescheduleBooking,
+		Parameters: json.RawMessage(`{"appointment_id":"appt-old","barber_name":"Kevin","date":"2026-08-29","time":"15:00","service":"剪发"}`),
+	})
+	if v1alpha1.CodeOf(err) != v1alpha1.ErrorCodeUnknown {
+		t.Fatalf("unknown create outcome should map to unknown, got %v", err)
+	}
+	if strings.Contains(string(response.Data), "booking.rescheduled") {
+		t.Fatalf("failed create must not claim rescheduled: %s", response.Data)
+	}
+}
+
 func TestApplicationCreateOverridesModelCustomerIdentity(t *testing.T) {
 	var captured map[string]string
 	var capturedOpenID string

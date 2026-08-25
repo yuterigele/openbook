@@ -40,6 +40,7 @@ type Application struct {
 	querySchedule   queryRunner
 	createBooking   createRunner
 	cancelBooking   createRunner
+	getAppointment  readRunner
 	listServices    readRunner
 	listStaff       readRunner
 	listMyBookings  readRunner
@@ -57,6 +58,9 @@ func NewApplication(resolveCustomer CustomerResolver) *Application {
 		},
 		cancelBooking: func(ctx context.Context, arguments string) (string, error) {
 			return (&tools.CancelAppointmentTool{}).InvokableRun(ctx, arguments)
+		},
+		getAppointment: func(ctx context.Context, arguments string) (string, error) {
+			return (&tools.GetAppointmentTool{}).InvokableRun(ctx, arguments)
 		},
 		listServices: func(ctx context.Context, arguments string) (string, error) {
 			return (&tools.ListServicesTool{}).InvokableRun(ctx, arguments)
@@ -119,9 +123,74 @@ func (a *Application) Execute(ctx context.Context, trusted v1alpha1.ExecutionCon
 
 	case v1alpha1.OperationCancelBooking:
 		return a.executeCancel(ctx, trusted, call, response)
+
+	case v1alpha1.OperationRescheduleBooking:
+		return a.executeReschedule(ctx, trusted, call, response)
 	default:
 		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidOperation, "legacy adapter only supports availability and create booking"))
 	}
+}
+
+func (a *Application) executeReschedule(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response) (v1alpha1.Response, error) {
+	if a == nil || a.getAppointment == nil || a.cancelBooking == nil || a.createBooking == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "reschedule adapter is not configured"))
+	}
+	if a.resolveCustomer == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "customer resolver is required"))
+	}
+	identity, err := a.resolveCustomer(ctx, trusted)
+	if err != nil {
+		return withErrorResult(response, normalizeLegacyError(err))
+	}
+	if identity.Name == "" || identity.Phone == "" || (identity.OpenID == "" && identity.ExternalUserID == "") {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "trusted customer identity is incomplete"))
+	}
+
+	var params struct {
+		AppointmentID string `json:"appointment_id"`
+		BarberName    string `json:"barber_name"`
+		Date          string `json:"date"`
+		Time          string `json:"time"`
+		Service       string `json:"service"`
+		PhoneCode     string `json:"phone_verification_code,omitempty"`
+	}
+	if err := json.Unmarshal(call.Parameters, &params); err != nil || params.AppointmentID == "" || params.BarberName == "" || params.Date == "" || params.Time == "" || params.Service == "" {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "reschedule requires appointment_id, barber_name, date, time and service"))
+	}
+
+	toolContext := tools.WithShopID(ctx, trusted.LocationID)
+	toolContext = tools.WithOpenID(toolContext, identity.OpenID)
+	toolContext = tools.WithExternalUserID(toolContext, identity.ExternalUserID)
+	appointmentArguments, _ := json.Marshal(map[string]string{"appointment_id": params.AppointmentID})
+	if _, err := a.getAppointment(toolContext, string(appointmentArguments)); err != nil {
+		return withLegacyError(response, err)
+	}
+
+	cancelArguments, _ := json.Marshal(map[string]string{
+		"appointment_id": params.AppointmentID,
+		"reason":         "顾客申请改约",
+	})
+	if _, err := a.cancelBooking(toolContext, string(cancelArguments)); err != nil {
+		return withLegacyError(response, err)
+	}
+
+	createArguments := map[string]string{
+		"barber_name": params.BarberName,
+		"customer":    identity.Name,
+		"date":        params.Date,
+		"time":        params.Time,
+		"service":     params.Service,
+		"phone":       identity.Phone,
+	}
+	if params.PhoneCode != "" {
+		createArguments["phone_verification_code"] = params.PhoneCode
+	}
+	encodedCreateArguments, _ := json.Marshal(createArguments)
+	output, err := a.createBooking(toolContext, string(encodedCreateArguments))
+	if err != nil {
+		return withLegacyError(response, err)
+	}
+	return withToolResult(response, toolkit.NewOK("booking.rescheduled", output, map[string]any{"message": output}))
 }
 
 func (a *Application) executeCancel(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response) (v1alpha1.Response, error) {
