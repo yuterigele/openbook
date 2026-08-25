@@ -75,6 +75,9 @@ func SetupTestDB(t *testing.T) {
 		&CustomerCard{},           // v4.15 顾客卡实例
 		&CardTransaction{},        // v4.15 卡流水
 		&OperationOutcomeRecord{}, // Agent 写操作结果与幂等记录
+		&BookingRecord{},          // 通用预约内核主记录
+		&BookingAllocationRecord{},
+		&BookingOutboxRecord{}, // 通用预约内核 Outbox
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

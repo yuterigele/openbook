@@ -93,6 +93,9 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&CustomerCard{},           // v4.15 顾客持有的卡实例
 		&CardTransaction{},        // v4.15 卡流水
 		&OperationOutcomeRecord{}, // Agent 写操作结果与幂等记录
+		&BookingRecord{},          // 通用预约内核主记录
+		&BookingAllocationRecord{},
+		&BookingOutboxRecord{}, // 通用预约内核 Outbox
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
