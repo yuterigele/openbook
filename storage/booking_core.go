@@ -78,10 +78,20 @@ func CreateBookingWithAllocations(ctx context.Context, booking domain.Booking, a
 	if err := validatePersistedAllocations(booking, allocations); err != nil {
 		return nil, err
 	}
+	outcome, err := domain.NewPendingOutcome(uuid.NewString(), booking.MerchantID, booking.LocationID, booking.CustomerID, "create_booking", booking.IdempotencyKey, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	outcomeRecord, err := CreatePendingOperationOutcome(ctx, outcome)
+	if err != nil {
+		if !errors.Is(err, ErrOperationOutcomeAlreadyExists) {
+			return nil, err
+		}
+		return replayCreatedOutcome(ctx, booking)
+	}
 
 	var created BookingRecord
-	idempotentReplay := false
-	err := withBookingLocks(ctx, bookingLockKeys(booking, allocations), func(operationCtx context.Context) error {
+	err = withBookingLocks(ctx, bookingLockKeys(booking, allocations), func(operationCtx context.Context) error {
 		err := DB.WithContext(operationCtx).Transaction(func(tx *gorm.DB) error {
 			var existing BookingRecord
 			lookupErr := tx.WithContext(operationCtx).
@@ -92,7 +102,6 @@ func CreateBookingWithAllocations(ctx context.Context, booking domain.Booking, a
 					return ErrBookingIdempotencyConflict
 				}
 				created = existing
-				idempotentReplay = true
 				return nil
 			}
 			if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -144,21 +153,24 @@ func CreateBookingWithAllocations(ctx context.Context, booking domain.Booking, a
 		if err != nil {
 			return err
 		}
-		if idempotentReplay {
-			return nil
+		if _, err := TransitionOperationOutcome(operationCtx, outcomeRecord.ID, domain.OutcomePending, domain.OutcomeConfirmed, created.ID, time.Now()); err != nil {
+			return ErrBookingOutcomeUnknown
 		}
 		verified, err := GetBookingForCustomer(operationCtx, booking.MerchantID, booking.LocationID, booking.CustomerID, created.ID)
-		if err != nil || !sameBookingRequest(*verified, booking) || verified.Status != string(domain.BookingPending) {
+		if err != nil || !sameBookingRequest(*verified, booking) || (verified.Status != string(domain.BookingPending) && verified.Status != string(domain.BookingConfirmed)) {
 			return ErrBookingOutcomeUnknown
 		}
 		created = *verified
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ErrBookingOutcomeUnknown) || errors.Is(err, lock.ErrRedisUnavailable) {
+			return nil, err
+		}
+		if transitionErr := transitionCancellationFailure(ctx, outcomeRecord.ID, err, time.Now()); transitionErr != nil {
+			return nil, transitionErr
+		}
 		return nil, err
-	}
-	if idempotentReplay {
-		return &created, nil
 	}
 	return &created, nil
 }
@@ -426,6 +438,28 @@ func replayCancelledOutcome(ctx context.Context, merchantID, locationID, custome
 		return GetBookingForCustomer(ctx, merchantID, locationID, customerID, record.BookingID)
 	case domain.OutcomeRejected:
 		return nil, ErrBookingNotCancellable
+	default:
+		return nil, ErrBookingOutcomeUnknown
+	}
+}
+
+func replayCreatedOutcome(ctx context.Context, booking domain.Booking) (*BookingRecord, error) {
+	record, err := GetOperationOutcomeByScopeAndKey(ctx, booking.MerchantID, booking.LocationID, booking.CustomerID, "create_booking", booking.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	switch domain.OutcomeStatus(record.Status) {
+	case domain.OutcomeConfirmed:
+		created, err := GetBookingForCustomer(ctx, booking.MerchantID, booking.LocationID, booking.CustomerID, record.BookingID)
+		if err != nil {
+			return nil, ErrBookingOutcomeUnknown
+		}
+		if !sameBookingRequest(*created, booking) {
+			return nil, ErrBookingIdempotencyConflict
+		}
+		return created, nil
+	case domain.OutcomeRejected:
+		return nil, ErrBookingConflict
 	default:
 		return nil, ErrBookingOutcomeUnknown
 	}
