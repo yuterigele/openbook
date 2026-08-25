@@ -10,8 +10,9 @@
 - `ExecutionContext` 的可信字段：`merchant_id`、`location_id`、`customer_id`、`principal_id`、`permissions`、`trace_id` 和写操作的 `idempotency_key`。
 - 应用错误的稳定前缀：`booking.*`。
 - 模型工具结果外层：`tool.result.v1` 的 `schema_version`、`status`、`code`、`summary`、`facts` 和 `suggested_actions`。
+- 预约事件外层：`sdk/events` 的 `booking.event.v1` 信封、事件 ID、事件类型和租户范围字段。
 - 工具注册元数据：`sdk/toolkit.Registry` 只允许显式注册；每个工具必须声明预约操作、读写模式、权限、结果预算和 Handler。
-- Profile 使用 `sdk/profile` 定义并通过显式 Registry 注册；Hair/Beauty 参考实现位于 `profiles/`。
+- Profile 使用 `sdk/profile` 定义并通过显式 Registry 注册；Hair、Beauty、Nail、Fitness Coach 参考实现位于 `profiles/`。
 
 业务请求和响应的内部字段仍是不稳定字段，阶段 2 的通用领域模型完成后才进行 v1 契约评审。
 
