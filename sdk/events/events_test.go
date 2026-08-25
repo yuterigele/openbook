@@ -1,7 +1,7 @@
 package events
 
 import (
-	"encoding/json"
+	"context"
 	"testing"
 	"time"
 )
@@ -22,11 +22,29 @@ func TestMarshalAndUnmarshalBookingEvent(t *testing.T) {
 		t.Fatalf("unexpected envelope: %+v", envelope)
 	}
 	var data BookingCreatedData
-	if err := json.Unmarshal(envelope.Data, &data); err != nil {
+	if err := envelope.DecodeData(&data); err != nil {
 		t.Fatal(err)
 	}
 	if data.CustomerID != "customer-1" || data.ServiceID != "service-1" || data.StaffID != "staff-1" {
 		t.Fatalf("unexpected event data: %+v", data)
+	}
+}
+
+func TestSubscriberAndHandlerFunc(t *testing.T) {
+	event, err := Unmarshal([]byte(`{"schema_version":"booking.event.v1","event_id":"event-1","type":"booking.cancelled","booking_id":"booking-1","merchant_id":"merchant-1","location_id":"location-1","occurred_at":"2026-08-29T15:00:00+08:00","data":{"customer_id":"customer-1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	var subscriber Subscriber = HandlerFunc(func(_ context.Context, got Envelope) error {
+		called = got.EventID == event.EventID
+		return nil
+	})
+	if err := subscriber.Handle(context.Background(), event); err != nil || !called {
+		t.Fatalf("subscriber was not called: err=%v called=%v", err, called)
+	}
+	if err := (HandlerFunc)(nil).Handle(context.Background(), event); err == nil {
+		t.Fatal("nil handler should be rejected")
 	}
 }
 

@@ -2,6 +2,7 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,34 @@ type BookingRescheduledData struct {
 	OldBookingID string `json:"old_booking_id"`
 	NewBookingID string `json:"new_booking_id"`
 	CustomerID   string `json:"customer_id"`
+}
+
+// Subscriber 是 Outbox 发布器使用的最小事件消费接口。
+// 消费者应按 EventID 做幂等处理，失败时返回错误以触发发布重试。
+type Subscriber interface {
+	Handle(context.Context, Envelope) error
+}
+
+// HandlerFunc 将函数适配为 Subscriber。
+type HandlerFunc func(context.Context, Envelope) error
+
+// Handle 实现 Subscriber。
+func (handler HandlerFunc) Handle(ctx context.Context, event Envelope) error {
+	if handler == nil {
+		return errors.New("event handler is nil")
+	}
+	return handler(ctx, event)
+}
+
+// DecodeData 将事件数据解码到调用方声明的类型。
+func (envelope Envelope) DecodeData(target any) error {
+	if target == nil {
+		return errors.New("event data target is required")
+	}
+	if err := json.Unmarshal(envelope.Data, target); err != nil {
+		return fmt.Errorf("decode booking event data: %w", err)
+	}
+	return nil
 }
 
 // Marshal 创建并校验一个版本化事件。
