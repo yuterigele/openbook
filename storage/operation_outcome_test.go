@@ -100,3 +100,61 @@ func TestListOperationOutcomesForReconciliationIsReadOnlyAndBounded(t *testing.T
 		t.Fatalf("read-only candidate query changed fresh pending record: record=%+v err=%v", fresh, err)
 	}
 }
+
+func TestReconcileOperationOutcomeOnlyReadsFinalStateAndEscalatesUnknown(t *testing.T) {
+	SetupTestDB(t)
+	zone := time.FixedZone("CST", 8*60*60)
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, zone)
+	outcome, err := domain.NewPendingOutcome("op-1", "merchant-1", "location-1", "customer-1", "create_booking", "idem-1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreatePendingOperationOutcome(context.Background(), outcome); err != nil {
+		t.Fatal(err)
+	}
+	readerCalls := 0
+	reader := func(_ context.Context, record OperationOutcomeRecord) (OutcomeFinalObservation, error) {
+		readerCalls++
+		if record.Status == string(domain.OutcomePending) {
+			return OutcomeFinalObservation{Status: domain.OutcomeUnknown}, nil
+		}
+		return OutcomeFinalObservation{Status: domain.OutcomeUnknown}, nil
+	}
+	policy := OutcomeReconcilePolicy{MaxAttempts: 2, MaxAge: time.Hour}
+	updated, err := ReconcileOperationOutcome(context.Background(), "op-1", policy, reader, now.Add(time.Minute))
+	if err != nil || updated.Status != string(domain.OutcomeUnknown) {
+		t.Fatalf("pending -> unknown reconciliation failed: record=%+v err=%v", updated, err)
+	}
+	updated, err = ReconcileOperationOutcome(context.Background(), "op-1", policy, reader, now.Add(2*time.Minute))
+	if err != nil || updated.Status != string(domain.OutcomeNeedsHuman) {
+		t.Fatalf("unknown should escalate after max attempts: record=%+v err=%v", updated, err)
+	}
+	if readerCalls != 2 {
+		t.Fatalf("unexpected reader calls: %d", readerCalls)
+	}
+	updated, err = ReconcileOperationOutcome(context.Background(), "op-1", policy, func(context.Context, OperationOutcomeRecord) (OutcomeFinalObservation, error) {
+		t.Fatal("terminal outcome must not be queried again")
+		return OutcomeFinalObservation{}, nil
+	}, now.Add(3*time.Minute))
+	if err != nil || updated.Status != string(domain.OutcomeNeedsHuman) {
+		t.Fatalf("terminal outcome should be returned unchanged: record=%+v err=%v", updated, err)
+	}
+}
+
+func TestReconcileOperationOutcomeRejectsConfirmedObservationWithoutBooking(t *testing.T) {
+	SetupTestDB(t)
+	now := time.Now()
+	outcome, err := domain.NewPendingOutcome("op-1", "merchant-1", "location-1", "customer-1", "create_booking", "idem-1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreatePendingOperationOutcome(context.Background(), outcome); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ReconcileOperationOutcome(context.Background(), "op-1", DefaultOutcomeReconcilePolicy(), func(context.Context, OperationOutcomeRecord) (OutcomeFinalObservation, error) {
+		return OutcomeFinalObservation{Status: domain.OutcomeConfirmed}, nil
+	}, now.Add(time.Minute))
+	if !errors.Is(err, domain.ErrInvalidOutcome) {
+		t.Fatalf("confirmation without booking should be rejected, got %v", err)
+	}
+}

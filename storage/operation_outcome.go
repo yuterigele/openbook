@@ -153,6 +153,70 @@ func ListOperationOutcomesForReconciliation(ctx context.Context, now time.Time, 
 	return records, nil
 }
 
+// OutcomeFinalObservation 是对账器从只读业务查询得到的最终观察结果。
+type OutcomeFinalObservation struct {
+	Status    domain.OutcomeStatus
+	BookingID string
+}
+
+// OutcomeFinalReader 只能读取最终状态，不能创建、取消预约或获取业务写锁。
+type OutcomeFinalReader func(context.Context, OperationOutcomeRecord) (OutcomeFinalObservation, error)
+
+// OutcomeReconcilePolicy 控制 unknown 结果进入人工处理前的安全等待范围。
+type OutcomeReconcilePolicy struct {
+	MaxAttempts int
+	MaxAge      time.Duration
+}
+
+// DefaultOutcomeReconcilePolicy 返回计划约定的默认对账窗口。
+func DefaultOutcomeReconcilePolicy() OutcomeReconcilePolicy {
+	return OutcomeReconcilePolicy{MaxAttempts: 3, MaxAge: 5 * time.Minute}
+}
+
+func (p OutcomeReconcilePolicy) validate() error {
+	if p.MaxAttempts <= 0 || p.MaxAge <= 0 {
+		return fmt.Errorf("%w: reconciliation policy is invalid", domain.ErrInvalidOutcome)
+	}
+	return nil
+}
+
+// ReconcileOperationOutcome 只读查询最终状态，再 CAS 更新结果记录。
+// 业务预约本身不在此函数内写入，也不在此函数内获取预约排期锁。
+func ReconcileOperationOutcome(ctx context.Context, id string, policy OutcomeReconcilePolicy, reader OutcomeFinalReader, now time.Time) (*OperationOutcomeRecord, error) {
+	if reader == nil || now.IsZero() {
+		return nil, fmt.Errorf("%w: reconciliation reader and time are required", domain.ErrInvalidOutcome)
+	}
+	if err := policy.validate(); err != nil {
+		return nil, err
+	}
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	var record OperationOutcomeRecord
+	if err := DB.WithContext(ctx).Where("id = ?", id).First(&record).Error; err != nil {
+		return nil, err
+	}
+	if record.Status == string(domain.OutcomeConfirmed) || record.Status == string(domain.OutcomeRejected) || record.Status == string(domain.OutcomeNeedsHuman) {
+		return &record, nil
+	}
+	observation, err := reader(ctx, record)
+	if err != nil {
+		return nil, err
+	}
+	if observation.Status != domain.OutcomeConfirmed && observation.Status != domain.OutcomeRejected && observation.Status != domain.OutcomeUnknown {
+		return nil, fmt.Errorf("%w: final observation status is invalid", domain.ErrInvalidOutcome)
+	}
+	next := observation.Status
+	if observation.Status == domain.OutcomeUnknown && record.Status == string(domain.OutcomeUnknown) {
+		attemptAtLimit := record.AttemptCount+1 >= policy.MaxAttempts
+		ageAtLimit := !record.CreatedAt.IsZero() && now.Sub(record.CreatedAt) >= policy.MaxAge
+		if attemptAtLimit || ageAtLimit {
+			next = domain.OutcomeNeedsHuman
+		}
+	}
+	return TransitionOperationOutcome(ctx, record.ID, domain.OutcomeStatus(record.Status), next, observation.BookingID, now)
+}
+
 func (r OperationOutcomeRecord) toDomain() (domain.OperationOutcome, error) {
 	outcome := domain.OperationOutcome{
 		ID:             r.ID,
