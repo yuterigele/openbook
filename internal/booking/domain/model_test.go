@@ -70,6 +70,33 @@ func TestServiceValidateResourcesRejectsInactiveAndExtraResources(t *testing.T) 
 	}
 }
 
+func TestBookingValidateAllocationsRequiresStaffAndResources(t *testing.T) {
+	service := validService()
+	staff := validStaff()
+	booking, err := NewBooking("booking-1", "merchant-1", "location-1", "customer-1", "idem-1", service, staff, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource := Resource{
+		ID: "chair-1", MerchantID: "merchant-1", LocationID: "location-1", Kind: "chair", Name: "一号工位", Active: true,
+	}
+	validAllocations := []Allocation{
+		{ID: "allocation-staff", BookingID: booking.ID, MerchantID: "merchant-1", LocationID: "location-1", StaffID: staff.ID},
+		{ID: "allocation-chair", BookingID: booking.ID, MerchantID: "merchant-1", LocationID: "location-1", ResourceID: resource.ID},
+	}
+	if err := booking.ValidateAllocations(service, staff, []Resource{resource}, validAllocations); err != nil {
+		t.Fatalf("valid allocations rejected: %v", err)
+	}
+	if err := booking.ValidateAllocations(service, staff, []Resource{resource}, validAllocations[:1]); !errors.Is(err, ErrInvalidEntity) {
+		t.Fatalf("missing resource allocation should be rejected, got %v", err)
+	}
+	duplicate := append([]Allocation(nil), validAllocations...)
+	duplicate[1].ID = "allocation-chair-2"
+	if err := booking.ValidateAllocations(service, staff, []Resource{resource}, append(duplicate, duplicate[1])); !errors.Is(err, ErrInvalidEntity) {
+		t.Fatalf("duplicate resource allocation should be rejected, got %v", err)
+	}
+}
+
 func TestNewBookingRejectsCrossTenantServiceOrStaff(t *testing.T) {
 	service := validService()
 	service.LocationID = "location-other"

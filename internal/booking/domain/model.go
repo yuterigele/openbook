@@ -292,6 +292,48 @@ func (b Booking) ValidateScope(service Service, staff Staff, allocations []Alloc
 	return nil
 }
 
+// ValidateAllocations 校验预约的员工和资源占用是否完整且唯一。
+func (b Booking) ValidateAllocations(service Service, staff Staff, resources []Resource, allocations []Allocation) error {
+	if err := b.ValidateScope(service, staff, allocations); err != nil {
+		return err
+	}
+	if err := service.ValidateResources(resources); err != nil {
+		return err
+	}
+	if len(allocations) != len(resources)+1 {
+		return fmt.Errorf("%w: booking must allocate one staff and every required resource", ErrInvalidEntity)
+	}
+	resourceByID := make(map[string]Resource, len(resources))
+	for _, resource := range resources {
+		resourceByID[resource.ID] = resource
+	}
+	staffAllocations := 0
+	allocatedResources := make(map[string]struct{}, len(resources))
+	for _, allocation := range allocations {
+		if allocation.StaffID != "" && allocation.ResourceID != "" {
+			return fmt.Errorf("%w: one allocation cannot contain staff and resource", ErrInvalidEntity)
+		}
+		if allocation.StaffID != "" {
+			if allocation.StaffID != staff.ID {
+				return fmt.Errorf("%w: allocation references another staff", ErrInvalidEntity)
+			}
+			staffAllocations++
+			continue
+		}
+		if _, exists := resourceByID[allocation.ResourceID]; !exists {
+			return fmt.Errorf("%w: allocation references an unassigned resource", ErrInvalidEntity)
+		}
+		if _, exists := allocatedResources[allocation.ResourceID]; exists {
+			return fmt.Errorf("%w: resource is allocated more than once", ErrInvalidEntity)
+		}
+		allocatedResources[allocation.ResourceID] = struct{}{}
+	}
+	if staffAllocations != 1 || len(allocatedResources) != len(resources) {
+		return fmt.Errorf("%w: staff or resource allocation is incomplete", ErrInvalidEntity)
+	}
+	return nil
+}
+
 // BookingPolicy 定义不依赖渠道的确定性预约策略。
 type BookingPolicy struct {
 	Location        *time.Location
