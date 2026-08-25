@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -53,5 +55,31 @@ func TestRunVersion(t *testing.T) {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("version output missing %q: %s", expected, output.String())
 		}
+	}
+}
+
+func TestInitializeEnvFileGeneratesLocalSecretsWithoutPrintingThem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	var random bytes.Buffer
+	random.Write(bytes.Repeat([]byte{0x42}, 128))
+	if err := InitializeEnvFile(path, false, &random); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, expected := range []string{"OPENBOOK_LLM_CHAIN=stub", "MYSQL_APP_PASSWORD=", "JWT_SECRET=", "DEFAULT_ADMIN_PASSWORD="} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("generated config missing %q: %s", expected, text)
+		}
+	}
+	if strings.Contains(text, "change-me-before-exposing") || strings.Contains(text, "replace-with") {
+		t.Fatalf("generated config contains a placeholder secret: %s", text)
+	}
+	var output bytes.Buffer
+	if code := RunInit(&output, []string{"-path", path}); code != 1 || !strings.Contains(output.String(), "已存在") {
+		t.Fatalf("existing config should be protected: code=%d output=%s", code, output.String())
 	}
 }

@@ -22,6 +22,8 @@ func main() {
 		RunVersion(os.Stdout)
 	case "doctor":
 		os.Exit(RunDoctor(os.Stdout, os.Getenv))
+	case "init":
+		os.Exit(RunInit(os.Stdout, os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "未知命令: %s\n", os.Args[1])
 		printUsage(os.Stderr)
@@ -30,5 +32,5 @@ func main() {
 }
 
 func printUsage(writer io.Writer) {
-	_, _ = io.WriteString(writer, "用法: openbook <version|doctor>\n")
+	_, _ = io.WriteString(writer, "用法: openbook <version|doctor|init>\n")
 }
