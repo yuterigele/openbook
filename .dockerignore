@@ -1,4 +1,7 @@
 .git
+.codex-gocache
+.codex-modcache
+.codex
 .idea
 .vscode
 .env
@@ -15,6 +18,7 @@ docs/career
 *.log
 coverage.html
 coverage.txt
+artifacts
 chatwitheino*
 openbook
 tmp
