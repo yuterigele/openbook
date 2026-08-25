@@ -42,3 +42,19 @@ docker compose --env-file .env.production.local -f docker-compose.yml up -d --bu
 6. 完成数据库备份、恢复演练和回滚镜像验证后再切换流量。
 
 仓库 CI 会执行完整 Go 测试、`go vet`、前端 Vitest、development/production Compose 配置校验和可部署镜像构建。发布提交必须先通过这些门禁。
+
+## 真实依赖并发演练
+
+阶段性发布前可以在隔离的 MySQL/Redis 实例上运行真实写路径演练。测试使用随机商户和顾客 ID，结束时清理该商户的通用预约记录，不向企业微信或模型发送请求：
+
+```powershell
+$env:MYSQL_HOST = "127.0.0.1"
+$env:MYSQL_PORT = "33060" # 使用 docker-compose.dev-ports.yml 时按实际映射调整
+$env:MYSQL_USER = "openbook"
+$env:MYSQL_DB = "chatwitheino"
+$env:REDIS_ADDR = "127.0.0.1:6379"
+# 预先在当前 PowerShell 会话安全注入 MYSQL_PASS，或改用 MYSQL_DSN；不要把密码写进脚本。
+go test -tags="mysql_integration redis_integration" ./lock ./storage -run "Test(RedisLock|MySQLRedis)" -count=1
+```
+
+该命令覆盖 Redis 看门狗续租、锁被替换后的安全中止、释放后再次获取，以及多个请求争抢同一员工/资源时 MySQL 预约、Allocation 和 Outbox 的最终数量。依赖不可用时测试会跳过或直接报告连接错误；不能把跳过当作通过。
