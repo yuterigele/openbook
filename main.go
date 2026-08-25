@@ -38,12 +38,14 @@ import (
 	cronpkg "github.com/yuterigele/openbook/cron"
 	"github.com/yuterigele/openbook/intent"
 	"github.com/yuterigele/openbook/internal/agent"
+	legacybooking "github.com/yuterigele/openbook/internal/booking/legacy"
 	adkstore "github.com/yuterigele/openbook/internal/einocommon/store"
 	lockpkg "github.com/yuterigele/openbook/lock"
 	"github.com/yuterigele/openbook/mem"
 	"github.com/yuterigele/openbook/msgops"
 	"github.com/yuterigele/openbook/notify"
 	"github.com/yuterigele/openbook/pool"
+	"github.com/yuterigele/openbook/sdk/booking/v1alpha1"
 	"github.com/yuterigele/openbook/sensitive"
 	"github.com/yuterigele/openbook/server"
 	"github.com/yuterigele/openbook/storage"
@@ -197,7 +199,23 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		injectSensitiveLLMFallback(cm)
 	}
 
-	agent, err := agent.BuildTyped[M](ctx, intentTool)
+	var bookingApplications []v1alpha1.Application
+	if os.Getenv("BOOKING_APPLICATION_RUNTIME") == "1" {
+		bookingApplications = append(bookingApplications, legacybooking.NewApplication(func(resolveCtx context.Context, trusted v1alpha1.ExecutionContext) (legacybooking.CustomerIdentity, error) {
+			customer, err := storage.GetCustomerByID(resolveCtx, trusted.CustomerID)
+			if err != nil {
+				return legacybooking.CustomerIdentity{}, err
+			}
+			return legacybooking.CustomerIdentity{
+				Name:           customer.Name,
+				Phone:          customer.Phone,
+				OpenID:         customer.WechatOpenID,
+				ExternalUserID: customer.ExternalUserID,
+			}, nil
+		}))
+		log.Printf("[booking] Application runtime enabled; trusted customer context is required for customer operations")
+	}
+	agent, err := agent.BuildTyped[M](ctx, intentTool, bookingApplications...)
 	if err != nil {
 		log.Fatalf("failed to build agent: %v", err)
 	}
