@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -21,16 +22,23 @@ func TestNewInboundValidatesStableEnvelope(t *testing.T) {
 }
 
 func TestInboundRejectsUntrustedIdentityFieldsByShape(t *testing.T) {
-	message, err := NewInbound("msg-1", "session-1", KindWebChat, `{"customer_id":"attacker"}`, time.Now())
+	message, err := NewInbound("msg-1", "session-1", KindWebChat, "hello", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.MessageID == "" || message.SessionID == "" {
-		t.Fatal("message metadata was lost")
+	payload, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
 	}
 	// InboundMessage 没有身份字段；身份只能从独立的执行上下文取得。
-	if strings.Contains(string(message.Text), "merchant_id") {
-		t.Fatal("test input should only exercise message text")
+	for _, forbidden := range []string{"merchant_id", "location_id", "customer_id", "principal_id", "permissions", "trace_id", "idempotency_key"} {
+		if _, exists := fields[forbidden]; exists {
+			t.Fatalf("inbound message must not carry trusted field %q: %s", forbidden, payload)
+		}
 	}
 }
 
