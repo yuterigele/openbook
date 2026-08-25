@@ -18,7 +18,7 @@ go run ./cmd/openbook restore -file ./backups/openbook-YYYYMMDD-HHMMSS.sql -yes
 go build -ldflags "-X main.version=v1.0.0 -X main.commit=$(git rev-parse --short HEAD)" ./cmd/openbook
 ```
 
-`doctor` 只检查环境变量是否存在、运行模式和是否使用示例占位密码，不输出 DSN、API Key、企业微信 Token 或 AES Key，也不会自动迁移数据库。检查结果分为：
+`doctor` 只检查环境变量是否存在、运行模式和是否使用示例占位密码，不输出 DSN、API Key、企业微信 Token 或 AES Key，也不会自动迁移数据库。`APP_ENV=production` 时还会阻断 Stub 模型、缺失 Redis/企业微信凭据、非 `real` 回复模式、弱管理员密码和缺失 JWT 密钥。检查结果分为：
 
 - `PASS`：配置存在且满足当前检查；
 - `WARN`：可以运行，但不适合直接作为生产配置；

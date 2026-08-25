@@ -45,6 +45,55 @@ func TestRunDoctorDoesNotPrintSecretValues(t *testing.T) {
 	}
 }
 
+func TestRunDoctorRejectsUnsafeProductionConfiguration(t *testing.T) {
+	env := map[string]string{
+		"APP_ENV":                         "production",
+		"MYSQL_DSN":                       "configured",
+		"OPENBOOK_LLM_CHAIN":              "stub",
+		"AGENT_REPLY_MODE":                "mock",
+		"DEFAULT_ADMIN_PASSWORD":          "change-me-before-exposing",
+		"DEFAULT_PLATFORM_ADMIN_PASSWORD": "",
+		"JWT_SECRET":                      "",
+	}
+	var output bytes.Buffer
+	if code := RunDoctor(&output, func(key string) string { return env[key] }); code != 1 {
+		t.Fatalf("unsafe production configuration should fail: code=%d output=%s", code, output.String())
+	}
+	for _, expected := range []string{"生产环境必须配置 REDIS_ADDR", "生产环境不能使用 stub", "生产环境必须完整配置企业微信凭据", "生产环境必须将 AGENT_REPLY_MODE 设置为 real", "生产环境必须设置非示例默认管理员密码", "生产环境必须设置非示例 JWT_SECRET"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("doctor output missing %q: %s", expected, output.String())
+		}
+	}
+}
+
+func TestRunDoctorAcceptsSafeProductionConfigurationWithoutPrintingSecrets(t *testing.T) {
+	secrets := map[string]string{
+		"APP_ENV":                         "production",
+		"MYSQL_DSN":                       "user:db-secret@tcp(mysql.internal:3306)/booking",
+		"REDIS_ADDR":                      "redis.internal:6379",
+		"OPENBOOK_LLM_CHAIN":              "deepseek",
+		"DEEPSEEK_API_KEY":                "model-secret",
+		"AGENT_REPLY_MODE":                "real",
+		"DEFAULT_ADMIN_PASSWORD":          "admin-random-value",
+		"DEFAULT_PLATFORM_ADMIN_PASSWORD": "platform-random-value",
+		"JWT_SECRET":                      "jwt-random-value",
+		"WECOM_CORP_ID":                   "corp",
+		"WECOM_AGENT_ID":                  "agent",
+		"WECOM_SECRET":                    "wecom-secret",
+		"WECOM_TOKEN":                     "wecom-token",
+		"WECOM_ENCODING_AES_KEY":          "wecom-aes-key",
+	}
+	var output bytes.Buffer
+	if code := RunDoctor(&output, func(key string) string { return secrets[key] }); code != 0 {
+		t.Fatalf("safe production configuration should pass: code=%d output=%s", code, output.String())
+	}
+	for _, secret := range []string{"db-secret", "model-secret", "wecom-secret", "jwt-random-value"} {
+		if strings.Contains(output.String(), secret) {
+			t.Fatalf("doctor output leaked %q: %s", secret, output.String())
+		}
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	originalVersion, originalCommit, originalBuildTime := version, commit, buildTime
 	defer func() { version, commit, buildTime = originalVersion, originalCommit, originalBuildTime }()
