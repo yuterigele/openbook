@@ -173,6 +173,9 @@ func (a *Application) executeReschedule(ctx context.Context, trusted v1alpha1.Ex
 	if _, err := a.cancelBooking(toolContext, string(cancelArguments)); err != nil {
 		return withLegacyError(response, err)
 	}
+	if err := verifyLegacyCancellation(a.getAppointment, toolContext, params.AppointmentID); err != nil {
+		return withErrorResult(response, err)
+	}
 
 	createArguments := map[string]string{
 		"barber_name": params.BarberName,
@@ -215,7 +218,33 @@ func (a *Application) executeCancel(ctx context.Context, trusted v1alpha1.Execut
 	if err != nil {
 		return withLegacyError(response, err)
 	}
+	if err := verifyLegacyCancellation(a.getAppointment, toolContext, appointmentIDFromParameters(call.Parameters)); err != nil {
+		return withErrorResult(response, err)
+	}
 	return withToolResult(response, toolkit.NewOK("booking.cancelled", output, map[string]any{"message": output}))
+}
+
+func verifyLegacyCancellation(getAppointment readRunner, ctx context.Context, appointmentID string) error {
+	if getAppointment == nil || appointmentID == "" {
+		return v1alpha1.NewError(v1alpha1.ErrorCodeUnknown, "cancellation outcome is not confirmed")
+	}
+	arguments, _ := json.Marshal(map[string]string{"appointment_id": appointmentID})
+	output, err := getAppointment(ctx, string(arguments))
+	if err != nil {
+		return v1alpha1.WrapError(v1alpha1.ErrorCodeUnknown, "cancellation outcome is not confirmed", err)
+	}
+	if !strings.Contains(output, "状态：cancelled") && !strings.Contains(output, "状态:cancelled") {
+		return v1alpha1.NewError(v1alpha1.ErrorCodeUnknown, "cancellation outcome is not confirmed")
+	}
+	return nil
+}
+
+func appointmentIDFromParameters(parameters json.RawMessage) string {
+	var params struct {
+		AppointmentID string `json:"appointment_id"`
+	}
+	_ = json.Unmarshal(parameters, &params)
+	return params.AppointmentID
 }
 
 func (a *Application) executeRead(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response, runner readRunner, code string) (v1alpha1.Response, error) {

@@ -119,7 +119,10 @@ func TestApplicationRescheduleVerifiesCancelsAndCreatesWithTrustedIdentity(t *te
 		},
 		getAppointment: func(ctx context.Context, arguments string) (string, error) {
 			calls = append(calls, "get:"+tools.ShopIDFromCtx(ctx)+":"+arguments)
-			return "当前预约真实状态", nil
+			if len(calls) == 1 {
+				return "当前状态：\n状态：active", nil
+			}
+			return "当前状态：\n状态：cancelled", nil
 		},
 		cancelBooking: func(ctx context.Context, arguments string) (string, error) {
 			calls = append(calls, "cancel:"+tools.OpenIDFromCtx(ctx)+":"+arguments)
@@ -138,11 +141,11 @@ func TestApplicationRescheduleVerifiesCancelsAndCreatesWithTrustedIdentity(t *te
 	if err != nil {
 		t.Fatalf("reschedule failed: %v", err)
 	}
-	if len(calls) != 3 || !strings.HasPrefix(calls[0], "get:location-trusted:") || !strings.HasPrefix(calls[1], "cancel:openid-trusted:") || !strings.HasPrefix(calls[2], "create:external-trusted:") {
+	if len(calls) != 4 || !strings.HasPrefix(calls[0], "get:location-trusted:") || !strings.HasPrefix(calls[1], "cancel:openid-trusted:") || !strings.HasPrefix(calls[2], "get:location-trusted:") || !strings.HasPrefix(calls[3], "create:external-trusted:") {
 		t.Fatalf("unexpected reschedule call chain: %#v", calls)
 	}
-	if !strings.Contains(calls[2], `"customer":"可信顾客"`) || !strings.Contains(calls[2], `"phone":"13800000001"`) {
-		t.Fatalf("create step did not use trusted identity: %s", calls[2])
+	if !strings.Contains(calls[3], `"customer":"可信顾客"`) || !strings.Contains(calls[3], `"phone":"13800000001"`) {
+		t.Fatalf("create step did not use trusted identity: %s", calls[3])
 	}
 	if !strings.Contains(string(response.Data), "booking.rescheduled") {
 		t.Fatalf("reschedule result missing stable code: %s", response.Data)
@@ -154,9 +157,11 @@ func TestApplicationRescheduleDoesNotClaimSuccessAfterCreateFailure(t *testing.T
 		resolveCustomer: func(context.Context, v1alpha1.ExecutionContext) (CustomerIdentity, error) {
 			return CustomerIdentity{Name: "可信顾客", Phone: "13800000001", OpenID: "openid-trusted"}, nil
 		},
-		getAppointment: func(context.Context, string) (string, error) { return "ok", nil },
-		cancelBooking:  func(context.Context, string) (string, error) { return "cancelled", nil },
-		createBooking:  func(context.Context, string) (string, error) { return "", context.DeadlineExceeded },
+		getAppointment: func(_ context.Context, _ string) (string, error) {
+			return "当前状态：\n状态：cancelled", nil
+		},
+		cancelBooking: func(context.Context, string) (string, error) { return "cancelled", nil },
+		createBooking: func(context.Context, string) (string, error) { return "", context.DeadlineExceeded },
 	}
 	response, err := app.Execute(context.Background(), validWriteContext(), v1alpha1.Call{
 		Operation:  v1alpha1.OperationRescheduleBooking,
@@ -231,6 +236,9 @@ func TestApplicationCancelUsesTrustedCustomerIdentity(t *testing.T) {
 			}
 			return "预约号：OB-TEST 已成功取消。", nil
 		},
+		getAppointment: func(context.Context, string) (string, error) {
+			return "当前状态：\n状态：cancelled", nil
+		},
 	}
 
 	response, err := app.Execute(context.Background(), validCancelContext(), v1alpha1.Call{
@@ -245,6 +253,30 @@ func TestApplicationCancelUsesTrustedCustomerIdentity(t *testing.T) {
 	}
 	if !strings.Contains(string(response.Data), "booking.cancelled") {
 		t.Fatalf("cancel result missing stable code: %s", response.Data)
+	}
+}
+
+func TestApplicationCancelDoesNotClaimSuccessWithoutPostWriteVerification(t *testing.T) {
+	app := &Application{
+		resolveCustomer: func(context.Context, v1alpha1.ExecutionContext) (CustomerIdentity, error) {
+			return CustomerIdentity{OpenID: "openid-trusted"}, nil
+		},
+		cancelBooking: func(context.Context, string) (string, error) {
+			return "预约号：OB-TEST 已成功取消。", nil
+		},
+		getAppointment: func(context.Context, string) (string, error) {
+			return "当前状态：\n状态：active", nil
+		},
+	}
+	response, err := app.Execute(context.Background(), validCancelContext(), v1alpha1.Call{
+		Operation:  v1alpha1.OperationCancelBooking,
+		Parameters: json.RawMessage(`{"appointment_id":"appt-1"}`),
+	})
+	if v1alpha1.CodeOf(err) != v1alpha1.ErrorCodeUnknown {
+		t.Fatalf("unverified cancellation should be unknown, got %v", err)
+	}
+	if strings.Contains(string(response.Data), "booking.cancelled") {
+		t.Fatalf("unverified cancellation must not claim success: %s", response.Data)
 	}
 }
 
