@@ -221,7 +221,7 @@ func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
 	if err := db.WithContext(ctx).Create(&admin).Error; err != nil {
 		return err
 	}
-	log.Printf("[storage] 种子 admin: %s / %s（请尽快改密码）", username, password)
+	log.Printf("[storage] 种子 admin: %s（密码已写入数据库，请按部署配置保管）", username)
 
 	// 3) v4.9: 种子 platform_admin 超管账号（跨店看所有数据）
 	//   - 默认用户名 platform / 密码 platform123
@@ -246,8 +246,7 @@ func seedShopFromEnv(ctx context.Context, db *gorm.DB) error {
 		if err := db.WithContext(ctx).Create(&padmin).Error; err != nil {
 			return err
 		}
-		log.Printf("[storage] 种子 platform_admin: %s / %s（v4.9 跨店超管，请尽快改密码）",
-			platformUsername, platformPassword)
+		log.Printf("[storage] 种子 platform_admin: %s（密码已写入数据库，请按部署配置保管）", platformUsername)
 	}
 
 	return nil

@@ -69,6 +69,6 @@ func main() {
 	fmt.Printf("  订阅:    %d 条（覆盖 3 个套餐）\n", stats.Subscriptions)
 	fmt.Printf("\n  登录:   http://localhost:38080/admin\n")
 	fmt.Printf("  用户名: 任意 [DEMO] 店 owner（看 shops 表）\n")
-	fmt.Printf("  密码:   admin123\n")
+	fmt.Printf("  密码:   使用 DEFAULT_ADMIN_PASSWORD 配置，不在日志中输出\n")
 	_ = time.Now // 时间戳占位
 }

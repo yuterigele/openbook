@@ -297,7 +297,7 @@ func stepPlatformAdmin(ctx context.Context, dryRun bool) error {
 	if err := storage.DB.WithContext(ctx).Create(&admin).Error; err != nil {
 		return fmt.Errorf("create platform_admin: %w", err)
 	}
-	fmt.Printf("(新建 %s / 密码 %s) ", username, password)
+	fmt.Printf("(新建 %s，密码来自部署配置) ", username)
 	return nil
 }
 
