@@ -45,6 +45,7 @@ import (
 	commontool "github.com/yuterigele/openbook/internal/einocommon/tool"
 	"github.com/yuterigele/openbook/mem"
 	"github.com/yuterigele/openbook/msgops"
+	"github.com/yuterigele/openbook/sdk/booking/v1alpha1"
 	"github.com/yuterigele/openbook/storage"
 	"github.com/yuterigele/openbook/tools"
 	"github.com/yuterigele/openbook/wecom"
@@ -647,7 +648,20 @@ func webSessionContext(sessionID string) context.Context {
 	ctx = tools.WithExternalUserID(ctx, identity)
 	ctx = storage.EnsureTraceID(ctx)
 	ctx = storage.WithAuditShop(ctx, "default")
-	return storage.WithAuditActor(ctx, storage.AuditActorAgent, "")
+	ctx = storage.WithAuditActor(ctx, storage.AuditActorAgent, "")
+	return withAgentExecutionContext(ctx, "default")
+}
+
+// withAgentExecutionContext 把旧系统的 shop_id 映射到 v1alpha1 的租户和门店字段。
+// 当前旧模型没有独立 merchant_id；顾客身份和幂等键由后续应用层在写操作前补齐。
+func withAgentExecutionContext(ctx context.Context, shopID string) context.Context {
+	return v1alpha1.WithExecutionContext(ctx, v1alpha1.ExecutionContext{
+		MerchantID:  shopID,
+		LocationID:  shopID,
+		PrincipalID: storage.AuditActorAgent,
+		Permissions: []v1alpha1.Permission{v1alpha1.PermissionBookingRead, v1alpha1.PermissionBookingWrite},
+		TraceID:     storage.TraceIDFromContext(ctx),
+	})
 }
 
 // makeGenInput returns the GenInput callback. It builds agent messages from
@@ -1722,6 +1736,7 @@ func (s *Server[M]) processAgentMessage(ctx context.Context, sess *mem.Session[M
 	ctx = storage.WithAuditActor(ctx, storage.AuditActorAgent, "")
 	ctx = storage.WithAuditShop(ctx, shopID)
 	traceID := storage.TraceIDFromContext(ctx)
+	ctx = withAgentExecutionContext(ctx, shopID)
 	rootSpanID := uuid.NewString()
 	rootSpanID = strings.ReplaceAll(rootSpanID, "-", "")[:16]
 	ctx = storage.WithSpanID(ctx, rootSpanID)
