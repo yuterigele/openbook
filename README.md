@@ -218,6 +218,7 @@ go test ./internal/agent ./server -count=1
 - [美业门店痛点分析](docs/product/美业门店痛点分析.md) — 目标用户与业务痛点
 - [架构说明](docs/架构说明.md) — 运行时链路与安全边界
 - [工程问题复盘](docs/engineering/工程问题复盘.md) — 真实问题、取舍与验证
+- [新增行业 Profile](docs/engineering/新增行业Profile.md) — 添加行业术语、服务、资源与契约测试
 - [CHANGELOG](docs/CHANGELOG.md) — 20+ 次版本迭代记录
 
 ## 技术栈
