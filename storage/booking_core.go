@@ -20,6 +20,8 @@ var (
 	ErrBookingIdempotencyConflict = errors.New("booking idempotency conflict")
 	// ErrBookingOutcomeUnknown 表示事务提交后无法完成最终记录核验。
 	ErrBookingOutcomeUnknown = errors.New("booking outcome unknown")
+	// ErrBookingNotCancellable 表示预约当前状态不允许顾客取消。
+	ErrBookingNotCancellable = errors.New("booking is not cancellable")
 )
 
 // BookingRecord 是通用预约内核的主记录，不替代旧 appointments 表。
@@ -161,6 +163,97 @@ func GetBookingForCustomer(ctx context.Context, merchantID, locationID, customer
 		return nil, err
 	}
 	return &record, nil
+}
+
+// CancelBookingForCustomer 在事务内取消属于可信顾客的预约，并记录幂等结果。
+func CancelBookingForCustomer(ctx context.Context, merchantID, locationID, customerID, bookingID, idempotencyKey string) (*BookingRecord, error) {
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	if merchantID == "" || locationID == "" || customerID == "" || bookingID == "" || idempotencyKey == "" {
+		return nil, domain.ErrInvalidOutcome
+	}
+	now := time.Now()
+	outcome, err := domain.NewPendingOutcome(uuid.NewString(), merchantID, locationID, customerID, "cancel_booking", idempotencyKey, now)
+	if err != nil {
+		return nil, err
+	}
+	outcomeRecord, err := CreatePendingOperationOutcome(ctx, outcome)
+	if err != nil {
+		if !errors.Is(err, ErrOperationOutcomeAlreadyExists) {
+			return nil, err
+		}
+		return replayCancelledOutcome(ctx, merchantID, locationID, customerID, idempotencyKey)
+	}
+
+	var cancelled BookingRecord
+	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ?", bookingID, merchantID, locationID, customerID).
+			First(&cancelled).Error; err != nil {
+			return err
+		}
+		if cancelled.Status != string(domain.BookingPending) && cancelled.Status != string(domain.BookingConfirmed) {
+			return ErrBookingNotCancellable
+		}
+		result := tx.WithContext(ctx).Model(&BookingRecord{}).
+			Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ? AND status IN ?", bookingID, merchantID, locationID, customerID, []string{string(domain.BookingPending), string(domain.BookingConfirmed)}).
+			Updates(map[string]any{"status": string(domain.BookingCancelled), "updated_at": time.Now()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrBookingNotCancellable
+		}
+		cancelled.Status = string(domain.BookingCancelled)
+		payload, err := json.Marshal(map[string]string{
+			"booking_id": bookingID, "merchant_id": merchantID, "location_id": locationID, "customer_id": customerID,
+		})
+		if err != nil {
+			return err
+		}
+		return tx.WithContext(ctx).Create(&BookingOutboxRecord{
+			ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: bookingID,
+			MerchantID: merchantID, LocationID: locationID, EventType: "booking.cancelled",
+			Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
+		}).Error
+	})
+	if err != nil {
+		if transitionErr := transitionCancellationFailure(ctx, outcomeRecord.ID, err, now); transitionErr != nil {
+			return nil, transitionErr
+		}
+		return nil, err
+	}
+	if _, err := TransitionOperationOutcome(ctx, outcomeRecord.ID, domain.OutcomePending, domain.OutcomeConfirmed, bookingID, time.Now()); err != nil {
+		return nil, ErrBookingOutcomeUnknown
+	}
+	verified, err := GetBookingForCustomer(ctx, merchantID, locationID, customerID, bookingID)
+	if err != nil || verified.Status != string(domain.BookingCancelled) {
+		return nil, ErrBookingOutcomeUnknown
+	}
+	return verified, nil
+}
+
+func replayCancelledOutcome(ctx context.Context, merchantID, locationID, customerID, idempotencyKey string) (*BookingRecord, error) {
+	record, err := GetOperationOutcomeByScopeAndKey(ctx, merchantID, locationID, customerID, "cancel_booking", idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	switch domain.OutcomeStatus(record.Status) {
+	case domain.OutcomeConfirmed:
+		return GetBookingForCustomer(ctx, merchantID, locationID, customerID, record.BookingID)
+	case domain.OutcomeRejected:
+		return nil, ErrBookingNotCancellable
+	default:
+		return nil, ErrBookingOutcomeUnknown
+	}
+}
+
+func transitionCancellationFailure(ctx context.Context, outcomeID string, cause error, checkedAt time.Time) error {
+	if _, err := TransitionOperationOutcome(ctx, outcomeID, domain.OutcomePending, domain.OutcomeRejected, "", checkedAt); err != nil {
+		return ErrBookingOutcomeUnknown
+	}
+	return cause
 }
 
 func lockedOccupiedBookings(ctx context.Context, tx *gorm.DB, candidate domain.Booking) ([]domain.Occupancy, error) {
