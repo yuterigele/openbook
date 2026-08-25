@@ -39,6 +39,7 @@ type Application struct {
 	resolveCustomer CustomerResolver
 	querySchedule   queryRunner
 	createBooking   createRunner
+	cancelBooking   createRunner
 	listServices    readRunner
 	listStaff       readRunner
 }
@@ -52,6 +53,9 @@ func NewApplication(resolveCustomer CustomerResolver) *Application {
 		},
 		createBooking: func(ctx context.Context, arguments string) (string, error) {
 			return (&tools.CreateAppointmentTool{}).InvokableRun(ctx, arguments)
+		},
+		cancelBooking: func(ctx context.Context, arguments string) (string, error) {
+			return (&tools.CancelAppointmentTool{}).InvokableRun(ctx, arguments)
 		},
 		listServices: func(ctx context.Context, arguments string) (string, error) {
 			return (&tools.ListServicesTool{}).InvokableRun(ctx, arguments)
@@ -105,9 +109,37 @@ func (a *Application) Execute(ctx context.Context, trusted v1alpha1.ExecutionCon
 
 	case v1alpha1.OperationCreateBooking:
 		return a.executeCreate(ctx, trusted, call, response)
+
+	case v1alpha1.OperationCancelBooking:
+		return a.executeCancel(ctx, trusted, call, response)
 	default:
 		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidOperation, "legacy adapter only supports availability and create booking"))
 	}
+}
+
+func (a *Application) executeCancel(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response) (v1alpha1.Response, error) {
+	if a == nil || a.cancelBooking == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "cancel adapter is not configured"))
+	}
+	if a.resolveCustomer == nil {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "customer resolver is required"))
+	}
+	identity, err := a.resolveCustomer(ctx, trusted)
+	if err != nil {
+		return withErrorResult(response, normalizeLegacyError(err))
+	}
+	if identity.OpenID == "" && identity.ExternalUserID == "" {
+		return withErrorResult(response, v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "trusted customer identity is incomplete"))
+	}
+
+	toolContext := tools.WithShopID(ctx, trusted.LocationID)
+	toolContext = tools.WithOpenID(toolContext, identity.OpenID)
+	toolContext = tools.WithExternalUserID(toolContext, identity.ExternalUserID)
+	output, err := a.cancelBooking(toolContext, string(call.Parameters))
+	if err != nil {
+		return withLegacyError(response, err)
+	}
+	return withToolResult(response, toolkit.NewOK("booking.cancelled", output, map[string]any{"message": output}))
 }
 
 func (a *Application) executeRead(ctx context.Context, trusted v1alpha1.ExecutionContext, call v1alpha1.Call, response v1alpha1.Response, runner readRunner, code string) (v1alpha1.Response, error) {

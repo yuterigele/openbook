@@ -123,6 +123,48 @@ func TestApplicationCreateOverridesModelCustomerIdentity(t *testing.T) {
 	}
 }
 
+func TestApplicationCancelUsesTrustedCustomerIdentity(t *testing.T) {
+	var capturedShopID, capturedOpenID, capturedExternalID string
+	app := &Application{
+		resolveCustomer: func(_ context.Context, trusted v1alpha1.ExecutionContext) (CustomerIdentity, error) {
+			if trusted.IdempotencyKey != "cancel-idempotency-1" {
+				t.Fatalf("resolver received wrong idempotency key: %q", trusted.IdempotencyKey)
+			}
+			return CustomerIdentity{OpenID: "openid-trusted", ExternalUserID: "external-trusted"}, nil
+		},
+		cancelBooking: func(ctx context.Context, arguments string) (string, error) {
+			capturedShopID = tools.ShopIDFromCtx(ctx)
+			capturedOpenID = tools.OpenIDFromCtx(ctx)
+			capturedExternalID = tools.ExternalUserIDFromCtx(ctx)
+			if arguments != `{"appointment_id":"appt-1","reason":"临时有事"}` {
+				t.Fatalf("unexpected cancel arguments: %s", arguments)
+			}
+			return "预约号：OB-TEST 已成功取消。", nil
+		},
+	}
+
+	response, err := app.Execute(context.Background(), validCancelContext(), v1alpha1.Call{
+		Operation:  v1alpha1.OperationCancelBooking,
+		Parameters: json.RawMessage(`{"appointment_id":"appt-1","reason":"临时有事"}`),
+	})
+	if err != nil {
+		t.Fatalf("cancel failed: %v", err)
+	}
+	if capturedShopID != "location-trusted" || capturedOpenID != "openid-trusted" || capturedExternalID != "external-trusted" {
+		t.Fatalf("trusted identity was not injected: shop=%q open=%q external=%q", capturedShopID, capturedOpenID, capturedExternalID)
+	}
+	if !strings.Contains(string(response.Data), "booking.cancelled") {
+		t.Fatalf("cancel result missing stable code: %s", response.Data)
+	}
+}
+
+func validCancelContext() v1alpha1.ExecutionContext {
+	context := validReadContext()
+	context.CustomerID = "customer-trusted"
+	context.IdempotencyKey = "cancel-idempotency-1"
+	return context
+}
+
 func TestApplicationRejectsTrustedFieldsInBusinessParameters(t *testing.T) {
 	app := NewApplicationForTest(nil, func(context.Context, string) (string, error) {
 		t.Fatal("runner should not be called")
