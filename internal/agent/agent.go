@@ -32,6 +32,7 @@ import (
 
 	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/helpers"
+	"github.com/yuterigele/openbook/sdk/booking/v1alpha1"
 )
 
 // buildAgentInstruction 构造精简版系统提示词。确定性校验由工具层负责。
@@ -68,7 +69,7 @@ func buildAgentInstruction() string {
 //
 // M 是 eino 的消息类型：聊天使用 *schema.Message，工具循环使用
 // *schema.AgenticMessage；调用方在边界处选择具体类型。
-func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool) (adk.TypedResumableAgent[M], error) {
+func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool, applications ...v1alpha1.Application) (adk.TypedResumableAgent[M], error) {
 	cm, used, chain, err := chatmodel.NewModelWithFallback[M](ctx)
 	if err != nil {
 		return nil, err
@@ -81,7 +82,7 @@ func BuildTyped[M adk.MessageType](ctx context.Context, intentTool tool.BaseTool
 		}
 	}
 
-	catalog, err := newToolCatalog(intentTool)
+	catalog, err := newToolCatalog(intentTool, applications...)
 	if err != nil {
 		return nil, err
 	}

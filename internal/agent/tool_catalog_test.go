@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -80,9 +81,46 @@ func TestToolCatalogRejectsRuntimeNameMismatchAndDuplicate(t *testing.T) {
 	}
 }
 
+func TestToolCatalogRoutesBusinessToolThroughApplication(t *testing.T) {
+	application := &fakeBookingApplication{}
+	catalog, err := newToolCatalog(intent.NewClassifyTool(intent.NewClassifier()), application)
+	if err != nil {
+		t.Fatalf("catalog creation failed: %v", err)
+	}
+	create := catalog.tools["create_appointment"].(tool.InvokableTool)
+	trusted := v1alpha1.WithExecutionContext(context.Background(), v1alpha1.ExecutionContext{
+		MerchantID:     "merchant-1",
+		LocationID:     "location-1",
+		CustomerID:     "customer-1",
+		TraceID:        "trace-1",
+		IdempotencyKey: "idem-1",
+		Permissions:    []v1alpha1.Permission{v1alpha1.PermissionBookingWrite},
+	})
+	output, err := create.InvokableRun(trusted, `{"service":"剪发"}`)
+	if err != nil {
+		t.Fatalf("application-backed tool failed: %v", err)
+	}
+	if output == "" || application.operation != v1alpha1.OperationCreateBooking || application.parameters != `{"service":"剪发"}` {
+		t.Fatalf("application call was not forwarded: operation=%q parameters=%q output=%q", application.operation, application.parameters, output)
+	}
+}
+
 type fakeInvokableTool struct {
 	name   string
 	output string
+}
+
+type fakeBookingApplication struct {
+	operation  v1alpha1.Operation
+	parameters string
+}
+
+func (a *fakeBookingApplication) Execute(_ context.Context, _ v1alpha1.ExecutionContext, call v1alpha1.Call) (v1alpha1.Response, error) {
+	a.operation = call.Operation
+	a.parameters = string(call.Parameters)
+	result := toolkit.NewOK("booking.created", "预约已创建", map[string]any{"booking_id": "booking-1"})
+	payload, _ := json.Marshal(result)
+	return v1alpha1.Response{Operation: call.Operation, Data: payload}, nil
 }
 
 func (t *fakeInvokableTool) Info(context.Context) (*schema.ToolInfo, error) {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -25,6 +26,48 @@ type catalogTool struct {
 	runtime    tool.InvokableTool
 }
 
+// applicationTool 将业务工具调用转发到预约应用端口，不让 Runtime 直接依赖旧工具实现。
+type applicationTool struct {
+	descriptor  toolkit.Descriptor
+	application v1alpha1.Application
+}
+
+func (t *applicationTool) Info(context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: t.descriptor.Name}, nil
+}
+
+func (t *applicationTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if t == nil || t.application == nil {
+		return "", v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "booking application is not configured")
+	}
+	executionContext, ok := v1alpha1.ExecutionContextFromContext(ctx)
+	if !ok {
+		return "", v1alpha1.NewError(v1alpha1.ErrorCodeInvalidContext, "trusted execution context is required")
+	}
+	response, err := t.application.Execute(ctx, executionContext, v1alpha1.Call{
+		Operation:  t.descriptor.Operation,
+		Parameters: json.RawMessage(argumentsInJSON),
+	})
+	if response.Operation != t.descriptor.Operation {
+		return "", v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "booking application returned an unexpected operation")
+	}
+	if len(response.Data) == 0 {
+		if err != nil {
+			return "", err
+		}
+		return "", v1alpha1.NewError(v1alpha1.ErrorCodeUnavailable, "booking application returned empty data")
+	}
+	var result toolkit.Result
+	if decodeErr := json.Unmarshal(response.Data, &result); decodeErr != nil {
+		return "", v1alpha1.WrapError(v1alpha1.ErrorCodeUnavailable, "booking application returned invalid tool result", decodeErr)
+	}
+	if validateErr := result.Validate(t.descriptor.Budget); validateErr != nil {
+		return "", v1alpha1.WrapError(v1alpha1.ErrorCodeUnavailable, "booking application returned invalid tool result", validateErr)
+	}
+	_ = opts
+	return string(response.Data), err
+}
+
 func (t *catalogTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return t.runtime.Info(ctx)
 }
@@ -44,7 +87,7 @@ func (t *catalogTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 }
 
 // newToolCatalog 创建当前 Agent 允许使用的工具集合。
-func newToolCatalog(intentTool tool.BaseTool) (*toolCatalog, error) {
+func newToolCatalog(intentTool tool.BaseTool, applications ...v1alpha1.Application) (*toolCatalog, error) {
 	if intentTool == nil {
 		return nil, fmt.Errorf("classify_intent tool is required")
 	}
@@ -70,11 +113,23 @@ func newToolCatalog(intentTool tool.BaseTool) (*toolCatalog, error) {
 		{writeDescriptor("handoff_to_human", "将顾客请求转交人工客服", v1alpha1.OperationHandoffToHuman), &tools.HandoffToHumanTool{}},
 	}
 	for _, registration := range registrations {
+		if len(applications) > 0 && applications[0] != nil && applicationToolName(registration.descriptor.Name) {
+			registration.runtime = &applicationTool{descriptor: registration.descriptor, application: applications[0]}
+		}
 		if err := catalog.register(registration.descriptor, registration.runtime); err != nil {
 			return nil, err
 		}
 	}
 	return catalog, nil
+}
+
+func applicationToolName(name string) bool {
+	switch name {
+	case "list_services", "list_barbers", "query_schedule", "create_appointment", "cancel_appointment", "list_my_bookings":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *toolCatalog) register(descriptor toolkit.Descriptor, runtimeTool tool.BaseTool) error {
