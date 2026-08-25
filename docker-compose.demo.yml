@@ -1,0 +1,95 @@
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: chatwitheino
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+      MYSQL_APP_PASSWORD: openbook-demo-local
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - demo_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  db-bootstrap:
+    image: mysql:8.0
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_APP_PASSWORD: openbook-demo-local
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mysql -hmysql -uroot -p"$$MYSQL_ROOT_PASSWORD" <<SQL
+        CREATE USER IF NOT EXISTS 'openbook'@'%' IDENTIFIED BY '$$MYSQL_APP_PASSWORD';
+        ALTER USER 'openbook'@'%' IDENTIFIED BY '$$MYSQL_APP_PASSWORD';
+        GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON chatwitheino.* TO 'openbook'@'%';
+        FLUSH PRIVILEGES;
+        SQL
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: openbook
+      MYSQL_PASS: openbook-demo-local
+      MYSQL_DB: chatwitheino
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      MESSAGE_KIND: message
+      OPENBOOK_LLM_CHAIN: stub
+      AGENT_REPLY_MODE: mock
+      APP_ENV: development
+      REDIS_REQUIRED: "0"
+      SMS_VERIFICATION_ENABLED: "0"
+      DEFAULT_SHOP_ID: demo-shop
+      DEFAULT_SHOP_NAME: OpenBook 演示店
+      DEFAULT_ADMIN_USERNAME: admin
+      DEFAULT_ADMIN_PASSWORD: demo-admin-change-me
+      DEFAULT_PLATFORM_ADMIN_USERNAME: platform
+      DEFAULT_PLATFORM_ADMIN_PASSWORD: demo-platform-change-me
+      PORT: "38080"
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:38080:38080"
+    volumes:
+      - demo_app_data:/app/data
+
+volumes:
+  demo_mysql_data:
+  demo_app_data:

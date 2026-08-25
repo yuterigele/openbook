@@ -1,0 +1,1 @@
+{"schema_version":"tool.result.v1","status":"ok","code":"availability.found","summary":"8 月 28 日下午有 3 个可预约时段","facts":{"date":"2026-08-28","slots":[{"display":"8 月 28 日 14:00-15:00","end_at":"2026-08-28T15:00:00+08:00","start_at":"2026-08-28T14:00:00+08:00","timezone":"Asia/Shanghai"}]},"suggested_actions":["选择时段","更换服务人员"]}

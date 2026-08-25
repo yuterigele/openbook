@@ -55,6 +55,8 @@ Agent：识别日期与意图 → 查询可约时段 → 创建预约 → 写入
 
 - `main.go`、`server/`：应用启动、HTTP 接口、会话处理、限流与回复流程。
 - `internal/agent/`、`tools/`：Agent 编排及受限的预约业务工具。
+- `sdk/`、`profiles/`：版本化扩展契约与 Hair/Beauty 参考 Profile。
+- `internal/booking/`：预约领域规则和迁移期应用适配器。
 - `storage/`、`lock/`：MySQL 持久化、Redis 锁、事务与租户/归属校验。
 - `chatmodel/`、`intent/`、`sensitive/`：模型适配与降级、意图识别、输入保护。
 - `wecom/`、`cron/`、`notify/`：企业微信、定时任务与通知。
@@ -129,6 +131,22 @@ docker compose up --build
 打开 `http://127.0.0.1:38080` 体验聊天页，商户后台为 `http://127.0.0.1:38080/admin`。Compose 默认 `AGENT_REPLY_MODE=mock`，回复只写入事件记录，不会发送到企业微信。
 
 Compose 从宿主 `.env` 注入其 `environment:` 明确列出的变量；修改 `.env` 后执行 `docker compose up -d --force-recreate app`。
+
+### 无模型凭据的 Stub 演示
+
+如果只想体验 Web Chat 界面和默认演示数据，不需要准备任何模型或企业微信凭据：
+
+```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+这个文件只启动 MySQL、Redis、数据库初始化和 OpenBook 应用，并固定使用 `OPENBOOK_LLM_CHAIN=stub` 与 `AGENT_REPLY_MODE=mock`。Stub 模型只提供安全的聊天降级，不调用预约工具或写入预约；应用首次启动会幂等创建演示店、Tony/Kevin 和默认服务目录，便于查看管理端和后续接入真实模型。聊天回复记录在本地事件日志，不会发送到企业微信。访问 `http://127.0.0.1:38080`，后台账号为 `admin`，密码为 `demo-admin-change-me`。该密码只适用于绑定本机端口的 Demo，不能用于公网或生产环境。
+
+停止并删除 Demo 容器及其演示数据卷：
+
+```bash
+docker compose -f docker-compose.demo.yml down -v
+```
 
 生产环境请在其未提交的 `.env` 中设置：
 
