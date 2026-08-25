@@ -1,0 +1,5 @@
+# 生产部署使用已构建的不可变镜像，不在部署机上从源码构建。
+services:
+  app:
+    build: !reset null
+    image: ${OPENBOOK_IMAGE:-openbook-app:local}

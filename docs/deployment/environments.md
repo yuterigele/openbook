@@ -58,3 +58,18 @@ go test -tags="mysql_integration redis_integration" ./lock ./storage -run "Test(
 ```
 
 该命令覆盖 Redis 看门狗续租、锁被替换后的安全中止、释放后再次获取，以及多个请求争抢同一员工/资源时 MySQL 预约、Allocation 和 Outbox 的最终数量。依赖不可用时测试会跳过或直接报告连接错误；不能把跳过当作通过。
+
+## 生产镜像升级与回滚
+
+生产部署使用 `docker-compose.production.yml` 覆盖源码 `build`，只启动已准备好的 `OPENBOOK_IMAGE`。发布前先完成备份、恢复演练和数据库迁移兼容性检查，再执行：
+
+```bash
+export COMPOSE_ENV_FILE=.env.production.local
+bash scripts/compose-release.sh deploy \
+  registry.example.com/openbook:2026-08-26-c5b9065 \
+  registry.example.com/openbook:previous
+```
+
+脚本会拉取目标镜像、启动 MySQL/Redis/初始化任务/app 并检查 HTTP 健康；新镜像不健康时自动尝试 previous-image，恢复健康后仍以非零状态退出，要求发布系统记录事故。也可以单独执行 `rollback <previous-image>`。设置 `OPENBOOK_PULL_IMAGE=0` 可用于部署机已缓存镜像的离线演练。
+
+回滚只替换应用镜像，不会自动逆向数据库迁移。若新版本已经执行不可逆迁移，必须进入维护窗口，按备份恢复/反向迁移方案处理数据，并核对迁移报告后再切流；不能仅切回旧镜像并宣称完成回滚。

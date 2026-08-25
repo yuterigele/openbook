@@ -56,8 +56,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate production Compose
         run: docker compose --env-file .env.example -f docker-compose.yml config -q
+      - name: Validate immutable-image Compose
+        run: docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.production.yml config -q
       - name: Validate development Compose
         run: docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.dev-ports.yml config -q
+      - name: Check release script
+        run: bash -n scripts/compose-release.sh
       - name: Build deployable images
         run: docker compose --env-file .env.example -f docker-compose.yml build app feishu-alert-bridge
       - name: Start Compose smoke stack
