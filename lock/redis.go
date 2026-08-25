@@ -4,8 +4,6 @@ package lock
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -261,48 +259,8 @@ func (l *Lock) stop() {
 //   - 获取成功后看门狗约每 ttl/3 校验 token 并续租
 //   - wait 默认 1.5s 内重试
 func AcquireAppointmentLock(ctx context.Context, barberID, date, timeStr string) (*Lock, error) {
-	if IsReadOnly() {
-		return nil, ErrRedisUnavailable
-	}
-	if Client == nil {
-		if redisLockRequired() {
-			return nil, ErrRedisUnavailable
-		}
-		// 开发/测试允许依靠数据库 active_slot_key 唯一约束继续运行。
-		return &Lock{}, nil
-	}
 	key := fmt.Sprintf("lock:appt:%s:%s:%s", barberID, date, timeStr)
-	ttl := appointmentLockTTL()
-	wait := 1500 * time.Millisecond
-	deadline := time.Now().Add(wait)
-	tokenBytes := make([]byte, 16)
-	_, _ = rand.Read(tokenBytes)
-	token := hex.EncodeToString(tokenBytes)
-
-	for {
-		ok, err := Client.SetNX(ctx, key, token, ttl).Result()
-		if err != nil {
-			return nil, fmt.Errorf("redis SetNX: %w", err)
-		}
-		if ok {
-			l := &Lock{
-				key: key, token: token, ttl: ttl, client: Client,
-				stopCh: make(chan struct{}), lostCh: make(chan struct{}),
-			}
-			l.startWatchdog()
-			return l, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, ErrLockNotAcquired
-		}
-		timer := time.NewTimer(50 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
+	return acquireLockKey(ctx, key)
 }
 
 func appointmentLockTTL() time.Duration {
