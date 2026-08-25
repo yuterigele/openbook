@@ -77,6 +77,46 @@ func (s Service) IntervalAt(startAt time.Time) (Interval, error) {
 	return NewServiceInterval(startAt, s.Duration, s.BufferBefore, s.BufferAfter)
 }
 
+// ValidateResources 校验服务声明的资源需求与实际分配的资源逐项匹配。
+func (s Service) ValidateResources(resources []Resource) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if len(resources) != len(s.ResourceRequirements) {
+		return fmt.Errorf("%w: resource allocation count does not match service requirements", ErrInvalidEntity)
+	}
+	required := make(map[string]int, len(s.ResourceRequirements))
+	for _, requirement := range s.ResourceRequirements {
+		required[requirement.Kind]++
+	}
+	seen := make(map[string]struct{}, len(resources))
+	for _, resource := range resources {
+		if err := resource.Validate(); err != nil {
+			return err
+		}
+		if !resource.Active {
+			return fmt.Errorf("%w: resource is inactive", ErrInvalidEntity)
+		}
+		if err := ensureSameScope(s.MerchantID, s.LocationID, resource.MerchantID, resource.LocationID); err != nil {
+			return err
+		}
+		if _, exists := seen[resource.ID]; exists {
+			return fmt.Errorf("%w: resource is allocated more than once", ErrInvalidEntity)
+		}
+		seen[resource.ID] = struct{}{}
+		if required[resource.Kind] == 0 {
+			return fmt.Errorf("%w: resource kind %q is not required", ErrInvalidEntity, resource.Kind)
+		}
+		required[resource.Kind]--
+	}
+	for kind, remaining := range required {
+		if remaining != 0 {
+			return fmt.Errorf("%w: resource kind %q is not fully allocated", ErrInvalidEntity, kind)
+		}
+	}
+	return nil
+}
+
 // Staff 是可执行服务的人员定义。
 type Staff struct {
 	ID         string
@@ -166,6 +206,9 @@ func NewBooking(id, merchantID, locationID, customerID, idempotencyKey string, s
 	}
 	if err := staff.Validate(); err != nil {
 		return Booking{}, err
+	}
+	if !service.Active || !staff.Active {
+		return Booking{}, fmt.Errorf("%w: inactive service or staff cannot be booked", ErrInvalidEntity)
 	}
 	if err := ensureSameScope(merchantID, locationID, service.MerchantID, service.LocationID); err != nil {
 		return Booking{}, err

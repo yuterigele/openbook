@@ -37,6 +37,39 @@ func TestNewBookingCalculatesIntervalAndRequiresIdempotency(t *testing.T) {
 	}
 }
 
+func TestServiceValidateResourcesMatchesRequirements(t *testing.T) {
+	service := validService()
+	resources := []Resource{{
+		ID: "chair-1", MerchantID: "merchant-1", LocationID: "location-1", Kind: "chair", Name: "一号工位", Active: true,
+	}}
+	if err := service.ValidateResources(resources); err != nil {
+		t.Fatalf("matching resource rejected: %v", err)
+	}
+	resources[0].Kind = "bed"
+	if err := service.ValidateResources(resources); !errors.Is(err, ErrInvalidEntity) {
+		t.Fatalf("wrong resource kind should be rejected, got %v", err)
+	}
+	resources[0].Kind = "chair"
+	resources[0].LocationID = "location-other"
+	if !errors.Is(service.ValidateResources(resources), ErrTenantMismatch) {
+		t.Fatal("cross-location resource should be rejected")
+	}
+}
+
+func TestServiceValidateResourcesRejectsInactiveAndExtraResources(t *testing.T) {
+	service := validService()
+	resource := Resource{
+		ID: "chair-1", MerchantID: "merchant-1", LocationID: "location-1", Kind: "chair", Name: "一号工位", Active: false,
+	}
+	if !errors.Is(service.ValidateResources([]Resource{resource}), ErrInvalidEntity) {
+		t.Fatal("inactive resource should be rejected")
+	}
+	resource.Active = true
+	if !errors.Is(service.ValidateResources([]Resource{resource, resource}), ErrInvalidEntity) {
+		t.Fatal("extra resource should be rejected")
+	}
+}
+
 func TestNewBookingRejectsCrossTenantServiceOrStaff(t *testing.T) {
 	service := validService()
 	service.LocationID = "location-other"
