@@ -103,6 +103,9 @@ func TestToolCatalogRoutesBusinessToolThroughApplication(t *testing.T) {
 	if output == "" || application.operation != v1alpha1.OperationCreateBooking || application.parameters != `{"service":"剪发"}` {
 		t.Fatalf("application call was not forwarded: operation=%q parameters=%q output=%q", application.operation, application.parameters, output)
 	}
+	if _, ok := catalog.tools["reschedule_appointment"]; !ok {
+		t.Fatal("application catalog should register reschedule_appointment")
+	}
 }
 
 type fakeInvokableTool struct {

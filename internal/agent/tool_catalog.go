@@ -120,12 +120,18 @@ func newToolCatalog(intentTool tool.BaseTool, applications ...v1alpha1.Applicati
 			return nil, err
 		}
 	}
+	if len(applications) > 0 && applications[0] != nil {
+		descriptor := writeDescriptor("reschedule_appointment", "改约顾客自己的预约", v1alpha1.OperationRescheduleBooking)
+		if err := catalog.register(descriptor, &applicationTool{descriptor: descriptor, application: applications[0]}); err != nil {
+			return nil, err
+		}
+	}
 	return catalog, nil
 }
 
 func applicationToolName(name string) bool {
 	switch name {
-	case "list_services", "list_barbers", "query_schedule", "create_appointment", "cancel_appointment", "list_my_bookings":
+	case "list_services", "list_barbers", "query_schedule", "create_appointment", "cancel_appointment", "list_my_bookings", "reschedule_appointment":
 		return true
 	default:
 		return false
