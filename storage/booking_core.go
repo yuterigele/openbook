@@ -252,6 +252,124 @@ func CancelBookingForCustomer(ctx context.Context, merchantID, locationID, custo
 	return verified, nil
 }
 
+// RescheduleBookingForCustomer 在同一事务内创建新预约并取消旧预约。
+// 冲突、权限或任一步写入失败时，旧预约保持原状态。
+func RescheduleBookingForCustomer(ctx context.Context, merchantID, locationID, customerID, oldBookingID, idempotencyKey string, replacement domain.Booking, allocations []domain.Allocation) (*BookingRecord, error) {
+	if DB == nil {
+		return nil, errors.New("DB 未初始化")
+	}
+	if merchantID == "" || locationID == "" || customerID == "" || oldBookingID == "" || idempotencyKey == "" || replacement.ID == oldBookingID {
+		return nil, domain.ErrInvalidOutcome
+	}
+	if replacement.MerchantID != merchantID || replacement.LocationID != locationID || replacement.CustomerID != customerID {
+		return nil, domain.ErrTenantMismatch
+	}
+	if err := replacement.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validatePersistedAllocations(replacement, allocations); err != nil {
+		return nil, err
+	}
+	outcome, err := domain.NewPendingOutcome(uuid.NewString(), merchantID, locationID, customerID, "reschedule_booking", idempotencyKey, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	outcomeRecord, err := CreatePendingOperationOutcome(ctx, outcome)
+	if err != nil {
+		if !errors.Is(err, ErrOperationOutcomeAlreadyExists) {
+			return nil, err
+		}
+		return replayRescheduledOutcome(ctx, merchantID, locationID, customerID, idempotencyKey)
+	}
+
+	var created BookingRecord
+	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var old BookingRecord
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ?", oldBookingID, merchantID, locationID, customerID).
+			First(&old).Error; err != nil {
+			return err
+		}
+		if old.Status != string(domain.BookingPending) && old.Status != string(domain.BookingConfirmed) {
+			return ErrBookingNotCancellable
+		}
+		occupied, err := lockedOccupiedBookings(ctx, tx, replacement)
+		if err != nil {
+			return err
+		}
+		filtered := make([]domain.Occupancy, 0, len(occupied))
+		for _, item := range occupied {
+			if item.BookingID != oldBookingID {
+				filtered = append(filtered, item)
+			}
+		}
+		candidate, err := domain.NewOccupancy(replacement, persistedResourceIDs(allocations))
+		if err != nil {
+			return err
+		}
+		conflicts, err := domain.FindConflicts(candidate, filtered)
+		if err != nil {
+			return err
+		}
+		if len(conflicts) > 0 {
+			return ErrBookingConflict
+		}
+
+		result := tx.WithContext(ctx).Model(&BookingRecord{}).
+			Where("id = ? AND merchant_id = ? AND location_id = ? AND customer_id = ? AND status IN ?", oldBookingID, merchantID, locationID, customerID, []string{string(domain.BookingPending), string(domain.BookingConfirmed)}).
+			Updates(map[string]any{"status": string(domain.BookingCancelled), "updated_at": time.Now()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrBookingNotCancellable
+		}
+
+		created = bookingRecordFromDomain(replacement)
+		if err := tx.WithContext(ctx).Create(&created).Error; err != nil {
+			return err
+		}
+		for _, allocation := range allocations {
+			if err := tx.WithContext(ctx).Create(&BookingAllocationRecord{
+				ID: allocation.ID, BookingID: allocation.BookingID, MerchantID: allocation.MerchantID,
+				LocationID: allocation.LocationID, StaffID: allocation.StaffID, ResourceID: allocation.ResourceID,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		payload, err := json.Marshal(map[string]string{
+			"old_booking_id": oldBookingID, "new_booking_id": created.ID, "merchant_id": merchantID,
+			"location_id": locationID, "customer_id": customerID,
+		})
+		if err != nil {
+			return err
+		}
+		return tx.WithContext(ctx).Create(&BookingOutboxRecord{
+			ID: uuid.NewString(), EventID: uuid.NewString(), BookingID: created.ID,
+			MerchantID: merchantID, LocationID: locationID, EventType: "booking.rescheduled",
+			Payload: string(payload), Status: "pending", CreatedAt: time.Now(),
+		}).Error
+	})
+	if err != nil {
+		if transitionErr := transitionCancellationFailure(ctx, outcomeRecord.ID, err, time.Now()); transitionErr != nil {
+			return nil, transitionErr
+		}
+		return nil, err
+	}
+	if _, err := TransitionOperationOutcome(ctx, outcomeRecord.ID, domain.OutcomePending, domain.OutcomeConfirmed, created.ID, time.Now()); err != nil {
+		return nil, ErrBookingOutcomeUnknown
+	}
+	verified, err := GetBookingForCustomer(ctx, merchantID, locationID, customerID, created.ID)
+	if err != nil || verified.Status != string(domain.BookingPending) {
+		return nil, ErrBookingOutcomeUnknown
+	}
+	old, err := GetBookingForCustomer(ctx, merchantID, locationID, customerID, oldBookingID)
+	if err != nil || old.Status != string(domain.BookingCancelled) {
+		return nil, ErrBookingOutcomeUnknown
+	}
+	return verified, nil
+}
+
 func replayCancelledOutcome(ctx context.Context, merchantID, locationID, customerID, idempotencyKey string) (*BookingRecord, error) {
 	record, err := GetOperationOutcomeByScopeAndKey(ctx, merchantID, locationID, customerID, "cancel_booking", idempotencyKey)
 	if err != nil {
@@ -262,6 +380,21 @@ func replayCancelledOutcome(ctx context.Context, merchantID, locationID, custome
 		return GetBookingForCustomer(ctx, merchantID, locationID, customerID, record.BookingID)
 	case domain.OutcomeRejected:
 		return nil, ErrBookingNotCancellable
+	default:
+		return nil, ErrBookingOutcomeUnknown
+	}
+}
+
+func replayRescheduledOutcome(ctx context.Context, merchantID, locationID, customerID, idempotencyKey string) (*BookingRecord, error) {
+	record, err := GetOperationOutcomeByScopeAndKey(ctx, merchantID, locationID, customerID, "reschedule_booking", idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	switch domain.OutcomeStatus(record.Status) {
+	case domain.OutcomeConfirmed:
+		return GetBookingForCustomer(ctx, merchantID, locationID, customerID, record.BookingID)
+	case domain.OutcomeRejected:
+		return nil, ErrBookingConflict
 	default:
 		return nil, ErrBookingOutcomeUnknown
 	}
