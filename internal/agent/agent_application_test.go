@@ -169,9 +169,10 @@ type scriptedToolLoopModel struct {
 }
 
 type scriptedLegacyCreateModel struct {
-	mu    sync.Mutex
-	calls int
-	date  string
+	mu         sync.Mutex
+	calls      int
+	date       string
+	barberName string
 }
 
 func (m *scriptedLegacyCreateModel) Generate(context.Context, []*schema.Message, ...einomodel.Option) (*schema.Message, error) {
@@ -180,11 +181,15 @@ func (m *scriptedLegacyCreateModel) Generate(context.Context, []*schema.Message,
 	callNumber := m.calls
 	m.mu.Unlock()
 	if callNumber == 1 {
+		barberName := m.barberName
+		if barberName == "" {
+			barberName = "Tony"
+		}
 		return schema.AssistantMessage("", []schema.ToolCall{{
 			ID: "legacy-create-call-1", Type: "function",
 			Function: schema.FunctionCall{
 				Name:      "create_appointment",
-				Arguments: `{"barber_name":"Tony","customer":"模型伪造顾客","phone":"13800000002","date":"` + m.date + `","time":"14:00","service":"剪发"}`,
+				Arguments: `{"barber_name":"` + barberName + `","customer":"模型伪造顾客","phone":"13800000002","date":"` + m.date + `","time":"14:00","service":"剪发"}`,
 			},
 		}}), nil
 	}

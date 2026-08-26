@@ -55,6 +55,9 @@ $env:MYSQL_DB = "chatwitheino"
 $env:REDIS_ADDR = "127.0.0.1:6379"
 # 预先在当前 PowerShell 会话安全注入 MYSQL_PASS，或改用 MYSQL_DSN；不要把密码写进脚本。
 go test -tags="mysql_integration redis_integration" ./lock ./storage -run "Test(RedisLock|MySQLRedis)" -count=1
+
+# Agent/Application 与 Starter 的真实 MySQL 写入验收（不调用外部模型）
+go test -tags="mysql_integration" ./internal/agent ./examples/starter-booking -run "Test(AgentApplicationRuntimeExecutesLegacyCreateMySQL|StarterWebChatPersistsThroughMySQLCore)$" -count=1
 ```
 
 该命令覆盖 Redis 看门狗续租、锁被替换后的安全中止、释放后再次获取，以及多个请求争抢同一员工/资源时 MySQL 预约、Allocation 和 Outbox 的最终数量。依赖不可用时测试会跳过或直接报告连接错误；不能把跳过当作通过。

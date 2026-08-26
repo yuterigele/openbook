@@ -201,6 +201,9 @@ go test ./tools -run 'Test(GetAppointment|CancelAppointmentTool|E2E_S2_CancelApp
 # Agent 与服务端编译/单测
 go test ./internal/agent ./server -count=1
 
+# 真实 MySQL Agent/Application 与 Starter 验收（需已注入 MYSQL_*）
+go test -tags=mysql_integration ./internal/agent ./examples/starter-booking -run 'Test(AgentApplicationRuntimeExecutesLegacyCreateMySQL|StarterWebChatPersistsThroughMySQLCore)$' -count=1
+
 # Starter 首条预约链路与幂等重放冒烟
 bash scripts/dx-smoke.sh
 ```
