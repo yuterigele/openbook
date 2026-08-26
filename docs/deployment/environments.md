@@ -1,5 +1,7 @@
 # 环境分层与发布约定
 
+平台安装排障、跨平台构建以及升级/回滚操作见[平台安装排障与升级回滚](platform-troubleshooting.md)。
+
 OpenBook 运行环境固定为 `development`、`staging`、`production`。三者使用同一份镜像和基础 Docker Compose 定义，差异只通过环境变量、独立基础设施以及仅开发环境加载的端口覆盖文件体现；禁止把生产凭据复制到开发或预发布环境。
 
 | 环境 | 用途 | 企业微信回复 | 数据库/Redis | 日志 |
