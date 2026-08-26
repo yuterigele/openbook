@@ -199,20 +199,8 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 		injectSensitiveLLMFallback(cm)
 	}
 
-	var bookingApplications []v1alpha1.Application
-	if os.Getenv("BOOKING_APPLICATION_RUNTIME") == "1" {
-		bookingApplications = append(bookingApplications, legacybooking.NewApplication(func(resolveCtx context.Context, trusted v1alpha1.ExecutionContext) (legacybooking.CustomerIdentity, error) {
-			customer, err := storage.GetCustomerByID(resolveCtx, trusted.CustomerID)
-			if err != nil {
-				return legacybooking.CustomerIdentity{}, err
-			}
-			return legacybooking.CustomerIdentity{
-				Name:           customer.Name,
-				Phone:          customer.Phone,
-				OpenID:         customer.WechatOpenID,
-				ExternalUserID: customer.ExternalUserID,
-			}, nil
-		}))
+	bookingApplications := newBookingApplications()
+	if len(bookingApplications) > 0 {
 		log.Printf("[booking] Application runtime enabled; trusted customer context is required for customer operations")
 	}
 	agent, err := agent.BuildTyped[M](ctx, intentTool, bookingApplications...)
@@ -451,6 +439,31 @@ func runTyped[M adk.MessageType](ctx context.Context) {
 	log.Printf("starting server on http://localhost:%s", port)
 	log.Print(adminAccessLog(port))
 	srv.Spin()
+}
+
+// newBookingApplications 根据灰度开关构造预约应用端口。
+// 顾客身份只从可信 ExecutionContext 的 CustomerID 读取，不能使用模型参数覆盖。
+func newBookingApplications() []v1alpha1.Application {
+	if os.Getenv("BOOKING_APPLICATION_RUNTIME") != "1" {
+		return nil
+	}
+	return []v1alpha1.Application{
+		legacybooking.NewApplication(resolveTrustedCustomerIdentity),
+	}
+}
+
+// resolveTrustedCustomerIdentity 将已由 Host 解析的顾客 ID 映射为旧工具所需的身份字段。
+func resolveTrustedCustomerIdentity(ctx context.Context, trusted v1alpha1.ExecutionContext) (legacybooking.CustomerIdentity, error) {
+	customer, err := storage.GetCustomerByID(ctx, trusted.CustomerID)
+	if err != nil {
+		return legacybooking.CustomerIdentity{}, err
+	}
+	return legacybooking.CustomerIdentity{
+		Name:           customer.Name,
+		Phone:          customer.Phone,
+		OpenID:         customer.WechatOpenID,
+		ExternalUserID: customer.ExternalUserID,
+	}, nil
 }
 
 func adminAccessLog(port string) string {
