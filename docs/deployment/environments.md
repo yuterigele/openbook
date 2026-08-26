@@ -74,6 +74,8 @@ bash scripts/compose-release.sh deploy \
 
 回滚只替换应用镜像，不会自动逆向数据库迁移。若新版本已经执行不可逆迁移，必须进入维护窗口，按备份恢复/反向迁移方案处理数据，并核对迁移报告后再切流；不能仅切回旧镜像并宣称完成回滚。
 
+旧 `appointments` 到通用预约表的迁移边界和只读规划器见[旧预约迁移规划](booking-migration.md)。当前规划器不会连接或修改数据库；真实迁移执行器、生产回滚和反向迁移仍需单独评审。
+
 ## Release 镜像校验
 
 推送形如 `v1.2.3` 的 Tag 会触发 `.github/workflows/release.yml`，构建 `linux/amd64` 和 `linux/arm64` 镜像，并将 Provenance、SBOM、Cosign 签名和镜像摘要作为 Release 产物。工作流只负责发布候选产物；真实生产切换仍需先完成备份、迁移兼容性检查和回滚窗口确认。
