@@ -26,7 +26,7 @@ OpenBook 不是通用聊天机器人，而是验证 Agent 如何在真实业务�
 
 ![OpenBook 企业微信预约演示](docs/assets/openbook-wecom-booking-demo.png)
 
-**快速查看：** [架构与安全边界](docs/架构说明.md) · [离线 Agent 评测](docs/evals/README.md) · [工程取舍与复盘](docs/engineering/工程问题复盘.md) · [预约迁移规划](docs/deployment/booking-migration.md) · [压测口径](docs/benchmarks.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md) · [本地启动](#快速开始)
+**快速查看：** [开发者指南](docs/DEVELOPER_GUIDE.md) · [架构与安全边界](docs/架构说明.md) · [离线 Agent 评测](docs/evals/README.md) · [工程取舍与复盘](docs/engineering/工程问题复盘.md) · [预约迁移规划](docs/deployment/booking-migration.md) · [压测口径](docs/benchmarks.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md) · [本地启动](#快速开始)
 
 ## 项目定位
 
@@ -218,6 +218,7 @@ bash scripts/dx-smoke.sh
 
 ## 文档
 
+- [开发者指南](docs/DEVELOPER_GUIDE.md) — 从 Clone、启动、调试到二次开发和发布
 - [benchmarks](docs/benchmarks.md) — 压测方案与记录模板
 - [离线 Agent 评测](docs/evals/README.md) — 版本化意图集、质量门禁与运行方式
 - [产品需求](docs/product/产品需求.md) — 预约场景与业务规则
@@ -225,6 +226,8 @@ bash scripts/dx-smoke.sh
 - [架构说明](docs/架构说明.md) — 运行时链路与安全边界
 - [工程问题复盘](docs/engineering/工程问题复盘.md) — 真实问题、取舍与验证
 - [新增行业 Profile](docs/engineering/新增行业Profile.md) — 添加行业术语、服务、资源与契约测试
+- [扩展 Tool 与 Channel](docs/engineering/扩展Tool与Channel.md) — 添加白名单工具和渠道适配器
+- [平台排障与升级回滚](docs/deployment/platform-troubleshooting.md) — Windows、macOS、Linux 安装排障与发布回退
 - [CHANGELOG](docs/CHANGELOG.md) — 20+ 次版本迭代记录
 
 ## 技术栈
