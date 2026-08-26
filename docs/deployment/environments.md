@@ -96,3 +96,9 @@ docker buildx imagetools inspect "ghcr.io/yuterigele/openbook@$(cat image-digest
 ```
 
 如果签名、SBOM 摘要或多架构检查失败，不得继续执行 `compose-release.sh deploy`。`cosign verify` 的身份表达式必须与实际仓库和 Release 工作流保持一致；Fork 或组织迁移后要同步调整它。
+
+## 安全扫描门槛
+
+`.github/workflows/security.yml` 在 Pull Request、`main` 推送和每周定时任务中运行 `govulncheck`、Trivy 文件系统依赖扫描和 Gitleaks 历史秘密扫描；Release 工作流还会扫描最终多架构镜像。高危或严重漏洞、已提交秘密和扫描器错误都会阻断对应工作流。扫描器使用 `ignore-unfixed` 时只忽略尚无修复版本的依赖，不代表可以忽略已知可修复漏洞。
+
+安全扫描通过不等于生产安全验收完成，仍需人工复核镜像来源、Cosign 身份、SBOM 摘要、配置密钥和迁移回滚窗口。
