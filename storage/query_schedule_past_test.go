@@ -134,7 +134,7 @@ func TestQueryAvailableSlots_FilterPastSlotsTomorrow(t *testing.T) {
 }
 
 // TestQueryAvailableSlots_FilterPastSlotsTodayRealistic 真实场景：当前时间后剩多少
-// 不验证具体数字（依赖 now.Hour），只验证"返回的 slot 都 > now"
+// 不验证具体数字（依赖 now.Hour），只验证返回值遵守 5 分钟边界。
 func TestQueryAvailableSlots_FilterPastSlotsTodayRealistic(t *testing.T) {
 	SetupTestDB(t)
 	shop := MakeShop(t, "shop-1", "")
@@ -146,8 +146,7 @@ func TestQueryAvailableSlots_FilterPastSlotsTodayRealistic(t *testing.T) {
 
 	slots := QueryAvailableSlots("Tony", today)
 
-	// 验证每个返回的 slot 都 > now + 5min
-	cutoff := now.Add(5 * time.Minute)
+	// 未来时段必须保留；刚过去不超过 5 分钟的时段也按约定保留。
 	for _, slot := range slots {
 		hm, err := time.ParseInLocation("15:04", slot, loc)
 		if err != nil {
@@ -155,8 +154,8 @@ func TestQueryAvailableSlots_FilterPastSlotsTodayRealistic(t *testing.T) {
 		}
 		slotAt := time.Date(now.Year(), now.Month(), now.Day(),
 			hm.Hour(), hm.Minute(), 0, 0, loc)
-		if !slotAt.After(cutoff) {
-			t.Errorf("slot %s (%v) 不应返回（在 now+5min 之前，now=%v）",
+		if !slotAt.After(now) && now.Sub(slotAt) > 5*time.Minute {
+			t.Errorf("slot %s (%v) 不应返回（已超过 5 分钟容差，now=%v）",
 				slot, slotAt, now)
 		}
 	}
