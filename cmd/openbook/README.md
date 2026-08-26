@@ -28,7 +28,7 @@ go build -ldflags "-X main.version=v1.0.0 -X main.commit=$(git rev-parse --short
 
 `init` 默认只创建不存在的 `.env`，写入 Stub/Mock 本地模式、MySQL/Redis 地址和随机管理员密码、平台管理员密码及 `JWT_SECRET`。已有文件不会覆盖；必须显式使用 `go run ./cmd/openbook init -force`。生成后仍需按部署环境修改数据库、模型和渠道配置，不能直接当作生产配置。
 
-`migrate` 执行应用启动期的幂等 AutoMigrate、默认数据和顾客档案回填；先用 `-dry-run` 查看范围。需要历史版本的单步选择时继续使用 `go run ./cmd/migrate -only=...`。
+`migrate` 执行应用启动期的幂等 AutoMigrate、默认数据和顾客档案回填；先用 `-dry-run` 查看范围。需要历史版本的单步选择时继续使用 `go run ./cmd/migrate -only=...`。旧预约迁移报告另用 `go run ./cmd/openbook migrate -dry-run -legacy-report -merchant-id <id> [-location-id <id>] [-report-file ./migration-report.json]`，该模式只读查询旧表和 next 表，不执行 AutoMigrate、seed 或写入；阻断项大于 0 时以非零状态退出。报告文件必须是不存在的新文件。
 
 `seed` 调用现有演示数据生成器，支持 `-shop-only`、`-skip-appointments`、`-clean` 和 `-dry-run`。清理只针对 `[DEMO]` 店铺，生产环境不要把它当作数据删除工具。
 

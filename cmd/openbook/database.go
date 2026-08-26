@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/yuterigele/openbook/chatmodel"
 	"github.com/yuterigele/openbook/storage"
@@ -16,8 +18,27 @@ func RunMigrate(writer io.Writer, args []string) int {
 	flags := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	dryRun := flags.Bool("dry-run", false, "只显示迁移范围，不连接数据库")
+	legacyReport := flags.Bool("legacy-report", false, "只读生成旧预约迁移规划报告")
+	merchantID := flags.String("merchant-id", "", "旧预约迁移使用的显式商户 ID")
+	locationID := flags.String("location-id", "", "只报告指定旧门店 ID")
+	reportFile := flags.String("report-file", "", "将迁移规划 JSON 写入新文件")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
-		fmt.Fprintln(writer, "用法: openbook migrate [-dry-run]")
+		fmt.Fprintln(writer, "用法: openbook migrate [-dry-run] [-legacy-report -merchant-id <id> [-location-id <id>] [-report-file <path>]")
+		return 2
+	}
+	if *legacyReport {
+		if !*dryRun {
+			fmt.Fprintln(writer, "-legacy-report 必须同时指定 -dry-run")
+			return 2
+		}
+		if *merchantID == "" {
+			fmt.Fprintln(writer, "-legacy-report 必须指定 -merchant-id")
+			return 2
+		}
+		return runLegacyMigrationReport(writer, *merchantID, *locationID, *reportFile)
+	}
+	if *merchantID != "" || *locationID != "" || *reportFile != "" {
+		fmt.Fprintln(writer, "-merchant-id、-location-id 和 -report-file 只能与 -legacy-report 一起使用")
 		return 2
 	}
 	if *dryRun {
@@ -33,6 +54,66 @@ func RunMigrate(writer io.Writer, args []string) int {
 	}
 	defer closeOpenBookDB()
 	fmt.Fprintln(writer, "迁移完成：数据库结构和启动期幂等回填已执行。")
+	return 0
+}
+
+func runLegacyMigrationReport(writer io.Writer, merchantID, locationID, reportFile string) int {
+	db, err := storage.OpenReadOnlyDB(context.Background())
+	if err != nil {
+		fmt.Fprintf(writer, "迁移只读规划失败: %v\n", err)
+		return 1
+	}
+	defer func() {
+		if sqlDB, closeErr := db.DB(); closeErr == nil && sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	inputs, err := storage.LoadLegacyBookingMigrationInputs(context.Background(), db, merchantID, locationID)
+	if err != nil {
+		fmt.Fprintf(writer, "迁移只读规划失败: %v\n", err)
+		return 1
+	}
+	plan, err := storage.PlanLegacyAppointmentMigration(inputs.Appointments, inputs.Services, inputs.Barbers, storage.LegacyBookingMigrationOptions{
+		MerchantID:              merchantID,
+		LocationID:              locationID,
+		ExistingBookings:        inputs.ExistingBookings,
+		ExistingBookingIDs:      inputs.ExistingBookingIDs,
+		ExistingIdempotencyKeys: inputs.ExistingIdempotencyKeys,
+	})
+	if err != nil {
+		fmt.Fprintf(writer, "迁移只读规划失败: %v\n", err)
+		return 1
+	}
+	payload, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		fmt.Fprintf(writer, "迁移报告序列化失败: %v\n", err)
+		return 1
+	}
+	payload = append(payload, '\n')
+	if reportFile != "" {
+		file, err := os.OpenFile(reportFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			fmt.Fprintf(writer, "迁移报告写入失败: %v\n", err)
+			return 1
+		}
+		if _, err := file.Write(payload); err != nil {
+			_ = file.Close()
+			_ = os.Remove(reportFile)
+			fmt.Fprintf(writer, "迁移报告写入失败: %v\n", err)
+			return 1
+		}
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(writer, "迁移报告关闭失败: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(writer, "迁移只读规划完成：总数=%d，可迁移=%d，阻断=%d，报告=%s\n", plan.Total, plan.Ready, plan.Blocked, reportFile)
+	} else {
+		_, _ = writer.Write(payload)
+	}
+	if plan.Blocked > 0 {
+		return 1
+	}
 	return 0
 }
 

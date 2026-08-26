@@ -4,7 +4,7 @@ OpenBook 保留旧的 `appointments` 表，并通过迁移期适配器逐步切�
 
 ## 当前规划器
 
-`storage.PlanLegacyAppointmentMigration` 接受旧预约、旧服务目录、旧员工目录和显式迁移上下文，返回带版本号的规划报告：
+`storage.PlanLegacyAppointmentMigration` 接受旧预约、旧服务目录、旧员工目录和显式迁移上下文，返回带版本号的规划报告。运维人员可以使用 `openbook migrate -dry-run -legacy-report -merchant-id <id>` 从 MySQL 读取快照并输出报告；指定 `-report-file` 时只创建不存在的新文件：
 
 - `MerchantID` 必须由部署方显式提供；不会把旧 `ShopID` 猜成商户 ID。
 - `ShopID` 映射为 `LocationID`，可用 `LocationID` 选定单个门店。

@@ -144,6 +144,21 @@ func TestRunMigrateAndSeedDryRunDoNotRequireDatabase(t *testing.T) {
 	}
 }
 
+func TestRunMigrateLegacyReportRequiresExplicitSafeFlags(t *testing.T) {
+	var output bytes.Buffer
+	if code := RunMigrate(&output, []string{"-legacy-report"}); code != 2 || !strings.Contains(output.String(), "-dry-run") {
+		t.Fatalf("legacy report should require dry-run: code=%d output=%s", code, output.String())
+	}
+	output.Reset()
+	if code := RunMigrate(&output, []string{"-legacy-report", "-dry-run"}); code != 2 || !strings.Contains(output.String(), "-merchant-id") {
+		t.Fatalf("legacy report should require merchant ID: code=%d output=%s", code, output.String())
+	}
+	output.Reset()
+	if code := RunMigrate(&output, []string{"-dry-run", "-merchant-id", "merchant-1"}); code != 2 || !strings.Contains(output.String(), "-legacy-report") {
+		t.Fatalf("legacy report flags should be explicit: code=%d output=%s", code, output.String())
+	}
+}
+
 func TestBackupAndRestoreDryRunProtectSecretsAndDestructiveActions(t *testing.T) {
 	env := map[string]string{
 		"MYSQL_DSN": "user:super-secret@tcp(127.0.0.1:3306)/booking?parseTime=true",

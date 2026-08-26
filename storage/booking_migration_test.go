@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -114,5 +115,55 @@ func TestPlanLegacyAppointmentMigrationBlocksBothSidesOfConflict(t *testing.T) {
 func TestPlanLegacyAppointmentMigrationRequiresExplicitMerchant(t *testing.T) {
 	if _, err := PlanLegacyAppointmentMigration(nil, nil, nil, LegacyBookingMigrationOptions{}); err == nil || !strings.Contains(err.Error(), "requires merchant ID") {
 		t.Fatalf("expected explicit merchant validation, got %v", err)
+	}
+}
+
+func TestLoadLegacyBookingMigrationInputsReadsOnlySelectedScope(t *testing.T) {
+	SetupTestDB(t)
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&Service{ID: "service-1", ShopID: "shop-1", Name: "剪发", EstimatedMin: 60}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&Barber{ID: "barber-1", ShopID: "shop-1", Name: "Tony", Active: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&Appointment{ID: "appointment-1", ShopID: "shop-1", BarberID: "barber-1", CustomerID: "customer-1", Date: "2026-08-30", Time: "14:00", Service: "剪发", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&Appointment{ID: "appointment-other-shop", ShopID: "shop-2", BarberID: "barber-2", CustomerID: "customer-2", Date: "2026-08-30", Time: "14:00", Service: "剪发", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&BookingRecord{
+		ID: "next-booking-1", MerchantID: "merchant-1", LocationID: "shop-1", CustomerID: "customer-next",
+		ServiceID: "service-next", StaffID: "staff-next", StartAt: time.Date(2026, 8, 30, 16, 0, 0, 0, location), EndAt: time.Date(2026, 8, 30, 17, 0, 0, 0, location),
+		Status: string(domain.BookingConfirmed), IdempotencyKey: "next-idem-1",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Create(&BookingAllocationRecord{ID: "next-allocation-1", BookingID: "next-booking-1", MerchantID: "merchant-1", LocationID: "shop-1", StaffID: "staff-next", ResourceID: "chair-1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	inputs, err := LoadLegacyBookingMigrationInputs(context.Background(), DB, "merchant-1", "shop-1")
+	if err != nil {
+		t.Fatalf("load migration inputs: %v", err)
+	}
+	if len(inputs.Appointments) != 1 || inputs.Appointments[0].ID != "appointment-1" {
+		t.Fatalf("unexpected appointments: %+v", inputs.Appointments)
+	}
+	if len(inputs.Services) != 1 || len(inputs.Barbers) != 1 {
+		t.Fatalf("unexpected catalog scope: services=%d barbers=%d", len(inputs.Services), len(inputs.Barbers))
+	}
+	if len(inputs.ExistingBookings) != 1 || len(inputs.ExistingBookingIDs) != 1 || inputs.ExistingBookingIDs[0] != "next-booking-1" {
+		t.Fatalf("unexpected next snapshot: %+v ids=%v", inputs.ExistingBookings, inputs.ExistingBookingIDs)
+	}
+	if len(inputs.ExistingIdempotencyKeys) != 1 || inputs.ExistingIdempotencyKeys[0] != "next-idem-1" {
+		t.Fatalf("unexpected idempotency snapshot: %v", inputs.ExistingIdempotencyKeys)
+	}
+	if len(inputs.ExistingBookings[0].ResourceIDs) != 1 || inputs.ExistingBookings[0].ResourceIDs[0] != "chair-1" {
+		t.Fatalf("existing resource allocation was not loaded: %+v", inputs.ExistingBookings[0])
 	}
 }

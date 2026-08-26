@@ -51,15 +51,29 @@ type LegacyBookingMigrationPlan struct {
 
 // LegacyBookingMigrationRow 保存一条 legacy ID 到 next ID 的映射及其状态。
 type LegacyBookingMigrationRow struct {
-	LegacyAppointmentID string   `json:"legacy_appointment_id"`
-	BookingID           string   `json:"booking_id,omitempty"`
-	IdempotencyKey      string   `json:"idempotency_key,omitempty"`
-	State               string   `json:"state"`
-	Reasons             []string `json:"reasons,omitempty"`
+	LegacyAppointmentID string                           `json:"legacy_appointment_id"`
+	BookingID           string                           `json:"booking_id,omitempty"`
+	IdempotencyKey      string                           `json:"idempotency_key,omitempty"`
+	State               string                           `json:"state"`
+	Reasons             []string                         `json:"reasons,omitempty"`
+	Candidate           *LegacyBookingMigrationCandidate `json:"candidate,omitempty"`
 
 	// Booking 和 Allocation 供后续事务执行器使用，不作为公开报告字段序列化。
 	Booking    BookingRecord           `json:"-"`
 	Allocation BookingAllocationRecord `json:"-"`
+}
+
+// LegacyBookingMigrationCandidate 是报告中可供人工复核的目标记录摘要。
+type LegacyBookingMigrationCandidate struct {
+	MerchantID string    `json:"merchant_id"`
+	LocationID string    `json:"location_id"`
+	CustomerID string    `json:"customer_id"`
+	ServiceID  string    `json:"service_id"`
+	StaffID    string    `json:"staff_id"`
+	StartAt    time.Time `json:"start_at"`
+	EndAt      time.Time `json:"end_at"`
+	Status     string    `json:"status"`
+	Allocation string    `json:"allocation_id"`
 }
 
 // ReadyRows 返回可供后续执行器使用的 ready 映射副本。
@@ -68,6 +82,10 @@ func (p LegacyBookingMigrationPlan) ReadyRows() []LegacyBookingMigrationRow {
 	for _, row := range p.Rows {
 		if row.State == legacyMigrationReady {
 			row.Reasons = append([]string(nil), row.Reasons...)
+			if row.Candidate != nil {
+				candidate := *row.Candidate
+				row.Candidate = &candidate
+			}
 			rows = append(rows, row)
 		}
 	}
@@ -137,6 +155,13 @@ func PlanLegacyAppointmentMigration(appointments []Appointment, services []Servi
 		row.Booking = booking
 		row.Allocation = allocation
 		row.Reasons = reasons
+		if booking.ID != "" {
+			row.Candidate = &LegacyBookingMigrationCandidate{
+				MerchantID: booking.MerchantID, LocationID: booking.LocationID, CustomerID: booking.CustomerID,
+				ServiceID: booking.ServiceID, StaffID: booking.StaffID, StartAt: booking.StartAt,
+				EndAt: booking.EndAt, Status: booking.Status, Allocation: allocation.ID,
+			}
+		}
 		if len(reasons) == 0 {
 			row.State = legacyMigrationReady
 			candidates = append(candidates, candidate{index: len(plan.Rows), occupancy: occupancy})

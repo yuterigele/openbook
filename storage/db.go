@@ -33,16 +33,7 @@ func IsReady() bool {
 //   - MYSQL_DSN      例如：user:pass@tcp(127.0.0.1:3306)/chatwitheino?charset=utf8mb4&parseTime=True&loc=Local
 //   - 或者：MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASS / MYSQL_DB
 func InitDB(ctx context.Context) (*gorm.DB, error) {
-	dsn := os.Getenv("MYSQL_DSN")
-	if dsn == "" {
-		host := getenv("MYSQL_HOST", "127.0.0.1")
-		port := getenv("MYSQL_PORT", "3306")
-		user := getenv("MYSQL_USER", "chatwitheino")
-		pass := getenv("MYSQL_PASS", "chatwitheino")
-		dbname := getenv("MYSQL_DB", "chatwitheino")
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-			user, pass, host, port, dbname)
-	}
+	dsn := mysqlDSNFromEnv()
 
 	gormLogger := logger.New(
 		log.New(os.Stdout, "[gorm] ", log.LstdFlags),
