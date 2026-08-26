@@ -74,6 +74,8 @@ services:
       MESSAGE_KIND: message
       OPENBOOK_LLM_CHAIN: stub
       AGENT_REPLY_MODE: mock
+      # Demo 使用 stub 模型，不启用预约 Application 灰度写路径。
+      BOOKING_APPLICATION_RUNTIME: "0"
       APP_ENV: development
       REDIS_REQUIRED: "0"
       SMS_VERIFICATION_ENABLED: "0"
