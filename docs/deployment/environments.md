@@ -73,3 +73,26 @@ bash scripts/compose-release.sh deploy \
 脚本会拉取目标镜像、启动 MySQL/Redis/初始化任务/app 并检查 HTTP 健康；新镜像不健康时自动尝试 previous-image，恢复健康后仍以非零状态退出，要求发布系统记录事故。也可以单独执行 `rollback <previous-image>`。设置 `OPENBOOK_PULL_IMAGE=0` 可用于部署机已缓存镜像的离线演练。
 
 回滚只替换应用镜像，不会自动逆向数据库迁移。若新版本已经执行不可逆迁移，必须进入维护窗口，按备份恢复/反向迁移方案处理数据，并核对迁移报告后再切流；不能仅切回旧镜像并宣称完成回滚。
+
+## Release 镜像校验
+
+推送形如 `v1.2.3` 的 Tag 会触发 `.github/workflows/release.yml`，构建 `linux/amd64` 和 `linux/arm64` 镜像，并将 Provenance、SBOM、Cosign 签名和镜像摘要作为 Release 产物。工作流只负责发布候选产物；真实生产切换仍需先完成备份、迁移兼容性检查和回滚窗口确认。
+
+部署时优先使用 Release 产出的不可变 digest，而不是可变 Tag：
+
+```dotenv
+OPENBOOK_IMAGE=ghcr.io/yuterigele/openbook@sha256:<image-digest>
+```
+
+在受信任的发布机上核验镜像签名和摘要后再写入生产配置。下面的 `image-digest.txt` 和 `openbook-sbom.spdx.json.sha256` 是 Release 下载的文件，不要从日志或聊天记录复制摘要：
+
+```bash
+sha256sum -c openbook-sbom.spdx.json.sha256
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp 'https://github.com/yuterigele/openbook/.github/workflows/release.yml@refs/tags/v.*' \
+  "ghcr.io/yuterigele/openbook@$(cat image-digest.txt)"
+docker buildx imagetools inspect "ghcr.io/yuterigele/openbook@$(cat image-digest.txt)"
+```
+
+如果签名、SBOM 摘要或多架构检查失败，不得继续执行 `compose-release.sh deploy`。`cosign verify` 的身份表达式必须与实际仓库和 Release 工作流保持一致；Fork 或组织迁移后要同步调整它。
