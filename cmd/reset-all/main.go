@@ -39,8 +39,9 @@ import (
 	"github.com/yuterigele/openbook/storage"
 )
 
-// realTables —— db.go AutoMigrate 的 19 张表，按依赖反序（先子后父）
+// realTables —— db.go AutoMigrate 的 20 张表，按依赖反序（先子后父）
 var realTables = []string{
+	"booking_migration_records",
 	"customer_notifications",
 	"role_permissions",
 	"card_transactions",

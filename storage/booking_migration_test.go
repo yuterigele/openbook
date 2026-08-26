@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +166,85 @@ func TestLoadLegacyBookingMigrationInputsReadsOnlySelectedScope(t *testing.T) {
 	}
 	if len(inputs.ExistingBookings[0].ResourceIDs) != 1 || inputs.ExistingBookings[0].ResourceIDs[0] != "chair-1" {
 		t.Fatalf("existing resource allocation was not loaded: %+v", inputs.ExistingBookings[0])
+	}
+}
+
+func TestExecuteLegacyBookingMigrationIsAtomicAndIdempotent(t *testing.T) {
+	SetupTestDB(t)
+	appointment := Appointment{ID: "appointment-1", ShopID: "shop-1", BarberID: "barber-1", CustomerID: "customer-1", Date: "2026-08-30", Time: "14:00", Service: "剪发", Status: "active"}
+	service := Service{ID: "service-1", ShopID: "shop-1", Name: "剪发", EstimatedMin: 60}
+	barber := Barber{ID: "barber-1", ShopID: "shop-1", Name: "Tony", Active: true}
+	plan, err := PlanLegacyAppointmentMigration([]Appointment{appointment}, []Service{service}, []Barber{barber}, LegacyBookingMigrationOptions{MerchantID: "merchant-1"})
+	if err != nil || plan.Blocked != 0 {
+		t.Fatalf("unexpected migration plan: plan=%+v err=%v", plan, err)
+	}
+	if err := ExecuteLegacyBookingMigration(context.Background(), DB, plan); err != nil {
+		t.Fatalf("execute migration: %v", err)
+	}
+	if err := ExecuteLegacyBookingMigration(context.Background(), DB, plan); err != nil {
+		t.Fatalf("replay migration: %v", err)
+	}
+
+	var bookingCount, allocationCount, mappingCount int64
+	if err := DB.Model(&BookingRecord{}).Where("merchant_id = ?", "merchant-1").Count(&bookingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Model(&BookingAllocationRecord{}).Where("merchant_id = ?", "merchant-1").Count(&allocationCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Model(&LegacyBookingMigrationRecord{}).Where("merchant_id = ?", "merchant-1").Count(&mappingCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if bookingCount != 1 || allocationCount != 1 || mappingCount != 1 {
+		t.Fatalf("migration should be atomic and idempotent: booking=%d allocation=%d mapping=%d", bookingCount, allocationCount, mappingCount)
+	}
+}
+
+func TestExecuteLegacyBookingMigrationRejectsBlockedPlanWithoutWrites(t *testing.T) {
+	SetupTestDB(t)
+	plan, err := PlanLegacyAppointmentMigration([]Appointment{{
+		ID: "blocked", ShopID: "shop-1", BarberID: "barber-1", Date: "2026-08-30", Time: "14:00", Service: "剪发", Status: "active",
+	}}, []Service{{ID: "service-1", ShopID: "shop-1", Name: "剪发", EstimatedMin: 60}}, []Barber{{ID: "barber-1", ShopID: "shop-1", Name: "Tony", Active: true}}, LegacyBookingMigrationOptions{MerchantID: "merchant-1"})
+	if err != nil || plan.Blocked != 1 {
+		t.Fatalf("expected blocked plan: plan=%+v err=%v", plan, err)
+	}
+	if err := ExecuteLegacyBookingMigration(context.Background(), DB, plan); !errors.Is(err, ErrLegacyMigrationPlanBlocked) {
+		t.Fatalf("expected blocked plan error, got %v", err)
+	}
+	var bookingCount, mappingCount int64
+	DB.Model(&BookingRecord{}).Count(&bookingCount)
+	DB.Model(&LegacyBookingMigrationRecord{}).Count(&mappingCount)
+	if bookingCount != 0 || mappingCount != 0 {
+		t.Fatalf("blocked plan must not write: booking=%d mapping=%d", bookingCount, mappingCount)
+	}
+}
+
+func TestExecuteLegacyBookingMigrationRechecksTargetConflict(t *testing.T) {
+	SetupTestDB(t)
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	startAt := time.Date(2026, 8, 30, 14, 0, 0, 0, location)
+	if err := DB.Create(&BookingRecord{
+		ID: "existing-booking", MerchantID: "merchant-1", LocationID: "shop-1", CustomerID: "customer-existing",
+		ServiceID: "service-existing", StaffID: "barber-1", StartAt: startAt, EndAt: startAt.Add(time.Hour),
+		Status: string(domain.BookingConfirmed), IdempotencyKey: "existing-idem",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanLegacyAppointmentMigration([]Appointment{{
+		ID: "appointment-conflict", ShopID: "shop-1", BarberID: "barber-1", CustomerID: "customer-1", Date: "2026-08-30", Time: "14:00", Service: "剪发", Status: "active",
+	}}, []Service{{ID: "service-1", ShopID: "shop-1", Name: "剪发", EstimatedMin: 60}}, []Barber{{ID: "barber-1", ShopID: "shop-1", Name: "Tony", Active: true}}, LegacyBookingMigrationOptions{MerchantID: "merchant-1"})
+	if err != nil || plan.Blocked != 0 {
+		t.Fatalf("unexpected migration plan: plan=%+v err=%v", plan, err)
+	}
+	if err := ExecuteLegacyBookingMigration(context.Background(), DB, plan); !errors.Is(err, ErrBookingConflict) {
+		t.Fatalf("expected target conflict, got %v", err)
+	}
+	var migratedCount int64
+	DB.Model(&LegacyBookingMigrationRecord{}).Count(&migratedCount)
+	if migratedCount != 0 {
+		t.Fatalf("conflicting migration must not write mapping: %d", migratedCount)
 	}
 }

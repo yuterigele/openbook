@@ -86,7 +86,8 @@ func InitDB(ctx context.Context) (*gorm.DB, error) {
 		&OperationOutcomeRecord{}, // Agent 写操作结果与幂等记录
 		&BookingRecord{},          // 通用预约内核主记录
 		&BookingAllocationRecord{},
-		&BookingOutboxRecord{}, // 通用预约内核 Outbox
+		&BookingOutboxRecord{},          // 通用预约内核 Outbox
+		&LegacyBookingMigrationRecord{}, // legacy 到通用预约的审计映射
 	); err != nil {
 		return nil, fmt.Errorf("AutoMigrate 失败: %w", err)
 	}

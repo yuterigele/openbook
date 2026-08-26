@@ -78,6 +78,7 @@ func SetupTestDB(t *testing.T) {
 		&BookingRecord{},          // 通用预约内核主记录
 		&BookingAllocationRecord{},
 		&BookingOutboxRecord{}, // 通用预约内核 Outbox
+		&LegacyBookingMigrationRecord{}, // legacy 到通用预约的审计映射
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}
