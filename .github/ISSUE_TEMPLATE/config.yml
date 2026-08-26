@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/yuterigele/openbook/security/advisories/new
+    about: 请通过私下渠道报告安全漏洞，不要创建公开 Issue。
