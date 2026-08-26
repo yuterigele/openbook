@@ -81,7 +81,7 @@ bash scripts/compose-release.sh deploy \
 
 ## Release 镜像校验
 
-推送形如 `v1.2.3` 的 Tag 会触发 `.github/workflows/release.yml`，构建 `linux/amd64` 和 `linux/arm64` 镜像，并将 Provenance、SBOM、Cosign 签名和镜像摘要作为 Release 产物。工作流只负责发布候选产物；真实生产切换仍需先完成备份、迁移兼容性检查和回滚窗口确认。
+推送形如 `v1.2.3` 的 Tag 会触发 `.github/workflows/release.yml`，构建 `linux/amd64` 和 `linux/arm64` 镜像，并将源码归档、`SHA256SUMS`、Provenance、SBOM、Cosign 签名和镜像摘要作为 Release 产物。工作流只负责发布候选产物；真实生产切换仍需先完成备份、迁移兼容性检查和回滚窗口确认。
 
 部署时优先使用 Release 产出的不可变 digest，而不是可变 Tag：
 
@@ -89,9 +89,10 @@ bash scripts/compose-release.sh deploy \
 OPENBOOK_IMAGE=ghcr.io/yuterigele/openbook@sha256:<image-digest>
 ```
 
-在受信任的发布机上核验镜像签名和摘要后再写入生产配置。下面的 `image-digest.txt` 和 `openbook-sbom.spdx.json.sha256` 是 Release 下载的文件，不要从日志或聊天记录复制摘要：
+在受信任的发布机上先核验源码包和镜像签名，再写入生产配置。下面的 `SHA256SUMS`、`image-digest.txt` 和 `openbook-sbom.spdx.json.sha256` 是 Release 下载的文件，不要从日志或聊天记录复制摘要：
 
 ```bash
+sha256sum -c SHA256SUMS
 sha256sum -c openbook-sbom.spdx.json.sha256
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
@@ -99,6 +100,15 @@ cosign verify \
   "ghcr.io/yuterigele/openbook@$(cat image-digest.txt)"
 docker buildx imagetools inspect "ghcr.io/yuterigele/openbook@$(cat image-digest.txt)"
 ```
+
+Windows PowerShell 可对下载的源码包执行：
+
+```powershell
+Get-FileHash .\openbook-v1.2.3.tar.gz -Algorithm SHA256
+Get-Content .\SHA256SUMS
+```
+
+确认两条输出中的 SHA256 值一致后再解压；文件名中的版本号应替换为实际 Release Tag。
 
 如果签名、SBOM 摘要或多架构检查失败，不得继续执行 `compose-release.sh deploy`。`cosign verify` 的身份表达式必须与实际仓库和 Release 工作流保持一致；Fork 或组织迁移后要同步调整它。
 

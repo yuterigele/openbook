@@ -95,6 +95,14 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
+      - name: Prepare source release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="openbook-${GITHUB_REF_NAME}.tar.gz"
+          git archive --format=tar.gz --prefix="openbook-${GITHUB_REF_NAME}/" "$GITHUB_SHA" -o "$archive"
+          sha256sum "$archive" > SHA256SUMS
+
       - name: Publish release artifacts
         uses: softprops/action-gh-release@v2
         with:
@@ -102,5 +110,7 @@ jobs:
           files: |
             openbook-sbom.spdx.json
             openbook-sbom.spdx.json.sha256
+            openbook-*.tar.gz
+            SHA256SUMS
             image-ref.txt
             image-digest.txt
