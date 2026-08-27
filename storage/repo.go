@@ -192,7 +192,8 @@ type LeaveBlock struct {
 	Reason    string
 }
 
-// QueryScheduleBreakdown 返回单日排班的分组视图
+// QueryScheduleBreakdown 返回单日排班的分组视图。
+// 兼容旧调用方；新消息入口应使用 QueryScheduleBreakdownForShop。
 //
 // 一次性返回 available + leave blocks + booked count，调用方不用再拼 SQL。
 // 用途：query_schedule 工具让 Agent 知道"为什么 11:00-13:00 不能约"（是预约占的？还是师傅请假？）
@@ -203,14 +204,23 @@ type LeaveBlock struct {
 //   - date 格式错误：跳过 leave 过滤，Available = booked 之外的 slot；LeaveBlocks 为空
 //   - 全天都没有 leave 时 LeaveBlocks 为空 slice（非 nil，json 友好）
 func QueryScheduleBreakdown(barberName, date string) ScheduleBreakdown {
+	return QueryScheduleBreakdownForShop(context.Background(), "", barberName, date)
+}
+
+// QueryScheduleBreakdownForShop 按门店和理发师姓名返回单日排班，防止同名理发师跨店命中。
+func QueryScheduleBreakdownForShop(ctx context.Context, shopID, barberName, date string) ScheduleBreakdown {
 	var out ScheduleBreakdown
 	var barber Barber
-	if err := mustDB().Where("name = ? AND active = ?", barberName, true).First(&barber).Error; err != nil {
+	query := mustDB().WithContext(ctx).Where("name = ? AND active = ?", barberName, true)
+	if shopID != "" {
+		query = query.Where("shop_id = ?", shopID)
+	}
+	if err := query.First(&barber).Error; err != nil {
 		return out
 	}
 
 	var booked []Appointment
-	mustDB().Where("barber_id = ? AND date = ? AND status = ?", barber.ID, date, "active").
+	mustDB().WithContext(ctx).Where("barber_id = ? AND date = ? AND status = ?", barber.ID, date, "active").
 		Select("time").Find(&booked)
 	bookedSet := make(map[string]bool, len(booked))
 	for _, a := range booked {
@@ -803,10 +813,28 @@ func ListAppointmentsByShopRange(ctx context.Context, shopID, dateFrom, dateTo s
 	return appts, nil
 }
 
-// GetBarberByName 根据姓名获取理发师
+// GetBarberByName 根据姓名获取理发师。
+// 多店调用方应使用 GetBarberByNameInShop。
 func GetBarberByName(name string) (*Barber, error) {
 	var b Barber
 	if err := mustDB().Where("name = ?", name).First(&b).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrBarberNotFound
+		}
+		return nil, err
+	}
+	return &b, nil
+}
+
+// GetBarberByNameInShop 根据门店和姓名获取理发师，避免同名人员跨店命中。
+func GetBarberByNameInShop(ctx context.Context, shopID, name string) (*Barber, error) {
+	if shopID == "" {
+		return nil, ErrBarberNotFound
+	}
+	var b Barber
+	if err := mustDB().WithContext(ctx).
+		Where("shop_id = ? AND name = ?", shopID, name).
+		First(&b).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrBarberNotFound
 		}

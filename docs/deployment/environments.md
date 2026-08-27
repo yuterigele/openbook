@@ -64,6 +64,22 @@ go test -tags="mysql_integration" ./internal/agent ./examples/starter-booking -r
 
 该命令覆盖 Redis 看门狗续租、锁被替换后的安全中止、释放后再次获取，以及多个请求争抢同一员工/资源时 MySQL 预约、Allocation 和 Outbox 的最终数量。依赖不可用时测试会跳过或直接报告连接错误；不能把跳过当作通过。
 
+## 真实模型 Agent/Application 写路径验收
+
+该验收会真实调用指定的 DeepSeek、OpenAI 或 Ark 模型，经 Eino 工具循环、`v1alpha1.Application` 和 legacy Application，在隔离 SQLite 测试库写入一条预约。显式加 `external_model_integration` Tag 时会通过 `chatmodel.LoadEnv` 读取仓库根目录 `.env`，已有 PowerShell 环境变量优先；测试会在当前进程内将 `APP_ENV` 设为 `development`、将 `REDIS_REQUIRED` 设为 `0`，因为该隔离测试不初始化 Redis，生产环境的 Redis 写入门禁仍由部署和 Redis 集成验收覆盖。测试不会发送企业微信消息，结束后 SQLite 数据随测试进程清理。该测试可能产生模型调用费用，只能显式加 Tag 执行。
+
+PowerShell 示例（以 DeepSeek 为例；密钥只注入当前会话）：
+
+```powershell
+$env:OPENBOOK_LLM_CHAIN = "deepseek"
+$env:DEEPSEEK_API_KEY = "从本机密钥管理器注入"
+$env:DEEPSEEK_MODEL = "deepseek-chat"
+$env:DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+go test -tags="external_model_integration" ./internal/agent -run "TestAgentApplicationRuntimeExecutesExternalModelCreate$" -count=1 -v
+```
+
+测试会在没有选中提供商凭据时跳过；如果凭据存在但模型初始化失败，或模型降级为 Stub、没有先查询空档、没有创建预约、可信身份未透传或预约没有落库，则测试失败。普通 `go test ./...` 不会编译该测试，也不会读取 `.env` 或产生外部模型调用。
+
 ## 生产镜像升级与回滚
 
 生产部署使用 `docker-compose.production.yml` 覆盖源码 `build`，只启动已准备好的 `OPENBOOK_IMAGE`。发布前先完成备份、恢复演练和数据库迁移兼容性检查，再执行：

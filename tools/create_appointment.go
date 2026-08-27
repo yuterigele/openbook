@@ -147,6 +147,10 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	if err := EnsureDB("create_appointment"); err != nil {
 		return "", err
 	}
+	shopID := ShopIDFromCtx(ctx)
+	if shopID == "" {
+		return "", fmt.Errorf("当前会话缺少可信门店身份，请联系门店处理")
+	}
 	if !storage.IsValidSlot(params.Time) {
 		return "", fmt.Errorf("时段 %s 不在营业时间内（本店 9:00-18:00，午休 12:00-13:30 不可约）", params.Time)
 	}
@@ -171,7 +175,7 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 	}
 
 	// 查询理发师并取得用于预约保护的 ID。
-	barber, err := storage.GetBarberByName(params.BarberName)
+	barber, err := storage.GetBarberByNameInShop(ctx, shopID, params.BarberName)
 	if err != nil {
 		return "", fmt.Errorf("师傅 %s 不在店里呢（本店现在有 Tony、Kevin 两位），换个试试？", params.BarberName)
 	}
@@ -279,7 +283,7 @@ func (t *CreateAppointmentTool) InvokableRun(ctx context.Context, argumentsInJSO
 
 	appointment, err := storage.CreateAppointmentFullContext(
 		operationCtx,
-		ShopIDFromCtx(ctx),
+		shopID,
 		params.BarberName,
 		params.Customer,
 		params.Phone,               // 已通过手机号校验。

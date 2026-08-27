@@ -30,10 +30,22 @@ type catalogTool struct {
 type applicationTool struct {
 	descriptor  toolkit.Descriptor
 	application v1alpha1.Application
+	info        *schema.ToolInfo
 }
 
 func (t *applicationTool) Info(context.Context) (*schema.ToolInfo, error) {
-	return &schema.ToolInfo{Name: t.descriptor.Name}, nil
+	if t == nil {
+		return nil, fmt.Errorf("application tool is nil")
+	}
+	if t.info == nil {
+		return &schema.ToolInfo{Name: t.descriptor.Name, Desc: t.descriptor.Description}, nil
+	}
+	info := *t.info
+	info.Name = t.descriptor.Name
+	if info.Desc == "" {
+		info.Desc = t.descriptor.Description
+	}
+	return &info, nil
 }
 
 func (t *applicationTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
@@ -114,7 +126,15 @@ func newToolCatalog(intentTool tool.BaseTool, applications ...v1alpha1.Applicati
 	}
 	for _, registration := range registrations {
 		if len(applications) > 0 && applications[0] != nil && applicationToolName(registration.descriptor.Name) {
-			registration.runtime = &applicationTool{descriptor: registration.descriptor, application: applications[0]}
+			info, infoErr := registration.runtime.Info(context.Background())
+			if infoErr != nil {
+				return nil, fmt.Errorf("application tool %q metadata failed: %w", registration.descriptor.Name, infoErr)
+			}
+			registration.runtime = &applicationTool{
+				descriptor:  registration.descriptor,
+				application: applications[0],
+				info:        info,
+			}
 		}
 		if err := catalog.register(registration.descriptor, registration.runtime); err != nil {
 			return nil, err

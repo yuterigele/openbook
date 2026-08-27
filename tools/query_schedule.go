@@ -99,7 +99,8 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 	}
 
 	// 查询理发师 + 所属店铺（用于节假日判断）
-	barber, err := storage.GetBarberByName(params.BarberName)
+	shopID := ShopIDFromCtx(ctx)
+	barber, err := storage.GetBarberByNameInShop(ctx, shopID, params.BarberName)
 	if err != nil {
 		return "", fmt.Errorf("师傅 %s 不在店里呢（本店有 Tony、Kevin 两位），换个试试？", params.BarberName)
 	}
@@ -114,7 +115,7 @@ func (t *QueryScheduleTool) InvokableRun(ctx context.Context, argumentsInJSON st
 	}
 
 	// 一次 SQL 拿全 available / leave blocks / booked count（v3.6 新 helper）
-	breakdown := storage.QueryScheduleBreakdown(params.BarberName, params.Date)
+	breakdown := storage.QueryScheduleBreakdownForShop(ctx, shopID, params.BarberName, params.Date)
 
 	// 统一走"可约 / 师傅请假 / 已约满"三段（v3.6 设计），整天请假也走同一路径：
 	//   - Available 空 → "当天没有可预约的时段"

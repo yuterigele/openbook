@@ -108,6 +108,27 @@ func TestToolCatalogRoutesBusinessToolThroughApplication(t *testing.T) {
 	}
 }
 
+func TestApplicationToolPreservesBusinessToolSchema(t *testing.T) {
+	catalog, err := newToolCatalog(intent.NewClassifyTool(intent.NewClassifier()), &fakeBookingApplication{})
+	if err != nil {
+		t.Fatalf("catalog creation failed: %v", err)
+	}
+	info, err := catalog.tools["create_appointment"].Info(context.Background())
+	if err != nil {
+		t.Fatalf("application tool info failed: %v", err)
+	}
+	if info.Desc == "" || info.ParamsOneOf == nil {
+		t.Fatalf("application tool lost model metadata: %+v", info)
+	}
+	params, err := info.ParamsOneOf.ToJSONSchema()
+	if err != nil {
+		t.Fatalf("application tool schema conversion failed: %v", err)
+	}
+	if _, ok := params.Properties.Get("barber_name"); !ok {
+		t.Fatalf("application tool schema lost barber_name: %+v", params)
+	}
+}
+
 type fakeInvokableTool struct {
 	name   string
 	output string
