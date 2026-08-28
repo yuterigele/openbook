@@ -32,7 +32,7 @@ docker compose --env-file .env.production.local -f docker-compose.yml up -d --bu
 
 生产与预发布均必须替换 `MYSQL_APP_PASSWORD`、`DEFAULT_*_PASSWORD`、`JWT_SECRET`，并配置独立的 MySQL、Redis、模型和企业微信凭据。不要使用开发数据卷或开发企微回调。
 
-生产切流前执行 `go run ./cmd/openbook doctor`。当 `APP_ENV=production` 时，`doctor` 会阻断 Stub 模型、缺失 Redis 或企业微信凭据、非 `AGENT_REPLY_MODE=real`、示例管理员密码和缺失 `JWT_SECRET`；通过只代表配置门禁通过，不替代真实网络连通性、备份恢复和回滚演练。
+生产切流前在同一版本源码目录或单独的运维 CLI 中执行 `doctor`；仅有不可变镜像和 Compose 文件的部署目录不能运行 `go run ./cmd/openbook doctor`。当 `APP_ENV=production` 时，`doctor` 会阻断 Stub 模型、缺失 Redis 或企业微信凭据、非 `AGENT_REPLY_MODE=real`、示例管理员密码和缺失 `JWT_SECRET`；通过只代表配置门禁通过，不替代真实网络连通性、备份恢复和回滚演练。
 
 ## 发布前检查
 

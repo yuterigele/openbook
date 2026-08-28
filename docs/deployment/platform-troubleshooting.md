@@ -275,11 +275,19 @@ tail -50 /path/to/app.log
 
 ## 6. 升级前检查
 
+> 运行位置说明：下面的 `go run ./cmd/openbook ...` 只适用于同一版本的源码检出目录或源码 Release 压缩包目录。生产不可变镜像只包含 `/app/openbook` 服务进程，不包含 Go、`cmd/openbook` 或 `mysqldump`；只有 Compose 文件的 `/opt/openbook` 部署目录不能执行这些命令。
+>
+> 部署机只有 Compose 文件时，先将 `COMPOSE_ENV_FILE` 指向实际存在且仅部署机可读的 env 文件，再执行 Compose 检查和容器健康检查。`doctor`、数据库 dry-run 和应用 CLI 备份必须从同一版本源码构建的运维 CLI，或经评审单独分发的运维工具执行；不要把 `.env` 内容、密钥或备份 SQL 粘贴到聊天记录。
+
 升级是“应用镜像 + 兼容数据库变更 + 配置”的组合，不是简单替换容器。生产前完成：
 
 ```bash
+export COMPOSE_ENV_FILE=.env.production.local
+set -a
+. "$COMPOSE_ENV_FILE"
+set +a
 go run ./cmd/openbook doctor
-docker compose --env-file .env.production.local \
+docker compose --env-file "$COMPOSE_ENV_FILE" \
   -f docker-compose.yml -f docker-compose.production.yml config -q
 go run ./cmd/openbook migrate -dry-run
 ```
